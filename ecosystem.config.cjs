@@ -3,7 +3,6 @@ module.exports = {
     {
       name: 'LaevaBangumi',
       script: 'src/index.js',
-      args: '--sync',
       interpreter: 'node',
       env: {
         NODE_ENV: 'production',
