@@ -1,4 +1,4 @@
-import { eq, and, like, or, sql } from "drizzle-orm";
+import { eq, and, like, or, sql, isNotNull, notInArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   anime,
@@ -22,6 +22,7 @@ import { debug, log, warn, error } from "../lib/logger.js";
 
 const DETAIL_FRESH_MS = 12 * 60 * 60 * 1000;
 const DETAIL_SHORT_TIMEOUT_MS = 3500;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const RETRY_DELAYS = [10, 20, 40, 80, 160];
 const MAX_RETRIES = RETRY_DELAYS.length;
@@ -38,6 +39,23 @@ function fromNow(minutes) {
 function isFresh(timestamp, windowMs) {
   if (!timestamp) return false;
   return (Date.now() - new Date(timestamp).getTime()) < windowMs;
+}
+
+function parseTimestamp(value) {
+  return cstation.parseLastTime(value);
+}
+
+function normalizeTimestamp(value) {
+  const ms = parseTimestamp(value);
+  if (ms == null) return null;
+  return new Date(ms).toISOString();
+}
+
+function parseUpdateNow(value) {
+  if (value && /^\d{4}-\d{2}-\d{2}$/.test(String(value))) {
+    return Date.parse(`${value}T23:59:59+08:00`);
+  }
+  return parseTimestamp(value);
 }
 
 function safeJson(value, fallback = null) {
@@ -341,22 +359,43 @@ function applyEpisodeRange(episodesList, mapping) {
 
 async function upsertEpisodes(animeId, source, cstationId, episodesList) {
   for (const ep of episodesList) {
-    db.insert(episodes)
-      .values({
-        animeId,
-        sourceName: source,
-        sourceAid: cstationId,
-        epIndex: ep.epIndex,
-        sourceEpIndex: ep.sourceEpIndex ?? ep.epIndex,
-        epName: ep.epName,
-        videoUrl: ep.videoUrl,
-        updatedAt: now(),
-      })
-      .onConflictDoUpdate({
-        target: [episodes.animeId, episodes.sourceName, episodes.sourceAid, episodes.epIndex],
-        set: { videoUrl: ep.videoUrl, epName: ep.epName, sourceEpIndex: ep.sourceEpIndex ?? ep.epIndex, updatedAt: now() },
-      })
-      .run();
+    const sourceEpIndex = ep.sourceEpIndex ?? ep.epIndex;
+    const existing = db.select()
+      .from(episodes)
+      .where(and(
+        eq(episodes.animeId, animeId),
+        eq(episodes.sourceName, source),
+        eq(episodes.sourceAid, cstationId),
+        eq(episodes.epIndex, ep.epIndex)
+      ))
+      .get();
+
+    if (!existing) {
+      db.insert(episodes)
+        .values({
+          animeId,
+          sourceName: source,
+          sourceAid: cstationId,
+          epIndex: ep.epIndex,
+          sourceEpIndex,
+          epName: ep.epName,
+          videoUrl: ep.videoUrl,
+          updatedAt: now(),
+        })
+        .run();
+      continue;
+    }
+
+    if (
+      existing.videoUrl !== ep.videoUrl ||
+      existing.epName !== ep.epName ||
+      existing.sourceEpIndex !== sourceEpIndex
+    ) {
+      db.update(episodes)
+        .set({ videoUrl: ep.videoUrl, epName: ep.epName, sourceEpIndex, updatedAt: now() })
+        .where(eq(episodes.id, existing.id))
+        .run();
+    }
   }
 }
 
@@ -555,10 +594,11 @@ export async function matchAndPersist(item, weekday) {
   return lastMapping || { animeId: item.id, matched: false, reason: "no-source" };
 }
 
-export async function syncCalendar({ enqueueEpisodes = true } = {}) {
-  log("calendar", "sync started", { enqueueEpisodes });
-  const calendar = await bangumi.getCalendar();
-  const stats = { upserted: 0, mapped: 0, queuedEpisodes: 0, errors: 0 };
+export async function syncCalendar({ enqueueEpisodes = true, matchSources = true, calendar: calendarOverride = null } = {}) {
+  log("calendar", "sync started", { enqueueEpisodes, matchSources });
+  const calendar = calendarOverride ?? await bangumi.getCalendar();
+  const stats = { upserted: 0, mapped: 0, queuedEpisodes: 0, staleCleared: 0, errors: 0 };
+  const activeAnimeIds = new Set();
 
   for (const day of calendar) {
     log("calendar", "sync weekday started", { weekday: day.weekday?.id, total: day.items?.length ?? 0 });
@@ -566,6 +606,7 @@ export async function syncCalendar({ enqueueEpisodes = true } = {}) {
       try {
         const a = await upsertAnime(item, day.weekday?.id);
         if (!a) continue;
+        activeAnimeIds.add(item.id);
         stats.upserted++;
 
         if (!a.detailFetchedAt) {
@@ -576,17 +617,19 @@ export async function syncCalendar({ enqueueEpisodes = true } = {}) {
           }
         }
 
-        for (const source of getEnabledSourceKeys()) {
-          const mapping = await ensureMappingForAnime(item.id, { source });
-          if (mapping.matched) {
-            stats.mapped++;
-          }
-          if (enqueueEpisodes && mapping.matched) {
-            if (enqueueEpisodeRefresh(item.id, { source })) {
-              stats.queuedEpisodes++;
+        if (matchSources) {
+          for (const source of getEnabledSourceKeys()) {
+            const mapping = await ensureMappingForAnime(item.id, { source });
+            if (mapping.matched) {
+              stats.mapped++;
             }
-          } else if (enqueueEpisodes && !mapping.matched) {
-            debug("calendar", "skip episode refresh without mapping", { animeId: item.id, source, reason: mapping.reason });
+            if (enqueueEpisodes && mapping.matched) {
+              if (enqueueEpisodeRefresh(item.id, { source })) {
+                stats.queuedEpisodes++;
+              }
+            } else if (enqueueEpisodes && !mapping.matched) {
+              debug("calendar", "skip episode refresh without mapping", { animeId: item.id, source, reason: mapping.reason });
+            }
           }
         }
       } catch (err) {
@@ -597,6 +640,11 @@ export async function syncCalendar({ enqueueEpisodes = true } = {}) {
     log("calendar", "sync weekday completed", { weekday: day.weekday?.id, stats });
   }
 
+  if (stats.errors === 0) {
+    stats.staleCleared = clearStaleCalendarEntries(activeAnimeIds);
+  } else {
+    warn("calendar", "skip stale calendar cleanup because sync had errors", { errors: stats.errors });
+  }
   log("calendar", "sync completed", stats);
   return stats;
 }
@@ -763,6 +811,19 @@ function manualWaitAiringKeys(sourceKeys) {
       .filter((r) => sourceKeys.includes(r.source) && r.status === "wait_airing")
       .map((r) => `${r.animeId}:${r.source}`)
   );
+}
+
+function clearStaleCalendarEntries(activeAnimeIds) {
+  if (activeAnimeIds.size === 0) {
+    warn("calendar", "skip stale calendar cleanup because active anime set is empty");
+    return 0;
+  }
+
+  const result = db.update(anime)
+    .set({ calendarWeekday: null, updatedAt: now() })
+    .where(and(isNotNull(anime.calendarWeekday), notInArray(anime.id, [...activeAnimeIds])))
+    .run();
+  return result.changes ?? 0;
 }
 
 export async function searchAnime(keyword) {
@@ -1005,9 +1066,11 @@ export async function getCalendarView() {
   return { data: groupByWeekday(all, epMap), freshness: "cache" };
 }
 
-export async function getUpdates({ days = 7, limit = 60 } = {}) {
-  const windowMs = Math.max(1, days) * 24 * 60 * 60 * 1000;
-  const cutoff = Date.now() - windowMs;
+export async function getUpdates({ days = 7, limit = 60, today: todayOption = null } = {}) {
+  const windowMs = Math.max(1, days) * DAY_MS;
+  const nowMs = parseUpdateNow(todayOption) ?? Date.now();
+  const cutoffMs = nowMs - windowMs;
+  const sourceOrder = new Map(getEnabledSourceKeys().map((source, index) => [source, index]));
   const rows = db.all(sql`
     SELECT
       a.id,
@@ -1016,41 +1079,98 @@ export async function getUpdates({ days = 7, limit = 60 } = {}) {
       a.summary,
       a.cover_url AS coverUrl,
       a.has_cover AS hasCover,
-      e.source_name AS source,
-      e.source_aid AS sourceAid,
-      MAX(e.updated_at) AS updatedAt,
-      MAX(e.ep_index) AS latestEp
-    FROM episodes e
-    JOIN anime a ON a.id = e.anime_id
-    GROUP BY e.anime_id, e.source_name, e.source_aid
+      m.source,
+      m.cstation_id AS sourceAid,
+      m.source_ep_start AS sourceEpStart,
+      m.source_ep_end AS sourceEpEnd,
+      m.display_ep_offset AS displayEpOffset,
+      c.last AS sourceUpdatedAt,
+      MAX(e.ep_index) AS latestEp,
+      MAX(e.updated_at) AS episodeUpdatedAt
+    FROM bangumi_cstation_map m
+    JOIN anime a ON a.id = m.anime_id
+    JOIN cstation_catalog c ON c.source = m.source AND c.id = m.cstation_id
+    LEFT JOIN episodes e
+      ON e.anime_id = m.anime_id
+      AND e.source_name = m.source
+      AND e.source_aid = m.cstation_id
+    GROUP BY m.anime_id, m.source, m.cstation_id
   `);
 
   const latestByAnime = new Map();
   for (const row of rows) {
-    const updatedMs = Date.parse(`${String(row.updatedAt).replace(" ", "T")}+08:00`);
-    if (updatedMs == null || updatedMs < cutoff) continue;
+    const sourceUpdatedMs = parseTimestamp(row.sourceUpdatedAt);
+    if (sourceUpdatedMs == null || sourceUpdatedMs < cutoffMs || sourceUpdatedMs > nowMs) continue;
 
+    const episodeUpdatedMs = parseTimestamp(row.episodeUpdatedAt);
+    const hasEpisodeChange = episodeUpdatedMs != null && episodeUpdatedMs >= cutoffMs && episodeUpdatedMs <= nowMs;
+    const isRangedMapping = row.sourceEpStart != null || row.sourceEpEnd != null || (row.displayEpOffset ?? 0) !== 0;
+    if (isRangedMapping && !hasEpisodeChange) continue;
+
+    const sourceUpdate = {
+      source: row.source,
+      sourceAid: row.sourceAid,
+      updatedAt: normalizeTimestamp(row.sourceUpdatedAt),
+      latestEp: row.latestEp ?? null,
+      sourceEpStart: row.sourceEpStart ?? null,
+      sourceEpEnd: row.sourceEpEnd ?? null,
+      displayEpOffset: row.displayEpOffset ?? 0,
+      hasEpisodeChange,
+    };
     const existing = latestByAnime.get(row.id);
-    const existingMs = existing ? Date.parse(`${String(existing.updatedAt).replace(" ", "T")}+08:00`) : null;
-    if (!existing || existingMs == null || updatedMs > existingMs) {
-      latestByAnime.set(row.id, row);
+    const existingMs = parseTimestamp(existing?.updatedAt);
+    const sourceRank = sourceOrder.get(row.source) ?? Number.MAX_SAFE_INTEGER;
+    const existingRank = sourceOrder.get(existing?.source) ?? Number.MAX_SAFE_INTEGER;
+
+    const shouldReplace =
+      !existing ||
+      sourceUpdatedMs > existingMs ||
+      (sourceUpdatedMs === existingMs && sourceRank < existingRank);
+
+    if (shouldReplace) {
+      const sourceUpdates = existing?.sourceUpdates ? [...existing.sourceUpdates, sourceUpdate] : [sourceUpdate];
+      latestByAnime.set(row.id, {
+        id: row.id,
+        title: row.nameCn || row.name,
+        coverUrl: proxyCover(row.id, row.coverUrl, row.hasCover),
+        summary: displaySummary(row.summary),
+        latestEp: row.latestEp ?? null,
+        updatedAt: sourceUpdate.updatedAt,
+        source: row.source,
+        sourceAid: row.sourceAid,
+        sourceUpdates,
+      });
+    } else {
+      existing.sourceUpdates.push(sourceUpdate);
     }
   }
 
   const data = [...latestByAnime.values()]
-    .sort((a, b) => (Date.parse(`${String(b.updatedAt).replace(" ", "T")}+08:00`) || 0) - (Date.parse(`${String(a.updatedAt).replace(" ", "T")}+08:00`) || 0))
-    .slice(0, Math.max(1, limit))
-    .map((row) => ({
-      id: row.id,
-      title: row.nameCn || row.name,
-      coverUrl: proxyCover(row.id, row.coverUrl, row.hasCover),
-      summary: displaySummary(row.summary),
-      latestEp: row.latestEp ?? null,
-      latestEpisode: row.latestEp ? `更新至第${String(row.latestEp).padStart(2, "0")}集` : "最近更新",
-      updatedAt: row.updatedAt,
-      source: row.source,
-      sourceAid: row.sourceAid,
-    }));
+    .map((row) => {
+      const sourceUpdates = row.sourceUpdates.sort((a, b) => {
+        const timeCmp = (parseTimestamp(b.updatedAt) ?? 0) - (parseTimestamp(a.updatedAt) ?? 0);
+        if (timeCmp !== 0) return timeCmp;
+        return (sourceOrder.get(a.source) ?? Number.MAX_SAFE_INTEGER) - (sourceOrder.get(b.source) ?? Number.MAX_SAFE_INTEGER);
+      });
+      const primary = sourceUpdates[0];
+      return {
+        ...row,
+        sourceUpdates,
+        latestEp: primary?.latestEp ?? null,
+        latestEpisode: primary?.hasEpisodeChange && primary?.latestEp
+          ? `更新至第${String(primary.latestEp).padStart(2, "0")}集`
+          : "资源有更新",
+        updatedAt: primary?.updatedAt ?? row.updatedAt,
+        source: primary?.source ?? row.source,
+        sourceAid: primary?.sourceAid ?? row.sourceAid,
+      };
+    })
+    .sort((a, b) => {
+      const timeCmp = (parseTimestamp(b.updatedAt) ?? 0) - (parseTimestamp(a.updatedAt) ?? 0);
+      if (timeCmp !== 0) return timeCmp;
+      return a.id - b.id;
+    })
+    .slice(0, Math.max(1, limit));
 
   return { data, freshness: data.length > 0 ? "cache" : "empty" };
 }

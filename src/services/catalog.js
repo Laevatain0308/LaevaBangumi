@@ -26,8 +26,8 @@ export async function saveCatalog(catalog, { source } = {}) {
       const set = {
         name: item.name,
         year: item.year || null,
-        last: item.last || null,
       };
+      if (item.last) set.last = item.last;
       if (item.category) set.category = item.category;
       if (item.subname) set.subname = item.subname;
       if (item.detailFetchedAt) set.detailFetchedAt = item.detailFetchedAt;
