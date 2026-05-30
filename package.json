@@ -1,0 +1,25 @@
+{
+  "name": "laeva-bangumi",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "搜索番剧并返回 m3u8 视频直链",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "start:sync": "node src/index.js --sync",
+    "analyze:unmatched": "node src/scripts/analyze-unmatched.js",
+    "export:manual-review": "node src/scripts/export-manual-review.js",
+    "import:manual-review": "node src/scripts/import-manual-review.js",
+    "export:mapped-review": "node src/scripts/export-mapped-review.js",
+    "import:mapped-review": "node src/scripts/import-mapped-review.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.10.0",
+    "drizzle-orm": "^0.45.2",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.2.0",
+    "node-cron": "^4.2.1",
+    "p-limit": "^7.3.0",
+    "undici": "^8.3.0"
+  }
+}

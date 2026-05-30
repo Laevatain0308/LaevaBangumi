@@ -1,0 +1,18 @@
+{
+  "sources": [
+    {
+      "key": "ffzy",
+      "name": "非凡资源",
+      "enabled": true,
+      "apiEndpoint": "http://api.ffzyapi.com/api.php/provide/vod/from/ffm3u8/at/xml/",
+      "mediaFlag": "ffm3u8",
+      "timeoutMs": 15000,
+      "catalogTimeoutMs": 20000,
+      "categories": [
+        { "tid": "30", "name": "国产动漫", "enabled": true },
+        { "tid": "29", "name": "日韩动漫", "enabled": true },
+        { "tid": "31", "name": "欧美动漫", "enabled": true }
+      ]
+    }
+  ]
+}

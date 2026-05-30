@@ -1,0 +1,1037 @@
+import { eq, and, like, or, sql } from "drizzle-orm";
+import { db } from "../db/index.js";
+import {
+  anime,
+  episodes,
+  bangumiCstationMap,
+  cstationCatalog,
+  animeOther,
+  matchRetryState,
+  manualMatchState,
+  ANIME_PLATFORMS,
+} from "../db/schema.js";
+import * as bangumi from "./bangumi.js";
+import * as cstation from "./cstation.js";
+import { enqueueJob, registerJob } from "./queue.js";
+import { hydrateCatalogDetails } from "./catalog.js";
+import { getEnabledSources } from "../lib/cstationConfig.js";
+import { collectBangumiTitles, matchOne, rankMatches } from "../lib/matcher.js";
+import { downloadCover } from "../lib/cover.js";
+import { debug, log, warn, error } from "../lib/logger.js";
+
+const DETAIL_FRESH_MS = 12 * 60 * 60 * 1000;
+const DETAIL_SHORT_TIMEOUT_MS = 3500;
+
+const RETRY_DELAYS = [10, 20, 40, 80, 160];
+const MAX_RETRIES = RETRY_DELAYS.length;
+
+function now() {
+  return new Date().toISOString().replace("T", " ").slice(0, 19);
+}
+
+function fromNow(minutes) {
+  const d = new Date(Date.now() + minutes * 60 * 1000);
+  return d.toISOString().replace("T", " ").slice(0, 19);
+}
+
+function isFresh(timestamp, windowMs) {
+  if (!timestamp) return false;
+  return (Date.now() - new Date(timestamp).getTime()) < windowMs;
+}
+
+function safeJson(value, fallback = null) {
+  try {
+    return JSON.parse(value || "null") ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function isBlank(value) {
+  return typeof value === "string" && value.trim() === "";
+}
+
+function knownOrSkip(value, detailFetched) {
+  if (value === undefined) return detailFetched ? null : undefined;
+  if (value === null) return detailFetched ? null : undefined;
+  if (isBlank(value)) return detailFetched ? null : undefined;
+  return value;
+}
+
+function displaySummary(value) {
+  if (!value) return value;
+  const text = String(value);
+  const markers = ["[简介原文]", "【简介原文】"];
+  const markerIndex = markers
+    .map((marker) => text.indexOf(marker))
+    .filter((idx) => idx >= 0)
+    .sort((a, b) => a - b)[0];
+  return (markerIndex == null ? text : text.slice(0, markerIndex)).trim();
+}
+
+function compactRow(row) {
+  return Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined));
+}
+
+function scheduleRetry(animeId, source, count) {
+  if (!source) throw new Error("scheduleRetry requires source");
+  if (count > MAX_RETRIES) return;
+  const idx = Math.min(count - 1, RETRY_DELAYS.length - 1);
+  const retryAt = fromNow(RETRY_DELAYS[idx]);
+  db.insert(matchRetryState)
+    .values({ animeId, source, retryCount: count, retryAt, updatedAt: now() })
+    .onConflictDoUpdate({
+      target: [matchRetryState.animeId, matchRetryState.source],
+      set: { retryCount: count, retryAt, updatedAt: now() },
+    })
+    .run();
+}
+
+function clearRetry(animeId, source) {
+  db.insert(matchRetryState)
+    .values({ animeId, source, retryCount: 0, retryAt: null, updatedAt: now() })
+    .onConflictDoUpdate({
+      target: [matchRetryState.animeId, matchRetryState.source],
+      set: { retryCount: 0, retryAt: null, updatedAt: now() },
+    })
+    .run();
+}
+
+function getRetryState(animeId, source) {
+  return db.select()
+    .from(matchRetryState)
+    .where(and(eq(matchRetryState.animeId, animeId), eq(matchRetryState.source, source)))
+    .get();
+}
+
+function getManualWaitAiringState(animeId, source) {
+  return db.select()
+    .from(manualMatchState)
+    .where(and(
+      eq(manualMatchState.animeId, animeId),
+      eq(manualMatchState.source, source),
+      eq(manualMatchState.status, "wait_airing")
+    ))
+    .get();
+}
+
+function proxyCover(id, coverUrl, hasCover) {
+  if (hasCover) return `/anime/api/cover?id=${id}`;
+  return coverUrl;
+}
+
+function coverFromItem(item) {
+  return normalizeCoverUrl((item.images && (item.images.large || item.images.common)) || item.image || null);
+}
+
+function normalizeCoverUrl(url) {
+  if (!url) return null;
+  return String(url).replace("/r/400/pic/cover/", "/pic/cover/");
+}
+
+function infoboxValue(infobox, keys) {
+  if (!Array.isArray(infobox)) return undefined;
+  const wanted = Array.isArray(keys) ? keys : [keys];
+  const item = infobox.find((box) => wanted.includes(box.key));
+  if (!item) return undefined;
+  if (Array.isArray(item.value)) return item.value.map((v) => v.v || v.value || v).filter(Boolean).join(" / ");
+  return item.value;
+}
+
+function normalizeDateValue(value) {
+  if (!value) return value;
+  const text = String(value).trim();
+  const cn = text.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
+  if (cn) return `${cn[1]}-${cn[2].padStart(2, "0")}-${cn[3].padStart(2, "0")}`;
+  const cnMonth = text.match(/^(\d{4})年(\d{1,2})月$/);
+  if (cnMonth) return `${cnMonth[1]}-${cnMonth[2].padStart(2, "0")}`;
+  const cnYear = text.match(/^(\d{4})年$/);
+  if (cnYear) return cnYear[1];
+  return text;
+}
+
+function dateFromItem(item) {
+  return normalizeDateValue(item.date ?? item.air_date ?? infoboxValue(item.infobox, "放送开始"));
+}
+
+function intFromItem(value) {
+  if (value == null || value === "") return undefined;
+  const parsed = parseInt(value, 10);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+function positiveIntFromItem(value) {
+  const parsed = intFromItem(value);
+  return parsed && parsed > 0 ? parsed : undefined;
+}
+
+function rankFromItem(item) {
+  return positiveIntFromItem(item.rating?.rank ?? item.rank);
+}
+
+function epsFromItem(item) {
+  return positiveIntFromItem(item.eps) ?? positiveIntFromItem(infoboxValue(item.infobox, "话数"));
+}
+
+function totalEpisodesFromItem(item) {
+  return positiveIntFromItem(item.total_episodes) ?? epsFromItem(item);
+}
+
+function weekdayFromDate(date) {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return undefined;
+  const day = new Date(`${date}T00:00:00+09:00`).getDay();
+  return day === 0 ? 7 : day;
+}
+
+function tagsFromItem(item, detailFetched) {
+  if (Array.isArray(item.meta_tags)) return JSON.stringify(item.meta_tags);
+  if (Array.isArray(item.tags)) return JSON.stringify(item.tags.map((tag) => tag.name).filter(Boolean).slice(0, 8));
+  return detailFetched ? "[]" : undefined;
+}
+
+function aliasesFromItem(item, detailFetched) {
+  const titles = collectBangumiTitles(item).filter((title) => title !== item.name && title !== item.name_cn);
+  if (titles.length > 0) return JSON.stringify(titles);
+  return detailFetched ? "[]" : undefined;
+}
+
+function bangumiItemToAnime(item, weekday, { detailFetched = false } = {}) {
+  const airDate = dateFromItem(item);
+  const coverUrl = coverFromItem(item);
+  return {
+    id: item.id,
+    name: item.name,
+    nameCn: knownOrSkip(item.name_cn, detailFetched),
+    summary: knownOrSkip(item.summary, detailFetched),
+    airDate: knownOrSkip(airDate, detailFetched),
+    airWeekday: knownOrSkip(item.air_weekday ?? weekdayFromDate(airDate), detailFetched),
+    eps: knownOrSkip(epsFromItem(item), detailFetched),
+    totalEpisodes: knownOrSkip(totalEpisodesFromItem(item), detailFetched),
+    platform: knownOrSkip(item.platform, detailFetched),
+    coverUrl: knownOrSkip(coverUrl, detailFetched),
+    ratingScore: knownOrSkip(item.rating?.score, detailFetched),
+    rank: knownOrSkip(rankFromItem(item), detailFetched),
+    tags: tagsFromItem(item, detailFetched),
+    aliases: aliasesFromItem(item, detailFetched),
+    calendarWeekday: weekday,
+    detailFetchedAt: detailFetched ? now() : undefined,
+    updatedAt: now(),
+  };
+}
+
+function animeRowToBangumiLike(a) {
+  return {
+    id: a.id,
+    name: a.name,
+    name_cn: a.nameCn,
+    aliases: safeJson(a.aliases, []),
+    air_date: a.airDate,
+    air_weekday: a.airWeekday,
+    eps: a.eps,
+    total_episodes: a.totalEpisodes,
+    platform: a.platform,
+  };
+}
+
+export async function upsertAnime(item, weekday = undefined, options = {}) {
+  const platform = item.platform || null;
+
+  if (platform && !ANIME_PLATFORMS.has(platform)) {
+    log("anime", "skip non-anime subject", { id: item.id, name: item.name, platform });
+    db.delete(anime).where(eq(anime.id, item.id)).run();
+    db.insert(animeOther)
+      .values(compactRow({
+        id: item.id,
+        name: item.name,
+        nameCn: item.name_cn,
+        summary: item.summary,
+        platform,
+        coverUrl: coverFromItem(item),
+        tags: tagsFromItem(item, !!options.detailFetched),
+        aliases: aliasesFromItem(item, !!options.detailFetched),
+      }))
+      .onConflictDoNothing()
+      .run();
+    return null;
+  }
+
+  const row = compactRow(bangumiItemToAnime(item, weekday, options));
+  const existing = db.select().from(anime).where(eq(anime.id, item.id)).get();
+  if (existing) {
+    delete row.id;
+    delete row.createdAt;
+    db.update(anime).set(row).where(eq(anime.id, item.id)).run();
+    debug("anime", "updated subject", { id: item.id, title: item.name_cn || item.name, detailFetched: !!options.detailFetched });
+  } else {
+    db.insert(anime).values(row).run();
+    debug("anime", "inserted subject", { id: item.id, title: item.name_cn || item.name, detailFetched: !!options.detailFetched });
+  }
+
+  const coverUrl = row.coverUrl;
+  if (coverUrl) {
+    downloadCover(item.id, coverUrl).then((ok) => {
+      if (ok) db.update(anime).set({ hasCover: 1 }).where(eq(anime.id, item.id)).run();
+    }).catch(() => {});
+  }
+
+  return db.select().from(anime).where(eq(anime.id, item.id)).get();
+}
+
+export async function enrichFromSubject(itemOrId, weekday = undefined, options = {}) {
+  const id = typeof itemOrId === "object" ? itemOrId.id : itemOrId;
+  log("bangumi", "fetch subject detail", { id, timeoutMs: options.timeoutMs });
+  const subject = await bangumi.getSubject(id, { timeoutMs: options.timeoutMs });
+  if (!subject) return null;
+  return upsertAnime(subject, weekday, { detailFetched: true });
+}
+
+function applyEpisodeRange(episodesList, mapping) {
+  const start = mapping.sourceEpStart ?? null;
+  const end = mapping.sourceEpEnd ?? null;
+  const offset = mapping.displayEpOffset ?? 0;
+  return episodesList
+    .filter((ep) => {
+      if (start != null && ep.epIndex < start) return false;
+      if (end != null && ep.epIndex > end) return false;
+      return true;
+    })
+    .map((ep) => ({
+      ...ep,
+      sourceEpIndex: ep.epIndex,
+      epIndex: ep.epIndex - offset,
+    }))
+    .filter((ep) => ep.epIndex > 0);
+}
+
+async function upsertEpisodes(animeId, source, cstationId, episodesList) {
+  for (const ep of episodesList) {
+    db.insert(episodes)
+      .values({
+        animeId,
+        sourceName: source,
+        sourceAid: cstationId,
+        epIndex: ep.epIndex,
+        sourceEpIndex: ep.sourceEpIndex ?? ep.epIndex,
+        epName: ep.epName,
+        videoUrl: ep.videoUrl,
+        updatedAt: now(),
+      })
+      .onConflictDoUpdate({
+        target: [episodes.animeId, episodes.sourceName, episodes.sourceAid, episodes.epIndex],
+        set: { videoUrl: ep.videoUrl, epName: ep.epName, sourceEpIndex: ep.sourceEpIndex ?? ep.epIndex, updatedAt: now() },
+      })
+      .run();
+  }
+}
+
+async function upsertMap(animeId, source, cstationId, score, matchedBgName, matchedCsName, range = {}) {
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId,
+      source,
+      cstationId,
+      sourceEpStart: range.sourceEpStart ?? null,
+      sourceEpEnd: range.sourceEpEnd ?? null,
+      displayEpOffset: range.displayEpOffset ?? 0,
+      score,
+      matchedBgName,
+      matchedCsName,
+      matchedAt: now(),
+    })
+    .onConflictDoUpdate({
+      target: [bangumiCstationMap.animeId, bangumiCstationMap.source],
+      set: {
+        cstationId,
+        sourceEpStart: range.sourceEpStart ?? null,
+        sourceEpEnd: range.sourceEpEnd ?? null,
+        displayEpOffset: range.displayEpOffset ?? 0,
+        score,
+        matchedBgName,
+        matchedCsName,
+        matchedAt: now(),
+      },
+    })
+    .run();
+}
+
+function getMap(animeId, source) {
+  return db.select()
+    .from(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, animeId), eq(bangumiCstationMap.source, source)))
+    .get();
+}
+
+function getCandidatesForAnime(a, source) {
+  const year = bangumi.extractYear(a.airDate);
+  return db.select()
+    .from(cstationCatalog)
+    .where(eq(cstationCatalog.source, source))
+    .all()
+    .filter((c) => {
+      if (!year || !c.year) return true;
+      const cy = parseInt(c.year, 10);
+      return !Number.isNaN(cy) && Math.abs(year - cy) <= 1;
+    });
+}
+
+function titleNamesForAnime(a) {
+  return collectBangumiTitles(animeRowToBangumiLike(a));
+}
+
+async function findBestSourceMatch(a, source) {
+  const year = bangumi.extractYear(a.airDate);
+  const names = titleNamesForAnime(a);
+  const candidates = getCandidatesForAnime(a, source);
+
+  let best = matchOne(names, year, candidates);
+  if (best?.confidence === "high") return best;
+
+  const top = rankMatches(names, year, candidates, { limit: 20, minScore: 0.45 });
+  const needDetailIds = top
+    .filter((match) => !match.video.subname || !match.video.detailFetchedAt)
+    .map((match) => match.video.id);
+
+  if (needDetailIds.length > 0) {
+    await hydrateCatalogDetails(needDetailIds, { source });
+    const detailed = db.select()
+      .from(cstationCatalog)
+      .where(eq(cstationCatalog.source, source))
+      .all()
+      .filter((c) => needDetailIds.includes(c.id));
+    const detailedBest = matchOne(names, year, detailed);
+    if (detailedBest && (!best || detailedBest.score > best.score)) best = detailedBest;
+  }
+
+  return best;
+}
+
+export async function ensureMappingForAnime(animeId, { source, refresh = false } = {}) {
+  if (!source) throw new Error("ensureMappingForAnime requires source");
+  const a = db.select().from(anime).where(eq(anime.id, animeId)).get();
+  if (!a) return { animeId, matched: false, reason: "missing-anime" };
+
+  const existing = getMap(animeId, source);
+  if (existing && !refresh) {
+    log("match", "mapping exists", { animeId, source, cstationId: existing.cstationId });
+    return { animeId, matched: true, cstationId: existing.cstationId, reason: "already-mapped" };
+  }
+
+  const waitAiring = getManualWaitAiringState(animeId, source);
+  if (!existing && !refresh && waitAiring) {
+    return { animeId, matched: false, reason: "wait-airing" };
+  }
+
+  const retry = getRetryState(animeId, source);
+  if (!existing && !refresh && retry?.retryAt && retry.retryAt > now()) {
+    return { animeId, matched: false, reason: "retry-wait" };
+  }
+  if (!existing && !refresh && (retry?.retryCount ?? 0) >= MAX_RETRIES) {
+    return { animeId, matched: false, reason: "max-retries" };
+  }
+
+  log("match", "matching started", { animeId, source, refresh });
+  const best = await findBestSourceMatch(a, source);
+  if (!best) {
+    const retryCount = (retry?.retryCount ?? 0) + 1;
+    scheduleRetry(animeId, source, retryCount);
+    warn("match", "no catalog match", { animeId, source, title: a.nameCn || a.name, retryCount });
+    return { animeId, matched: false, reason: "no-catalog-match" };
+  }
+
+  await upsertMap(animeId, source, best.video.id, best.score, best.matchedName, best.matchedSourceName || best.video.name);
+  clearRetry(animeId, source);
+  log("match", "matched", {
+    animeId,
+    title: a.nameCn || a.name,
+    source,
+    cstationId: best.video.id,
+    score: Number(best.score.toFixed(3)),
+    bgTitle: best.matchedName,
+    sourceTitle: best.matchedSourceName || best.video.name,
+  });
+  return { animeId, matched: true, cstationId: best.video.id, score: best.score, matchedName: best.matchedName };
+}
+
+export async function refreshEpisodesForAnime(animeId, { source } = {}) {
+  if (!source) throw new Error("refreshEpisodesForAnime requires source");
+  log("episodes", "refresh started", { animeId, source });
+  let mapped = getMap(animeId, source);
+  if (!mapped) {
+    const mapping = await ensureMappingForAnime(animeId, { source });
+    if (!mapping.matched) return { animeId, refreshed: false, reason: mapping.reason };
+    mapped = getMap(animeId, source);
+  }
+
+  const detail = await cstation.fetchById(mapped.cstationId, { source });
+  if (!detail) {
+    const retry = getRetryState(animeId, source);
+    scheduleRetry(animeId, source, (retry?.retryCount ?? 0) + 1);
+    warn("episodes", "fetch detail failed", { animeId, source, cstationId: mapped.cstationId });
+    return { animeId, refreshed: false, reason: "fetch-detail-failed" };
+  }
+
+  const rangedEpisodes = applyEpisodeRange(detail.episodes, mapped);
+  await upsertEpisodes(animeId, source, detail.id, rangedEpisodes);
+  await upsertMap(animeId, source, detail.id, mapped.score, mapped.matchedBgName, detail.name, {
+    sourceEpStart: mapped.sourceEpStart,
+    sourceEpEnd: mapped.sourceEpEnd,
+    displayEpOffset: mapped.displayEpOffset,
+  });
+  clearRetry(animeId, source);
+  log("episodes", "refresh completed", { animeId, source, cstationId: detail.id, epCount: rangedEpisodes.length, sourceEpCount: detail.epCount });
+  return { animeId, refreshed: true, cstationId: detail.id, epCount: rangedEpisodes.length, sourceEpCount: detail.epCount };
+}
+
+export async function matchAndPersist(item, weekday) {
+  const a = await upsertAnime(item, weekday);
+  if (!a) return { animeId: item.id, matched: false, reason: "non-anime" };
+
+  if (!a.detailFetchedAt) {
+    try {
+      await enrichFromSubject(item.id, weekday);
+    } catch (err) {
+      console.error(`enrich subject ${item.id} failed:`, err.message);
+    }
+  }
+
+  let lastMapping = null;
+  for (const source of getEnabledSourceKeys()) {
+    const mapping = await ensureMappingForAnime(item.id, { source });
+    lastMapping = mapping;
+    if (mapping.matched) await refreshEpisodesForAnime(item.id, { source });
+  }
+  return lastMapping || { animeId: item.id, matched: false, reason: "no-source" };
+}
+
+export async function syncCalendar({ enqueueEpisodes = true } = {}) {
+  log("calendar", "sync started", { enqueueEpisodes });
+  const calendar = await bangumi.getCalendar();
+  const stats = { upserted: 0, mapped: 0, queuedEpisodes: 0, errors: 0 };
+
+  for (const day of calendar) {
+    log("calendar", "sync weekday started", { weekday: day.weekday?.id, total: day.items?.length ?? 0 });
+    for (const item of day.items) {
+      try {
+        const a = await upsertAnime(item, day.weekday?.id);
+        if (!a) continue;
+        stats.upserted++;
+
+        if (!a.detailFetchedAt) {
+          try {
+            await enrichFromSubject(item.id, day.weekday?.id);
+          } catch (err) {
+            error("calendar", `enrich failed for ${item.id}`, err);
+          }
+        }
+
+        for (const source of getEnabledSourceKeys()) {
+          const mapping = await ensureMappingForAnime(item.id, { source });
+          if (mapping.matched) {
+            stats.mapped++;
+          }
+          if (enqueueEpisodes && mapping.matched) {
+            if (enqueueEpisodeRefresh(item.id, { source })) {
+              stats.queuedEpisodes++;
+            }
+          } else if (enqueueEpisodes && !mapping.matched) {
+            debug("calendar", "skip episode refresh without mapping", { animeId: item.id, source, reason: mapping.reason });
+          }
+        }
+      } catch (err) {
+        error("calendar", `sync item failed for ${item.id}`, err);
+        stats.errors++;
+      }
+    }
+    log("calendar", "sync weekday completed", { weekday: day.weekday?.id, stats });
+  }
+
+  log("calendar", "sync completed", stats);
+  return stats;
+}
+
+export async function retryPending() {
+  const list = db.select().from(anime).all();
+  const sourceKeys = getEnabledSourceKeys();
+  const mapped = mappedAnimeSourceKeys(sourceKeys);
+  const episodeSourceKeys = episodeAnimeSourceKeys(sourceKeys);
+  const retryRows = db.select().from(matchRetryState).all();
+  const waitAiringKeys = manualWaitAiringKeys(sourceKeys);
+  const animeById = new Map(list.map((a) => [a.id, a]));
+  const pending = retryRows.filter((row) => {
+    if (!sourceKeys.includes(row.source)) return false;
+    if (waitAiringKeys.has(`${row.animeId}:${row.source}`)) return false;
+    if (episodeSourceKeys.has(`${row.animeId}:${row.source}`)) return false;
+    if (!animeById.has(row.animeId)) return false;
+    if (!row.retryAt) return false;
+    if (row.retryCount >= MAX_RETRIES) return false;
+    return row.retryAt <= now();
+  });
+
+  const stats = { retried: 0, matched: 0, refreshed: 0, errors: 0 };
+  if (pending.length > 0) log("retry", "pending retry started", { total: pending.length });
+  for (const row of pending) {
+    try {
+      stats.retried++;
+      if (mapped.has(`${row.animeId}:${row.source}`)) {
+        const refresh = await refreshEpisodesForAnime(row.animeId, { source: row.source });
+        if (refresh.refreshed) stats.refreshed++;
+        continue;
+      }
+
+      const mapping = await ensureMappingForAnime(row.animeId, { source: row.source });
+      if (mapping.matched) {
+        stats.matched++;
+        const refresh = await refreshEpisodesForAnime(row.animeId, { source: row.source });
+        if (refresh.refreshed) stats.refreshed++;
+      }
+    } catch (err) {
+      error("retry", `retry failed for ${row.animeId}:${row.source}`, err);
+      stats.errors++;
+    }
+  }
+  if (pending.length > 0) log("retry", "pending retry completed", stats);
+  return stats;
+}
+
+export async function batchMatch({ refreshEpisodes = true, includeCoolingDown = false } = {}) {
+  const sourceKeys = getEnabledSourceKeys();
+  const mapped = mappedAnimeSourceKeys(sourceKeys);
+  const retryByAnimeSource = retryStateByAnimeSource(sourceKeys);
+  const waitAiringKeys = manualWaitAiringKeys(sourceKeys);
+
+  const unmatched = db.select().from(anime).all().filter((a) => {
+    if (sourceKeys.every((source) => mapped.has(`${a.id}:${source}`))) return false;
+    return true;
+  });
+  const stats = { matched: 0, refreshed: 0, errors: 0 };
+  log("match", "batch match started", { total: unmatched.length, refreshEpisodes, includeCoolingDown });
+
+  for (const a of unmatched) {
+    try {
+      for (const source of sourceKeys) {
+        if (mapped.has(`${a.id}:${source}`)) continue;
+        if (waitAiringKeys.has(`${a.id}:${source}`)) continue;
+        const retry = retryByAnimeSource.get(`${a.id}:${source}`);
+        if (!includeCoolingDown && retry?.retryAt && retry.retryAt > now()) continue;
+        if ((retry?.retryCount ?? 0) >= MAX_RETRIES) continue;
+        const mapping = await ensureMappingForAnime(a.id, { source });
+        if (!mapping.matched) continue;
+        stats.matched++;
+        if (refreshEpisodes) {
+          const refresh = await refreshEpisodesForAnime(a.id, { source });
+          if (refresh.refreshed) stats.refreshed++;
+        }
+      }
+    } catch (err) {
+      error("match", `batch match failed for ${a.id}`, err);
+      stats.errors++;
+    }
+  }
+
+  log("match", "batch match completed", stats);
+  return stats;
+}
+
+export function enqueueEpisodeRefreshesBySourceIds(sourceIds, { source } = {}) {
+  if (!source) throw new Error("enqueueEpisodeRefreshesBySourceIds requires source");
+  const ids = [...new Set(sourceIds.map((id) => parseInt(id, 10)).filter(Boolean))];
+  let queued = 0;
+
+  for (const sourceId of ids) {
+    const rows = db.select({ animeId: bangumiCstationMap.animeId })
+      .from(bangumiCstationMap)
+      .where(and(eq(bangumiCstationMap.source, source), eq(bangumiCstationMap.cstationId, sourceId)))
+      .all();
+    for (const row of rows) {
+      if (enqueueEpisodeRefresh(row.animeId, { source })) queued++;
+    }
+  }
+
+  return queued;
+}
+
+function getEnabledSourceKeys() {
+  return getEnabledSources().map((source) => source.key);
+}
+
+function mappedAnimeSourceKeys(sourceKeys) {
+  return new Set(
+    db.select({ animeId: bangumiCstationMap.animeId, source: bangumiCstationMap.source })
+      .from(bangumiCstationMap)
+      .all()
+      .filter((r) => sourceKeys.includes(r.source))
+      .map((r) => `${r.animeId}:${r.source}`)
+  );
+}
+
+function episodeAnimeSourceKeys(sourceKeys) {
+  return new Set(
+    db.select({ animeId: episodes.animeId, sourceName: episodes.sourceName })
+      .from(episodes)
+      .all()
+      .filter((r) => sourceKeys.includes(r.sourceName))
+      .map((r) => `${r.animeId}:${r.sourceName}`)
+  );
+}
+
+function retryStateByAnimeSource(sourceKeys) {
+  return new Map(
+    db.select().from(matchRetryState).all()
+      .filter((r) => sourceKeys.includes(r.source))
+      .map((r) => [`${r.animeId}:${r.source}`, r])
+  );
+}
+
+function manualWaitAiringKeys(sourceKeys) {
+  return new Set(
+    db.select({ animeId: manualMatchState.animeId, source: manualMatchState.source, status: manualMatchState.status })
+      .from(manualMatchState)
+      .all()
+      .filter((r) => sourceKeys.includes(r.source) && r.status === "wait_airing")
+      .map((r) => `${r.animeId}:${r.source}`)
+  );
+}
+
+export async function searchAnime(keyword) {
+  const q = `%${keyword}%`;
+  const local = db.select()
+    .from(anime)
+    .where(or(
+      like(anime.name, q),
+      like(anime.nameCn, q),
+      like(anime.aliases, q)
+    ))
+    .all();
+
+  return {
+    data: local.map((a) => ({ id: a.id, title: a.nameCn || a.name, coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover) })),
+    freshness: "cache",
+  };
+}
+
+export async function enrichFromBangumiSearch(keyword) {
+  log("search", "bangumi search started", { keyword });
+  let subjects;
+  try {
+    const bgResult = await bangumi.searchSubjects(keyword);
+    subjects = bgResult?.data || [];
+  } catch (err) {
+    error("search", "bangumi search failed", err);
+    return { upserted: 0, matched: 0, queuedEpisodes: 0, errors: 1 };
+  }
+
+  const stats = { upserted: 0, matched: 0, queuedEpisodes: 0, errors: 0 };
+  log("search", "bangumi search returned", { keyword, total: subjects.length });
+  for (const item of subjects) {
+    try {
+      const a = await upsertAnime(item);
+      if (!a) continue;
+      stats.upserted++;
+
+      if (!a.detailFetchedAt) {
+        try {
+          await enrichFromSubject(item.id);
+        } catch (err) {
+          error("search", `subject enrich failed for ${item.id}`, err);
+        }
+      }
+
+      for (const source of getEnabledSourceKeys()) {
+        const mapping = await ensureMappingForAnime(item.id, { source });
+        if (mapping.matched) {
+          stats.matched++;
+          if (enqueueEpisodeRefresh(item.id, { source })) {
+            stats.queuedEpisodes++;
+          }
+        }
+      }
+    } catch (err) {
+      error("search", `search item failed for ${item.id}`, err);
+      stats.errors++;
+    }
+  }
+  log("search", "bangumi search processing completed", { keyword, ...stats });
+  return stats;
+}
+
+export async function getAnimeDetail(id) {
+  let a = db.select().from(anime).where(eq(anime.id, id)).get();
+
+  if (!a) {
+    try {
+      a = await enrichFromSubject(id, undefined, { timeoutMs: DETAIL_SHORT_TIMEOUT_MS });
+    } catch (err) {
+      error("detail", `initial subject fetch failed for ${id}`, err);
+      return null;
+    }
+    if (!a) return null;
+  } else if (!isFresh(a.detailFetchedAt, DETAIL_FRESH_MS)) {
+    try {
+      const enriched = await enrichFromSubject(id, a.calendarWeekday, { timeoutMs: DETAIL_SHORT_TIMEOUT_MS });
+      if (enriched) a = enriched;
+    } catch (err) {
+      warn("detail", "short subject enrich failed, returning cached data", { id, message: err.message });
+    }
+  }
+
+  const mappedRows = db.select().from(bangumiCstationMap).where(eq(bangumiCstationMap.animeId, id)).all();
+  const episodeRows = db.select({ sourceName: episodes.sourceName }).from(episodes).where(eq(episodes.animeId, id)).all();
+  const retryRows = db.select().from(matchRetryState).where(eq(matchRetryState.animeId, id)).all();
+  const manualRows = db.select().from(manualMatchState).where(eq(manualMatchState.animeId, id)).all();
+  const sourceStatuses = getResourceSourceStatuses(mappedRows, episodeRows, retryRows, manualRows);
+  const resourceStatus = aggregateResourceStatus(sourceStatuses);
+  const matchingSources = sourceStatuses.filter((row) => row.status === "matching").map((row) => row.source);
+  if (matchingSources.length > 0) {
+    log("detail", "enqueue mapping from detail page", { id, sources: matchingSources });
+    for (const source of matchingSources) {
+      enqueueMapping(id, { source });
+    }
+  }
+
+  for (const row of sourceStatuses) {
+    if (row.status === "fetching") {
+      log("detail", "enqueue episode refresh from detail page", { id, source: row.source, cstationId: row.cstationId });
+      enqueueEpisodeRefresh(id, { source: row.source });
+    }
+  }
+
+  return {
+    ...formatAnimeDetail(a, isFresh(a.detailFetchedAt, DETAIL_FRESH_MS)),
+    resourceStatus,
+    resourceSources: sourceStatuses,
+  };
+}
+
+function getResourceSourceStatuses(mappedRows, episodeRows, retryRows, manualRows = []) {
+  const mappedBySource = new Map(mappedRows.map((row) => [row.source, row]));
+  const episodeSources = new Set(episodeRows.map((row) => row.sourceName));
+  const retryBySource = new Map(retryRows.map((row) => [row.source, row]));
+  const manualBySource = new Map(
+    manualRows
+      .filter((row) => row.status === "wait_airing")
+      .map((row) => [row.source, row])
+  );
+  const nowTs = now();
+
+  return getEnabledSources().map((source) => {
+    const mapped = mappedBySource.get(source.key);
+    const retry = retryBySource.get(source.key);
+    const manual = manualBySource.get(source.key);
+    const retryCount = retry?.retryCount ?? 0;
+    const retrying = retry?.retryAt && retry.retryAt > nowTs;
+    let status = "matching";
+    if (episodeSources.has(source.key)) status = "ready";
+    else if (!mapped && manual) status = "wait_airing";
+    else if (retryCount >= MAX_RETRIES) status = "no_data";
+    else if (retrying) status = "retrying";
+    else if (mapped) status = "fetching";
+
+    return {
+      source: source.key,
+      name: source.name,
+      status,
+      cstationId: mapped?.cstationId ?? null,
+      note: manual?.note || (retryCount >= MAX_RETRIES ? "no mapping after retries" : null),
+    };
+  });
+}
+
+function aggregateResourceStatus(sourceStatuses) {
+  if (sourceStatuses.some((row) => row.status === "ready")) return "ready";
+  if (sourceStatuses.some((row) => row.status === "fetching")) return "fetching";
+  if (sourceStatuses.some((row) => row.status === "matching")) return "matching";
+  if (sourceStatuses.some((row) => row.status === "retrying")) return "retrying";
+  if (sourceStatuses.some((row) => row.status === "wait_airing")) return "wait_airing";
+  if (sourceStatuses.some((row) => row.status === "no_data")) return "no_data";
+  return "no_data";
+}
+
+function channelKey(ep) {
+  return `${ep.sourceName}:${ep.sourceAid}`;
+}
+
+function collectEpisodeChannels(rows) {
+  const chMap = {};
+  for (const ep of rows) {
+    const key = channelKey(ep);
+    if (!chMap[key]) chMap[key] = { sourceName: ep.sourceName, sourceAid: ep.sourceAid, episodes: [] };
+    chMap[key].episodes.push(ep);
+  }
+  return Object.values(chMap).sort((a, b) => {
+    const sourceCmp = a.sourceName.localeCompare(b.sourceName);
+    if (sourceCmp !== 0) return sourceCmp;
+    return a.sourceAid - b.sourceAid;
+  });
+}
+
+function formatAnimeDetail(a, fresh) {
+  const eps = db.select().from(episodes).where(eq(episodes.animeId, a.id)).all();
+
+  const channels = collectEpisodeChannels(eps).map((channel, chIdx) => ({
+    name: channel.sourceName,
+    sourceAid: channel.sourceAid,
+    episodes: channel.episodes
+      .sort((aEp, bEp) => aEp.epIndex - bEp.epIndex)
+      .map((ep) => ({
+        index: ep.epIndex,
+        name: ep.epName,
+        url: `/anime/api/play?id=${a.id}&ch=${chIdx + 1}&ep=${ep.epIndex}`,
+      })),
+  }));
+
+  return {
+    data: {
+      id: a.id,
+      title: a.nameCn || a.name,
+      summary: displaySummary(a.summary),
+      coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover),
+      eps: a.eps,
+      totalEpisodes: a.totalEpisodes,
+      airDate: a.airDate,
+      platform: a.platform,
+      ratingScore: a.ratingScore,
+      rank: a.rank,
+      tags: safeJson(a.tags, null),
+      channels,
+    },
+    freshness: fresh ? "cache" : "stale",
+  };
+}
+
+export async function getPlayUrl(id, ch, ep) {
+  const eps = db.select().from(episodes).where(eq(episodes.animeId, id)).all();
+  const channels = collectEpisodeChannels(eps);
+  const chIdx = ch - 1;
+  if (chIdx < 0 || chIdx >= channels.length) return null;
+
+  const epList = channels[chIdx].episodes.filter((e) => e.epIndex === ep);
+  if (epList.length === 0) return null;
+
+  return { videoURL: epList[0].videoUrl, directPlay: false };
+}
+
+export async function getCalendarView() {
+  const all = db.select().from(anime).all();
+  if (all.length === 0) {
+    return { data: [], freshness: "empty", error: "暂无数据，请等待首次同步完成" };
+  }
+
+  const epStats = db.all(sql`
+    SELECT anime_id, ep_index, updated_at FROM episodes e1
+    WHERE updated_at = (SELECT MAX(updated_at) FROM episodes e2 WHERE e2.anime_id = e1.anime_id)
+  `);
+  const epMap = {};
+  for (const s of epStats) {
+    epMap[s.anime_id] = { latestEp: s.ep_index, lastUpdated: s.updated_at };
+  }
+
+  return { data: groupByWeekday(all, epMap), freshness: "cache" };
+}
+
+export async function getUpdates({ days = 7, limit = 60 } = {}) {
+  const windowMs = Math.max(1, days) * 24 * 60 * 60 * 1000;
+  const cutoff = Date.now() - windowMs;
+  const rows = db.all(sql`
+    SELECT
+      a.id,
+      a.name,
+      a.name_cn AS nameCn,
+      a.summary,
+      a.cover_url AS coverUrl,
+      a.has_cover AS hasCover,
+      e.source_name AS source,
+      e.source_aid AS sourceAid,
+      MAX(e.updated_at) AS updatedAt,
+      MAX(e.ep_index) AS latestEp
+    FROM episodes e
+    JOIN anime a ON a.id = e.anime_id
+    GROUP BY e.anime_id, e.source_name, e.source_aid
+  `);
+
+  const latestByAnime = new Map();
+  for (const row of rows) {
+    const updatedMs = Date.parse(`${String(row.updatedAt).replace(" ", "T")}+08:00`);
+    if (updatedMs == null || updatedMs < cutoff) continue;
+
+    const existing = latestByAnime.get(row.id);
+    const existingMs = existing ? Date.parse(`${String(existing.updatedAt).replace(" ", "T")}+08:00`) : null;
+    if (!existing || existingMs == null || updatedMs > existingMs) {
+      latestByAnime.set(row.id, row);
+    }
+  }
+
+  const data = [...latestByAnime.values()]
+    .sort((a, b) => (Date.parse(`${String(b.updatedAt).replace(" ", "T")}+08:00`) || 0) - (Date.parse(`${String(a.updatedAt).replace(" ", "T")}+08:00`) || 0))
+    .slice(0, Math.max(1, limit))
+    .map((row) => ({
+      id: row.id,
+      title: row.nameCn || row.name,
+      coverUrl: proxyCover(row.id, row.coverUrl, row.hasCover),
+      summary: displaySummary(row.summary),
+      latestEp: row.latestEp ?? null,
+      latestEpisode: row.latestEp ? `更新至第${String(row.latestEp).padStart(2, "0")}集` : "最近更新",
+      updatedAt: row.updatedAt,
+      source: row.source,
+      sourceAid: row.sourceAid,
+    }));
+
+  return { data, freshness: data.length > 0 ? "cache" : "empty" };
+}
+
+function groupByWeekday(list, epMap) {
+  const weekdayNames = [
+    { en: "Mon", cn: "星期一", ja: "月曜日", id: 1 },
+    { en: "Tue", cn: "星期二", ja: "火曜日", id: 2 },
+    { en: "Wed", cn: "星期三", ja: "水曜日", id: 3 },
+    { en: "Thu", cn: "星期四", ja: "木曜日", id: 4 },
+    { en: "Fri", cn: "星期五", ja: "金曜日", id: 5 },
+    { en: "Sat", cn: "星期六", ja: "土曜日", id: 6 },
+    { en: "Sun", cn: "星期日", ja: "日曜日", id: 7 },
+  ];
+
+  return weekdayNames.map((wd) => {
+    const items = list
+      .filter((a) => a.calendarWeekday === wd.id)
+      .map((a) => {
+        const ep = epMap[a.id];
+        return {
+          id: a.id,
+          title: a.nameCn || a.name,
+          coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover),
+          ratingScore: a.ratingScore,
+          eps: a.eps,
+          totalEpisodes: a.totalEpisodes,
+          latestEp: ep?.latestEp ?? null,
+          lastUpdated: ep?.lastUpdated ?? null,
+          airDate: a.airDate,
+        };
+      });
+    return { weekday: wd, items };
+  });
+}
+
+export function registerAnimeJobs() {
+  registerJob("ensure-mapping", async ({ animeId, source = null, refresh = false }) => {
+    const sources = source ? [source] : getEnabledSourceKeys();
+    for (const source of sources) {
+      const mapping = await ensureMappingForAnime(animeId, { source, refresh });
+      if (mapping.matched) enqueueEpisodeRefresh(animeId, { source });
+    }
+  });
+
+  registerJob("refresh-episodes", async ({ animeId, source }) => {
+    await refreshEpisodesForAnime(animeId, { source });
+  });
+}
+
+function enqueueMapping(animeId, options = {}) {
+  const payload = { animeId, refresh: !!options.refresh };
+  if (options.source) payload.source = options.source;
+  const key = options.source ? `ensure-mapping:${options.source}:${animeId}` : `ensure-mapping:${animeId}`;
+  enqueueJob("ensure-mapping", payload, { key });
+}
+
+function enqueueEpisodeRefresh(animeId, { source } = {}) {
+  if (!source) throw new Error("enqueueEpisodeRefresh requires source");
+  return enqueueJob("refresh-episodes", { animeId, source }, { key: `refresh-episodes:${source}:${animeId}` });
+}
