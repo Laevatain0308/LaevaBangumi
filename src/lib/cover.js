@@ -24,10 +24,10 @@ export async function downloadCover(id, url) {
   const t = setTimeout(() => ac.abort(), TIMEOUT);
 
   try {
-    const res = await fetch(url, {
-      signal: ac.signal,
-      dispatcher: getDispatcher(),
-    });
+    const dispatcher = getDispatcher();
+    const fetchOptions = { signal: ac.signal };
+    if (dispatcher) fetchOptions.dispatcher = dispatcher;
+    const res = await fetch(url, fetchOptions);
     if (!res.ok) return false;
 
     const buf = Buffer.from(await res.arrayBuffer());

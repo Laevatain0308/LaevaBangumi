@@ -7,6 +7,7 @@ import {
   cstationCatalog,
   animeOther,
   matchRetryState,
+  episodeFetchRetryState,
   manualMatchState,
   ANIME_PLATFORMS,
 } from "../db/schema.js";
@@ -87,6 +88,19 @@ function scheduleRetry(animeId, source, count) {
     .run();
 }
 
+function scheduleEpisodeFetchRetry(animeId, source, count) {
+  if (!source) throw new Error("scheduleEpisodeFetchRetry requires source");
+  const idx = Math.min(Math.max(count, 1) - 1, RETRY_DELAYS.length - 1);
+  const retryAt = fromNow(RETRY_DELAYS[idx]);
+  db.insert(episodeFetchRetryState)
+    .values({ animeId, source, retryCount: count, retryAt, updatedAt: now() })
+    .onConflictDoUpdate({
+      target: [episodeFetchRetryState.animeId, episodeFetchRetryState.source],
+      set: { retryCount: count, retryAt, updatedAt: now() },
+    })
+    .run();
+}
+
 function clearRetry(animeId, source) {
   db.insert(matchRetryState)
     .values({ animeId, source, retryCount: 0, retryAt: null, updatedAt: now() })
@@ -97,10 +111,23 @@ function clearRetry(animeId, source) {
     .run();
 }
 
+function clearEpisodeFetchRetry(animeId, source) {
+  db.delete(episodeFetchRetryState)
+    .where(and(eq(episodeFetchRetryState.animeId, animeId), eq(episodeFetchRetryState.source, source)))
+    .run();
+}
+
 function getRetryState(animeId, source) {
   return db.select()
     .from(matchRetryState)
     .where(and(eq(matchRetryState.animeId, animeId), eq(matchRetryState.source, source)))
+    .get();
+}
+
+function getEpisodeFetchRetryState(animeId, source) {
+  return db.select()
+    .from(episodeFetchRetryState)
+    .where(and(eq(episodeFetchRetryState.animeId, animeId), eq(episodeFetchRetryState.source, source)))
     .get();
 }
 
@@ -233,11 +260,20 @@ function animeRowToBangumiLike(a) {
   };
 }
 
+function deleteAnimeDependencies(animeId) {
+  db.delete(episodes).where(eq(episodes.animeId, animeId)).run();
+  db.delete(bangumiCstationMap).where(eq(bangumiCstationMap.animeId, animeId)).run();
+  db.delete(matchRetryState).where(eq(matchRetryState.animeId, animeId)).run();
+  db.delete(episodeFetchRetryState).where(eq(episodeFetchRetryState.animeId, animeId)).run();
+  db.delete(manualMatchState).where(eq(manualMatchState.animeId, animeId)).run();
+}
+
 export async function upsertAnime(item, weekday = undefined, options = {}) {
   const platform = item.platform || null;
 
   if (platform && !ANIME_PLATFORMS.has(platform)) {
     log("anime", "skip non-anime subject", { id: item.id, name: item.name, platform });
+    deleteAnimeDependencies(item.id);
     db.delete(anime).where(eq(anime.id, item.id)).run();
     db.insert(animeOther)
       .values(compactRow({
@@ -321,6 +357,20 @@ async function upsertEpisodes(animeId, source, cstationId, episodesList) {
         set: { videoUrl: ep.videoUrl, epName: ep.epName, sourceEpIndex: ep.sourceEpIndex ?? ep.epIndex, updatedAt: now() },
       })
       .run();
+  }
+}
+
+function pruneEpisodesForRefresh(animeId, source, cstationId, episodesList) {
+  const validIndexes = new Set(episodesList.map((ep) => ep.epIndex));
+  const existing = db.select()
+    .from(episodes)
+    .where(and(eq(episodes.animeId, animeId), eq(episodes.sourceName, source)))
+    .all();
+
+  for (const ep of existing) {
+    if (ep.sourceAid !== cstationId || !validIndexes.has(ep.epIndex)) {
+      db.delete(episodes).where(eq(episodes.id, ep.id)).run();
+    }
   }
 }
 
@@ -464,13 +514,14 @@ export async function refreshEpisodesForAnime(animeId, { source } = {}) {
 
   const detail = await cstation.fetchById(mapped.cstationId, { source });
   if (!detail) {
-    const retry = getRetryState(animeId, source);
-    scheduleRetry(animeId, source, (retry?.retryCount ?? 0) + 1);
+    const retry = getEpisodeFetchRetryState(animeId, source);
+    scheduleEpisodeFetchRetry(animeId, source, (retry?.retryCount ?? 0) + 1);
     warn("episodes", "fetch detail failed", { animeId, source, cstationId: mapped.cstationId });
     return { animeId, refreshed: false, reason: "fetch-detail-failed" };
   }
 
   const rangedEpisodes = applyEpisodeRange(detail.episodes, mapped);
+  pruneEpisodesForRefresh(animeId, source, detail.id, rangedEpisodes);
   await upsertEpisodes(animeId, source, detail.id, rangedEpisodes);
   await upsertMap(animeId, source, detail.id, mapped.score, mapped.matchedBgName, detail.name, {
     sourceEpStart: mapped.sourceEpStart,
@@ -478,6 +529,7 @@ export async function refreshEpisodesForAnime(animeId, { source } = {}) {
     displayEpOffset: mapped.displayEpOffset,
   });
   clearRetry(animeId, source);
+  clearEpisodeFetchRetry(animeId, source);
   log("episodes", "refresh completed", { animeId, source, cstationId: detail.id, epCount: rangedEpisodes.length, sourceEpCount: detail.epCount });
   return { animeId, refreshed: true, cstationId: detail.id, epCount: rangedEpisodes.length, sourceEpCount: detail.epCount };
 }
@@ -555,6 +607,7 @@ export async function retryPending() {
   const mapped = mappedAnimeSourceKeys(sourceKeys);
   const episodeSourceKeys = episodeAnimeSourceKeys(sourceKeys);
   const retryRows = db.select().from(matchRetryState).all();
+  const episodeRetryRows = db.select().from(episodeFetchRetryState).all();
   const waitAiringKeys = manualWaitAiringKeys(sourceKeys);
   const animeById = new Map(list.map((a) => [a.id, a]));
   const pending = retryRows.filter((row) => {
@@ -566,9 +619,19 @@ export async function retryPending() {
     if (row.retryCount >= MAX_RETRIES) return false;
     return row.retryAt <= now();
   });
+  const pendingEpisodeFetches = episodeRetryRows.filter((row) => {
+    if (!sourceKeys.includes(row.source)) return false;
+    if (waitAiringKeys.has(`${row.animeId}:${row.source}`)) return false;
+    if (!animeById.has(row.animeId)) return false;
+    if (!mapped.has(`${row.animeId}:${row.source}`)) return false;
+    if (!row.retryAt) return false;
+    return row.retryAt <= now();
+  });
 
   const stats = { retried: 0, matched: 0, refreshed: 0, errors: 0 };
-  if (pending.length > 0) log("retry", "pending retry started", { total: pending.length });
+  if (pending.length + pendingEpisodeFetches.length > 0) {
+    log("retry", "pending retry started", { mapping: pending.length, episodeFetch: pendingEpisodeFetches.length });
+  }
   for (const row of pending) {
     try {
       stats.retried++;
@@ -589,7 +652,17 @@ export async function retryPending() {
       stats.errors++;
     }
   }
-  if (pending.length > 0) log("retry", "pending retry completed", stats);
+  for (const row of pendingEpisodeFetches) {
+    try {
+      stats.retried++;
+      const refresh = await refreshEpisodesForAnime(row.animeId, { source: row.source });
+      if (refresh.refreshed) stats.refreshed++;
+    } catch (err) {
+      error("retry", `episode fetch retry failed for ${row.animeId}:${row.source}`, err);
+      stats.errors++;
+    }
+  }
+  if (pending.length + pendingEpisodeFetches.length > 0) log("retry", "pending retry completed", stats);
   return stats;
 }
 
@@ -775,7 +848,7 @@ export async function getAnimeDetail(id) {
   }
 
   const mappedRows = db.select().from(bangumiCstationMap).where(eq(bangumiCstationMap.animeId, id)).all();
-  const episodeRows = db.select({ sourceName: episodes.sourceName }).from(episodes).where(eq(episodes.animeId, id)).all();
+  const episodeRows = db.select({ sourceName: episodes.sourceName, sourceAid: episodes.sourceAid }).from(episodes).where(eq(episodes.animeId, id)).all();
   const retryRows = db.select().from(matchRetryState).where(eq(matchRetryState.animeId, id)).all();
   const manualRows = db.select().from(manualMatchState).where(eq(manualMatchState.animeId, id)).all();
   const sourceStatuses = getResourceSourceStatuses(mappedRows, episodeRows, retryRows, manualRows);
@@ -796,7 +869,7 @@ export async function getAnimeDetail(id) {
   }
 
   return {
-    ...formatAnimeDetail(a, isFresh(a.detailFetchedAt, DETAIL_FRESH_MS)),
+    ...formatAnimeDetail(a, isFresh(a.detailFetchedAt, DETAIL_FRESH_MS), mappedRows),
     resourceStatus,
     resourceSources: sourceStatuses,
   };
@@ -804,7 +877,7 @@ export async function getAnimeDetail(id) {
 
 function getResourceSourceStatuses(mappedRows, episodeRows, retryRows, manualRows = []) {
   const mappedBySource = new Map(mappedRows.map((row) => [row.source, row]));
-  const episodeSources = new Set(episodeRows.map((row) => row.sourceName));
+  const episodeSources = new Set(episodeRows.map((row) => `${row.sourceName}:${row.sourceAid}`));
   const retryBySource = new Map(retryRows.map((row) => [row.source, row]));
   const manualBySource = new Map(
     manualRows
@@ -820,7 +893,7 @@ function getResourceSourceStatuses(mappedRows, episodeRows, retryRows, manualRow
     const retryCount = retry?.retryCount ?? 0;
     const retrying = retry?.retryAt && retry.retryAt > nowTs;
     let status = "matching";
-    if (episodeSources.has(source.key)) status = "ready";
+    if (mapped && episodeSources.has(`${source.key}:${mapped.cstationId}`)) status = "ready";
     else if (!mapped && manual) status = "wait_airing";
     else if (retryCount >= MAX_RETRIES) status = "no_data";
     else if (retrying) status = "retrying";
@@ -864,8 +937,12 @@ function collectEpisodeChannels(rows) {
   });
 }
 
-function formatAnimeDetail(a, fresh) {
-  const eps = db.select().from(episodes).where(eq(episodes.animeId, a.id)).all();
+function formatAnimeDetail(a, fresh, mappedRows = null) {
+  const mappedKeys = mappedRows
+    ? new Set(mappedRows.map((row) => `${row.source}:${row.cstationId}`))
+    : null;
+  const eps = db.select().from(episodes).where(eq(episodes.animeId, a.id)).all()
+    .filter((ep) => !mappedKeys || mappedKeys.has(`${ep.sourceName}:${ep.sourceAid}`));
 
   const channels = collectEpisodeChannels(eps).map((channel, chIdx) => ({
     name: channel.sourceName,

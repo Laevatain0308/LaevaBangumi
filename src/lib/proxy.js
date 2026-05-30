@@ -1,21 +1,37 @@
 import { ProxyAgent } from "undici";
 
-const DEFAULT_PROXY = "http://127.0.0.1:7897";
-
 let _dispatcher = null;
+let _configuredUrl = null;
 
 function getProxyUrl() {
-  return process.env.HTTPS_PROXY || process.env.HTTP_PROXY || DEFAULT_PROXY;
+  return process.env.BANGUMI_PROXY_URL || null;
 }
 
 export function getDispatcher() {
-  if (!_dispatcher) {
-    _dispatcher = new ProxyAgent(getProxyUrl());
+  const proxyUrl = getProxyUrl();
+  if (!proxyUrl) {
+    _dispatcher = null;
+    _configuredUrl = null;
+    return null;
+  }
+  if (!_dispatcher || _configuredUrl !== proxyUrl) {
+    _dispatcher = new ProxyAgent(proxyUrl);
+    _configuredUrl = proxyUrl;
   }
   return _dispatcher;
 }
 
 /** 允许外部覆盖代理地址 */
 export function setProxy(proxyUrl) {
-  _dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : null;
+  if (proxyUrl) {
+    process.env.BANGUMI_PROXY_URL = proxyUrl;
+  } else {
+    delete process.env.BANGUMI_PROXY_URL;
+  }
+  resetProxy();
+}
+
+export function resetProxy() {
+  _dispatcher = null;
+  _configuredUrl = null;
 }

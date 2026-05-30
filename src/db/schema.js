@@ -62,6 +62,16 @@ export const matchRetryState = sqliteTable("match_retry_state", {
   pk: uniqueIndex("idx_match_retry_state_unique").on(table.animeId, table.source),
 }));
 
+export const episodeFetchRetryState = sqliteTable("episode_fetch_retry_state", {
+  animeId: integer("anime_id").notNull().references(() => anime.id),
+  source: text("source").notNull(),
+  retryCount: integer("retry_count").notNull().default(0),
+  retryAt: text("retry_at"),
+  updatedAt: text("updated_at").default("(datetime('now'))").notNull(),
+}, (table) => ({
+  pk: uniqueIndex("idx_episode_fetch_retry_state_unique").on(table.animeId, table.source),
+}));
+
 export const manualMatchState = sqliteTable("manual_match_state", {
   animeId: integer("anime_id").notNull().references(() => anime.id),
   source: text("source").notNull(),

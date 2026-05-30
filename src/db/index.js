@@ -4,7 +4,7 @@ import * as schema from "./schema.js";
 
 const DB_PATH = new URL("../../data/anime.db", import.meta.url).pathname;
 
-const sqlite = new Database(DB_PATH);
+export const sqlite = new Database(DB_PATH);
 sqlite.pragma("journal_mode = WAL");
 sqlite.pragma("foreign_keys = ON");
 
@@ -76,6 +76,17 @@ export function initDb() {
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_match_retry_state_unique
       ON match_retry_state(anime_id, source);
+
+    CREATE TABLE IF NOT EXISTS episode_fetch_retry_state (
+      anime_id INTEGER NOT NULL REFERENCES anime(id),
+      source TEXT NOT NULL,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      retry_at TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_episode_fetch_retry_state_unique
+      ON episode_fetch_retry_state(anime_id, source);
 
     CREATE TABLE IF NOT EXISTS manual_match_state (
       anime_id INTEGER NOT NULL REFERENCES anime(id),

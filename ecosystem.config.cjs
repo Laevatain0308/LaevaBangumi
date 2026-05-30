@@ -8,6 +8,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: 3002,
+        BANGUMI_PROXY_URL: process.env.BANGUMI_PROXY_URL || '',
       },
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
       error_file: './logs/error.log',

@@ -11,12 +11,13 @@ async function fetchJson(url, opts = {}) {
   const t = setTimeout(() => ac.abort(), timeoutMs);
   try {
     const { headers: extraHeaders, timeoutMs: _timeoutMs, ...restOpts } = opts;
+    const dispatcher = getDispatcher();
     const fetchOpts = {
       ...restOpts,
       headers: { "User-Agent": UA, ...extraHeaders },
       signal: ac.signal,
-      dispatcher: getDispatcher(),
     };
+    if (dispatcher) fetchOpts.dispatcher = dispatcher;
     const res = await fetch(url, fetchOpts);
     if (!res.ok) throw new Error(`Bangumi HTTP ${res.status}: ${res.statusText}`);
     return res.json();

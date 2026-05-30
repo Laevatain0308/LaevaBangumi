@@ -1,8 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { and, eq } from "drizzle-orm";
-import { db } from "../db/index.js";
-import { anime, bangumiCstationMap, cstationCatalog, episodes, manualMatchState, matchRetryState } from "../db/schema.js";
+import { db, sqlite } from "../db/index.js";
+import { anime, bangumiCstationMap, cstationCatalog, episodeFetchRetryState, episodes, manualMatchState, matchRetryState } from "../db/schema.js";
 import * as bangumi from "./bangumi.js";
 import { refreshEpisodesForAnime } from "./anime.js";
 import { getEnabledSources } from "../lib/cstationConfig.js";
@@ -611,6 +611,12 @@ function clearRetryState(animeId, source) {
     .run();
 }
 
+function clearEpisodeFetchRetryState(animeId, source) {
+  db.delete(episodeFetchRetryState)
+    .where(and(eq(episodeFetchRetryState.animeId, animeId), eq(episodeFetchRetryState.source, source)))
+    .run();
+}
+
 function blockAutoRetry(animeId, source) {
   db.insert(matchRetryState)
     .values({ animeId, source, retryCount: MAX_RETRIES, retryAt: null, updatedAt: now() })
@@ -636,6 +642,7 @@ function markWaitAiring(animeId, source, note) {
     })
     .run();
   clearRetryState(animeId, source);
+  clearEpisodeFetchRetryState(animeId, source);
 }
 
 function deleteMappingArtifacts(animeId, source) {
@@ -645,6 +652,7 @@ function deleteMappingArtifacts(animeId, source) {
   db.delete(bangumiCstationMap)
     .where(and(eq(bangumiCstationMap.animeId, animeId), eq(bangumiCstationMap.source, source)))
     .run();
+  clearEpisodeFetchRetryState(animeId, source);
 }
 
 function applyManualMapping({ row, animeRow, source, sourceItem, sourceAid, episodeRange }) {
@@ -679,6 +687,7 @@ function applyManualMapping({ row, animeRow, source, sourceItem, sourceAid, epis
     .run();
 
   clearRetryState(animeRow.id, source);
+  clearEpisodeFetchRetryState(animeRow.id, source);
   clearManualMatchState(animeRow.id, source);
 }
 
@@ -747,18 +756,31 @@ export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refre
 
   if (errors.length > 0) throw new Error(`manual review import failed:\n${errors.join("\n")}`);
 
+  const applyActions = sqlite.transaction((items) => {
+    for (const action of items) {
+      if (action.type === "wait_airing") {
+        markWaitAiring(action.animeId, action.source, action.note);
+        stats.updated++;
+        stats.waitAiring++;
+        continue;
+      }
+
+      if (action.type === "match") {
+        applyManualMapping(action);
+        stats.updated++;
+        stats.matched++;
+      }
+    }
+  });
+
+  applyActions(actions);
+
   for (const action of actions) {
     if (action.type === "wait_airing") {
-      markWaitAiring(action.animeId, action.source, action.note);
-      stats.updated++;
-      stats.waitAiring++;
       continue;
     }
 
     if (action.type === "match") {
-      applyManualMapping(action);
-      stats.updated++;
-      stats.matched++;
       if (refreshEpisodes) {
         const result = await refreshEpisodesForAnime(action.animeRow.id, { source: action.source });
         if (result.refreshed) stats.refreshed++;
@@ -849,25 +871,42 @@ export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, 
 
   if (errors.length > 0) throw new Error(`mapped review import failed:\n${errors.join("\n")}`);
 
+  const applyActions = sqlite.transaction((items) => {
+    for (const action of items) {
+      if (action.type === "delete") {
+        applyMappedDelete(action.animeId, action.source);
+        stats.updated++;
+        stats.deleted++;
+        continue;
+      }
+
+      if (action.type === "wait_airing") {
+        applyMappedWaitAiring(action.animeId, action.source, action.note);
+        stats.updated++;
+        stats.waitAiring++;
+        continue;
+      }
+
+      if (action.type === "update") {
+        applyManualMapping(action);
+        stats.updated++;
+        stats.matched++;
+      }
+    }
+  });
+
+  applyActions(actions);
+
   for (const action of actions) {
     if (action.type === "delete") {
-      applyMappedDelete(action.animeId, action.source);
-      stats.updated++;
-      stats.deleted++;
       continue;
     }
 
     if (action.type === "wait_airing") {
-      applyMappedWaitAiring(action.animeId, action.source, action.note);
-      stats.updated++;
-      stats.waitAiring++;
       continue;
     }
 
     if (action.type === "update") {
-      applyManualMapping(action);
-      stats.updated++;
-      stats.matched++;
       if (refreshEpisodes) {
         const result = await refreshEpisodesForAnime(action.animeRow.id, { source: action.source });
         if (result.refreshed) stats.refreshed++;
