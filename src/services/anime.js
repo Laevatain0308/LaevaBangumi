@@ -14,7 +14,7 @@ import {
 import * as bangumi from "./bangumi.js";
 import * as cstation from "./cstation.js";
 import { enqueueJob, registerJob } from "./queue.js";
-import { hydrateCatalogDetails } from "./catalog.js";
+import { hydrateCatalogDetails, saveCatalog } from "./catalog.js";
 import { getEnabledSources } from "../lib/cstationConfig.js";
 import { collectBangumiTitles, matchOne, rankMatches } from "../lib/matcher.js";
 import { downloadCover } from "../lib/cover.js";
@@ -647,6 +647,16 @@ export async function refreshEpisodesForAnime(animeId, { source } = {}) {
     return { animeId, refreshed: false, reason: "fetch-detail-failed" };
   }
 
+  await saveCatalog([{
+    id: detail.id,
+    name: detail.name,
+    subname: detail.subname || null,
+    year: detail.year || null,
+    last: detail.last || null,
+    category: detail.type || null,
+    detailFetchedAt: now(),
+  }], { source });
+
   const rangedEpisodes = applyEpisodeRange(detail.episodes, mapped);
   pruneEpisodesForRefresh(animeId, source, detail.id, rangedEpisodes);
   await upsertEpisodes(animeId, source, detail.id, rangedEpisodes);
@@ -1269,10 +1279,9 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
     const sourceUpdatedMs = parseTimestamp(row.sourceUpdatedAt);
     if (sourceUpdatedMs == null || sourceUpdatedMs < cutoffMs || sourceUpdatedMs > nowMs) continue;
 
-    const episodeUpdatedMs = parseTimestamp(row.episodeUpdatedAt);
-    const hasEpisodeChange = episodeUpdatedMs != null && episodeUpdatedMs >= cutoffMs && episodeUpdatedMs <= nowMs;
-    const isRangedMapping = row.sourceEpStart != null || row.sourceEpEnd != null || (row.displayEpOffset ?? 0) !== 0;
-    if (isRangedMapping && !hasEpisodeChange) continue;
+    const isClosedRange = row.sourceEpEnd != null;
+    if (isClosedRange) continue;
+    const hasEpisodeChange = row.latestEp != null;
 
     const sourceUpdate = {
       source: row.source,

@@ -1146,6 +1146,52 @@ test("refreshEpisodesForAnime filters source episodes and stores display indexes
   assert.equal(play.videoURL, "https://example.invalid/1156.m3u8");
 });
 
+test("refreshEpisodesForAnime records catalog last on manually created mappings", async () => {
+  db.insert(cstationCatalog)
+    .values({ source: "ffzy", id: SOURCE_AID, name: "测试番剧", year: "2026" })
+    .onConflictDoUpdate({
+      target: [cstationCatalog.source, cstationCatalog.id],
+      set: { last: null },
+    })
+    .run();
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: ANIME_ID,
+      source: "ffzy",
+      cstationId: SOURCE_AID,
+      matchedBgName: "测试番剧",
+      matchedCsName: "测试番剧",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(`
+    <rss><list><video>
+      <id>${SOURCE_AID}</id>
+      <name>测试番剧</name>
+      <last>2026-05-30 21:00:00</last>
+      <dl><dd flag="ffm3u8">第1集$https://example.invalid/1.m3u8</dd></dl>
+    </video></list></rss>
+  `, { status: 200, headers: { "content-type": "application/xml" } });
+  try {
+    const result = await refreshEpisodesForAnime(ANIME_ID, { source: "ffzy" });
+    assert.equal(result.refreshed, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const catalog = db.select().from(cstationCatalog)
+    .where(and(eq(cstationCatalog.source, "ffzy"), eq(cstationCatalog.id, SOURCE_AID)))
+    .get();
+  const result = await getUpdates({ days: 7, limit: 20, today: "2026-05-30 23:59:59" });
+  const current = result.data.find((item) => item.id === ANIME_ID);
+
+  assert.equal(catalog.last, "2026-05-30 21:00:00");
+  assert.equal(current.updatedAt, "2026-05-30T13:00:00.000Z");
+  assert.equal(current.latestEpisode, "更新至第01集");
+});
+
 test("refreshEpisodesForAnime removes stale episodes after a successful refresh", async () => {
   seedRangeAnime();
   db.insert(cstationCatalog)
@@ -1632,7 +1678,7 @@ test("getUpdates aggregates multiple mapped sources by newest catalog last", asy
   assert.deepEqual(current.sourceUpdates.map((item) => item.source), ["ffzy"]);
 });
 
-test("getUpdates skips ranged mappings when the Bangumi episode slice did not change", async () => {
+test("getUpdates skips closed ranged mappings even when the source item updates", async () => {
   seedRangeAnime();
   db.insert(cstationCatalog)
     .values({
@@ -1666,7 +1712,7 @@ test("getUpdates skips ranged mappings when the Bangumi episode slice did not ch
       sourceEpIndex: 2,
       epName: "第2集",
       videoUrl: "https://example.invalid/range-2.m3u8",
-      updatedAt: "2026-05-01 00:00:00",
+      updatedAt: "2026-05-30 22:01:00",
     })
     .run();
 
@@ -1674,6 +1720,53 @@ test("getUpdates skips ranged mappings when the Bangumi episode slice did not ch
   const current = result.data.find((item) => item.id === RANGE_ANIME_ID);
 
   assert.equal(current, undefined);
+});
+
+test("getUpdates includes the active ranged mapping when source latest episode is inside the slice", async () => {
+  seedRangeAnime();
+  db.insert(cstationCatalog)
+    .values({
+      source: "ffzy",
+      id: RANGE_SOURCE_AID,
+      name: "航海王",
+      last: "2026-05-30 22:00:00",
+    })
+    .onConflictDoUpdate({
+      target: [cstationCatalog.source, cstationCatalog.id],
+      set: { last: "2026-05-30 22:00:00" },
+    })
+    .run();
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: RANGE_ANIME_ID,
+      source: "ffzy",
+      cstationId: RANGE_SOURCE_AID,
+      sourceEpStart: 1156,
+      sourceEpEnd: null,
+      displayEpOffset: 1155,
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  db.insert(episodes)
+    .values({
+      animeId: RANGE_ANIME_ID,
+      sourceName: "ffzy",
+      sourceAid: RANGE_SOURCE_AID,
+      epIndex: 3,
+      sourceEpIndex: 1158,
+      epName: "第1158集",
+      videoUrl: "https://example.invalid/range-1158.m3u8",
+      updatedAt: "2026-05-01 00:00:00",
+    })
+    .run();
+
+  const result = await getUpdates({ days: 7, limit: 20, today: "2026-05-30 23:59:59" });
+  const current = result.data.find((item) => item.id === RANGE_ANIME_ID);
+
+  assert.ok(current);
+  assert.equal(current.updatedAt, "2026-05-30T14:00:00.000Z");
+  assert.equal(current.latestEp, 3);
+  assert.equal(current.latestEpisode, "更新至第03集");
 });
 
 test("getUpdates ignores mappings from disabled sources", async () => {
