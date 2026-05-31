@@ -8,12 +8,14 @@ import { onSearchFlush } from "./services/queue.js";
 import { syncCatalogCategory } from "./services/catalog.js";
 import { createTaskCoordinator, RETRY_CRON_EXPRESSION, SYNC_CRON_EXPRESSION } from "./services/scheduler.js";
 import { getCategoryConfigs, getEnabledSources } from "./lib/cstationConfig.js";
+import { getProxyStatus } from "./lib/proxy.js";
 import { log, error } from "./lib/logger.js";
 
 const PORT = parseInt(process.env.PORT, 10) || 3002;
 
 initDb();
 log("boot", "database initialized");
+log("boot", "Bangumi proxy status", getProxyStatus());
 
 // 队列回调：异步搜索由队列驱动
 registerAnimeJobs();

@@ -1,5 +1,5 @@
 import { fetch } from "undici";
-import { getDispatcher } from "../lib/proxy.js";
+import { getDispatcher, getProxyStatus } from "../lib/proxy.js";
 
 const BG = "https://api.bgm.tv";
 const TIMEOUT = 30000;
@@ -18,7 +18,17 @@ async function fetchJson(url, opts = {}) {
       signal: ac.signal,
     };
     if (dispatcher) fetchOpts.dispatcher = dispatcher;
-    const res = await fetch(url, fetchOpts);
+    let res;
+    try {
+      res = await fetch(url, fetchOpts);
+    } catch (err) {
+      const proxy = getProxyStatus();
+      const cause = err.cause;
+      const detail = cause
+        ? `${cause.code || cause.name || "cause"}: ${cause.message || String(cause)}`
+        : err.message;
+      throw new Error(`Bangumi fetch failed (${detail}; proxy=${proxy.enabled ? proxy.url : "disabled"})`, { cause: err });
+    }
     if (!res.ok) throw new Error(`Bangumi HTTP ${res.status}: ${res.statusText}`);
     return res.json();
   } finally {

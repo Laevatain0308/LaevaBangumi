@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getDispatcher, resetProxy, setProxy } from "../src/lib/proxy.js";
+import { getDispatcher, getProxyStatus, resetProxy, setProxy } from "../src/lib/proxy.js";
 
 test.afterEach(() => {
   delete process.env.BANGUMI_PROXY_URL;
@@ -28,4 +28,16 @@ test("setProxy can configure and clear a process-local dispatcher", () => {
 
   setProxy("");
   assert.equal(getDispatcher(), null);
+});
+
+test("getProxyStatus reports masked Bangumi proxy configuration", () => {
+  setProxy("http://user:secret@127.0.0.1:7897");
+
+  assert.deepEqual(getProxyStatus(), {
+    enabled: true,
+    url: "http://user:***@127.0.0.1:7897/",
+  });
+
+  setProxy("");
+  assert.deepEqual(getProxyStatus(), { enabled: false, url: null });
 });

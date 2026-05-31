@@ -7,6 +7,25 @@ function getProxyUrl() {
   return process.env.BANGUMI_PROXY_URL || null;
 }
 
+function maskProxyUrl(proxyUrl) {
+  if (!proxyUrl) return null;
+  try {
+    const parsed = new URL(proxyUrl);
+    if (parsed.password) parsed.password = "***";
+    return parsed.toString();
+  } catch {
+    return "<invalid proxy url>";
+  }
+}
+
+export function getProxyStatus() {
+  const proxyUrl = getProxyUrl();
+  return {
+    enabled: !!proxyUrl,
+    url: maskProxyUrl(proxyUrl),
+  };
+}
+
 export function getDispatcher() {
   const proxyUrl = getProxyUrl();
   if (!proxyUrl) {
