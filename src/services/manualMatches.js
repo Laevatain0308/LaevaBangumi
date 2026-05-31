@@ -140,6 +140,17 @@ function manualStateByAnimeIdForSource(source) {
   );
 }
 
+function manualBlockedAutoMatchStateByAnimeIdForSource(source) {
+  return new Map(
+    db.select()
+      .from(manualMatchState)
+      .where(eq(manualMatchState.source, source))
+      .all()
+      .filter((row) => ["wait_airing", "source_already_mapped"].includes(row.status))
+      .map((row) => [row.animeId, row])
+  );
+}
+
 function filterCatalogByYear(catalog, year) {
   return catalog.filter((item) => {
     if (!year || !item.year) return true;
@@ -183,6 +194,12 @@ function unmatchedReasonForRetry(retry) {
   return "retry_pending";
 }
 
+function unmatchedReasonForState(manual, retry) {
+  if (manual?.status === "wait_airing") return "wait_airing";
+  if (manual?.status === "source_already_mapped") return "source_already_mapped";
+  return unmatchedReasonForRetry(retry);
+}
+
 function rankReviewSuggestions(a, catalog, { limit, minScore, relaxedYearFallback }) {
   const names = animeTitles(a);
   const year = bangumi.extractYear(a.airDate);
@@ -202,11 +219,12 @@ function rankReviewSuggestions(a, catalog, { limit, minScore, relaxedYearFallbac
 
 function reviewRowForAnime(a, source, unmatchedReason, ranked, limit, manualState = null) {
   const top = ranked.suggestions[0] || null;
+  const keepReasonWithoutSuggestion = ["wait_airing", "source_already_mapped"].includes(unmatchedReason);
   const row = {
     anime_id: a.id,
     bg_title: a.nameCn || a.name,
     match_score: top ? Number(top.score).toFixed(4) : "",
-    unmatched_reason: top || unmatchedReason === "wait_airing" ? unmatchedReason : "no_candidate",
+    unmatched_reason: top || keepReasonWithoutSuggestion ? unmatchedReason : "no_candidate",
     decision: "",
     source_aid: top?.video?.id || "",
     source_ep_start: "",
@@ -255,14 +273,14 @@ export function analyzeUnmappedMappings({
   for (const sourceKey of sources) {
     const mapped = mappedAnimeIdsForSource(sourceKey);
     const retryByAnimeId = retryStateByAnimeIdForSource(sourceKey);
-    const manualByAnimeId = manualStateByAnimeIdForSource(sourceKey);
+    const manualByAnimeId = manualBlockedAutoMatchStateByAnimeIdForSource(sourceKey);
     const catalog = db.select().from(cstationCatalog).where(eq(cstationCatalog.source, sourceKey)).all();
     const unmapped = allAnimeRows().filter((a) => !mapped.has(a.id));
 
     for (const a of unmapped) {
       const ranked = rankReviewSuggestions(a, catalog, { limit: normalizedLimit, minScore, relaxedYearFallback });
       const manual = manualByAnimeId.get(a.id);
-      const unmatchedReason = manual?.status === "wait_airing" ? "wait_airing" : unmatchedReasonForRetry(retryByAnimeId.get(a.id));
+      const unmatchedReason = unmatchedReasonForState(manual, retryByAnimeId.get(a.id));
       stats.animeSources++;
       stats.undecided++;
       if (ranked.suggestions.length > 0) stats.withSuggestions++;

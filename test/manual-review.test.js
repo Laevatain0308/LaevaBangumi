@@ -23,7 +23,7 @@ import {
   importMappedReview,
   importManualReview,
 } from "../src/services/manualMatches.js";
-import { getAnimeDetail, getPlayUrl, getUpdates, refreshEpisodesForAnime, syncCalendar, upsertAnime } from "../src/services/anime.js";
+import { batchMatch, ensureMappingForAnime, getAnimeDetail, getPlayUrl, getUpdates, refreshEpisodesForAnime, retryPending, syncCalendar, upsertAnime } from "../src/services/anime.js";
 import { saveCatalog } from "../src/services/catalog.js";
 
 const SOURCE = "test_manual";
@@ -31,6 +31,9 @@ const ANIME_ID = 999900001;
 const SOURCE_AID = 999900101;
 const RANGE_ANIME_ID = 999900002;
 const RANGE_SOURCE_AID = 999900201;
+const EXTRA_ANIME_ID = ANIME_ID + 100;
+const EXTRA_SOURCE_AID = SOURCE_AID + 100;
+const NEW_SOURCE_AID = SOURCE_AID + 1;
 
 initDb();
 
@@ -57,10 +60,19 @@ async function withTempPath(fn) {
 
 function cleanup() {
   db.delete(bangumiCstationMap)
+    .where(eq(bangumiCstationMap.source, SOURCE))
+    .run();
+  db.delete(bangumiCstationMap)
     .where(eq(bangumiCstationMap.animeId, ANIME_ID))
     .run();
   db.delete(bangumiCstationMap)
     .where(eq(bangumiCstationMap.animeId, RANGE_ANIME_ID))
+    .run();
+  db.delete(bangumiCstationMap)
+    .where(eq(bangumiCstationMap.animeId, EXTRA_ANIME_ID))
+    .run();
+  db.delete(matchRetryState)
+    .where(eq(matchRetryState.source, SOURCE))
     .run();
   db.delete(matchRetryState)
     .where(eq(matchRetryState.animeId, ANIME_ID))
@@ -68,11 +80,23 @@ function cleanup() {
   db.delete(matchRetryState)
     .where(eq(matchRetryState.animeId, RANGE_ANIME_ID))
     .run();
+  db.delete(matchRetryState)
+    .where(eq(matchRetryState.animeId, EXTRA_ANIME_ID))
+    .run();
+  db.delete(episodeFetchRetryState)
+    .where(eq(episodeFetchRetryState.source, SOURCE))
+    .run();
   db.delete(episodeFetchRetryState)
     .where(eq(episodeFetchRetryState.animeId, ANIME_ID))
     .run();
   db.delete(episodeFetchRetryState)
     .where(eq(episodeFetchRetryState.animeId, RANGE_ANIME_ID))
+    .run();
+  db.delete(episodeFetchRetryState)
+    .where(eq(episodeFetchRetryState.animeId, EXTRA_ANIME_ID))
+    .run();
+  db.delete(manualMatchState)
+    .where(eq(manualMatchState.source, SOURCE))
     .run();
   db.delete(manualMatchState)
     .where(eq(manualMatchState.animeId, ANIME_ID))
@@ -80,22 +104,33 @@ function cleanup() {
   db.delete(manualMatchState)
     .where(eq(manualMatchState.animeId, RANGE_ANIME_ID))
     .run();
+  db.delete(manualMatchState)
+    .where(eq(manualMatchState.animeId, EXTRA_ANIME_ID))
+    .run();
+  db.delete(episodes)
+    .where(eq(episodes.sourceName, SOURCE))
+    .run();
   db.delete(episodes)
     .where(eq(episodes.animeId, ANIME_ID))
     .run();
   db.delete(episodes)
     .where(eq(episodes.animeId, RANGE_ANIME_ID))
     .run();
+  db.delete(episodes)
+    .where(eq(episodes.animeId, EXTRA_ANIME_ID))
+    .run();
   db.delete(cstationCatalog)
-    .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
+    .where(eq(cstationCatalog.source, SOURCE))
     .run();
   db.delete(cstationCatalog)
     .where(and(eq(cstationCatalog.source, "ffzy"), eq(cstationCatalog.id, RANGE_SOURCE_AID)))
     .run();
   db.delete(anime).where(eq(anime.id, ANIME_ID)).run();
   db.delete(anime).where(eq(anime.id, RANGE_ANIME_ID)).run();
+  db.delete(anime).where(eq(anime.id, EXTRA_ANIME_ID)).run();
   db.delete(animeOther).where(eq(animeOther.id, ANIME_ID)).run();
   db.delete(animeOther).where(eq(animeOther.id, RANGE_ANIME_ID)).run();
+  db.delete(animeOther).where(eq(animeOther.id, EXTRA_ANIME_ID)).run();
 }
 
 function seedAnime() {
@@ -409,6 +444,35 @@ test("analyzeUnmappedMappings keeps wait_airing reason without suggestions", asy
   assert.equal(row.suggestion_count, 0);
 });
 
+test("analyzeUnmappedMappings keeps source_already_mapped reason without suggestions", () => {
+  db.insert(anime)
+    .values({
+      id: EXTRA_ANIME_ID,
+      name: "完全不同番剧",
+      nameCn: "完全不同番剧",
+      aliases: JSON.stringify([]),
+      airDate: "2026-04-01",
+      updatedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  db.insert(manualMatchState)
+    .values({
+      animeId: EXTRA_ANIME_ID,
+      source: SOURCE,
+      status: "source_already_mapped",
+      note: "source_aid 1 is already mapped",
+      updatedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const result = analyzeUnmappedMappings({ source: SOURCE, limit: 1, minScore: 0.99 });
+  const row = result.rows.find((item) => item.anime_id === EXTRA_ANIME_ID);
+
+  assert.ok(row);
+  assert.equal(row.unmatched_reason, "source_already_mapped");
+  assert.equal(row.reviewer_note, "source_aid 1 is already mapped");
+});
+
 test("match decisions clear previous wait_airing state", async () => {
   await withCsv([
     "source,anime_id,decision,source_aid,reviewer_note",
@@ -456,8 +520,299 @@ test("importManualReview stores episode range mapping fields", async () => {
   assert.equal(mapping.displayEpOffset, 1155);
 });
 
+test("ensureMappingForAnime skips source ids already occupied by another mapping", async () => {
+  seedRangeAnime();
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: RANGE_ANIME_ID,
+      source: SOURCE,
+      cstationId: SOURCE_AID,
+      matchedBgName: "航海王 埃鲁巴夫篇",
+      matchedCsName: "测试番剧",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const result = await ensureMappingForAnime(ANIME_ID, { source: SOURCE });
+  const mapping = db.select().from(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
+    .get();
+  const retry = db.select().from(matchRetryState)
+    .where(and(eq(matchRetryState.animeId, ANIME_ID), eq(matchRetryState.source, SOURCE)))
+    .get();
+
+  assert.equal(result.matched, false);
+  assert.equal(result.reason, "source-already-mapped");
+  assert.equal(mapping, undefined);
+  assert.equal(retry.retryCount, 5);
+  assert.equal(retry.retryAt, null);
+});
+
+test("ensureMappingForAnime skips source ids occupied by ranged manual mappings", async () => {
+  seedRangeAnime();
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: RANGE_ANIME_ID,
+      source: SOURCE,
+      cstationId: SOURCE_AID,
+      sourceEpStart: 801,
+      sourceEpEnd: 1200,
+      displayEpOffset: 800,
+      matchedBgName: "航海王 埃鲁巴夫篇",
+      matchedCsName: "测试番剧",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const result = await ensureMappingForAnime(ANIME_ID, { source: SOURCE });
+  const mapping = db.select().from(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
+    .get();
+
+  assert.equal(result.matched, false);
+  assert.equal(result.reason, "source-already-mapped");
+  assert.equal(mapping, undefined);
+});
+
+test("ensureMappingForAnime terminally blocks retry when best source id is occupied", async () => {
+  seedRangeAnime();
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: RANGE_ANIME_ID,
+      source: SOURCE,
+      cstationId: SOURCE_AID,
+      matchedBgName: "航海王 埃鲁巴夫篇",
+      matchedCsName: "测试番剧",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const result = await ensureMappingForAnime(ANIME_ID, { source: SOURCE });
+  const retry = db.select().from(matchRetryState)
+    .where(and(eq(matchRetryState.animeId, ANIME_ID), eq(matchRetryState.source, SOURCE)))
+    .get();
+
+  assert.equal(result.matched, false);
+  assert.equal(result.reason, "source-already-mapped");
+  assert.equal(retry.retryCount, 5);
+  assert.equal(retry.retryAt, null);
+  const manual = db.select().from(manualMatchState)
+    .where(and(eq(manualMatchState.animeId, ANIME_ID), eq(manualMatchState.source, SOURCE)))
+    .get();
+  assert.equal(manual.status, "source_already_mapped");
+});
+
+test("retryPending skips source ids blocked for manual review", async () => {
+  seedRangeAnime();
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: RANGE_ANIME_ID,
+      source: SOURCE,
+      cstationId: SOURCE_AID,
+      matchedBgName: "航海王 埃鲁巴夫篇",
+      matchedCsName: "测试番剧",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  await ensureMappingForAnime(ANIME_ID, { source: SOURCE });
+
+  const stats = await retryPending({ mappingLimit: 10, episodeFetchLimit: 0, refreshEpisodes: false, sourceKeys: [SOURCE] });
+
+  assert.equal(stats.pending.mapping, 0);
+  assert.equal(stats.retried, 0);
+});
+
+test("batchMatch rechecks source ids blocked by a previous occupied mapping", async () => {
+  seedRangeAnime();
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: RANGE_ANIME_ID,
+      source: SOURCE,
+      cstationId: SOURCE_AID,
+      matchedBgName: "航海王 埃鲁巴夫篇",
+      matchedCsName: "测试番剧",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  await ensureMappingForAnime(ANIME_ID, { source: SOURCE });
+  db.delete(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, RANGE_ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
+    .run();
+
+  const stats = await batchMatch({ refreshEpisodes: false, sourceKeys: [SOURCE], animeIds: [ANIME_ID] });
+  const mapping = db.select().from(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
+    .get();
+  const manual = db.select().from(manualMatchState)
+    .where(and(eq(manualMatchState.animeId, ANIME_ID), eq(manualMatchState.source, SOURCE)))
+    .get();
+
+  assert.equal(stats.matched, 1);
+  assert.equal(mapping.cstationId, SOURCE_AID);
+  assert.equal(manual, undefined);
+});
+
+test("retryPending limits mapping retries per run", async () => {
+  db.insert(anime)
+    .values({
+      id: EXTRA_ANIME_ID,
+      name: "追加テスト番組",
+      nameCn: "追加测试番剧",
+      aliases: JSON.stringify([]),
+      airDate: "2026-04-01",
+      updatedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  db.insert(cstationCatalog)
+    .values({
+      source: SOURCE,
+      id: EXTRA_SOURCE_AID,
+      name: "追加测试番剧",
+      year: "2026",
+    })
+    .run();
+  db.insert(matchRetryState)
+    .values([
+      { animeId: ANIME_ID, source: SOURCE, retryCount: 1, retryAt: "2000-01-01 00:00:00", updatedAt: "2000-01-01 00:00:00" },
+      { animeId: EXTRA_ANIME_ID, source: SOURCE, retryCount: 1, retryAt: "2000-01-01 00:00:00", updatedAt: "2000-01-01 00:00:00" },
+    ])
+    .run();
+
+  try {
+    const stats = await retryPending({ mappingLimit: 1, episodeFetchLimit: 0, refreshEpisodes: false, sourceKeys: [SOURCE] });
+    const mappedRows = db.select().from(bangumiCstationMap).where(eq(bangumiCstationMap.source, SOURCE)).all();
+
+    assert.equal(stats.retried, 1);
+    assert.equal(stats.errors, 0);
+    assert.equal(stats.limited.mapping, true);
+    assert.equal(mappedRows.length, 1);
+  } finally {
+    db.delete(bangumiCstationMap).where(eq(bangumiCstationMap.animeId, EXTRA_ANIME_ID)).run();
+    db.delete(matchRetryState).where(eq(matchRetryState.animeId, EXTRA_ANIME_ID)).run();
+    db.delete(cstationCatalog)
+      .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, EXTRA_SOURCE_AID)))
+      .run();
+    db.delete(anime).where(eq(anime.id, EXTRA_ANIME_ID)).run();
+  }
+});
+
+test("ensureMappingForAnime checks occupied source id before hydrating candidate details", async () => {
+  seedRangeAnime();
+  db.update(cstationCatalog)
+    .set({ subname: null, detailFetchedAt: null })
+    .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
+    .run();
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: RANGE_ANIME_ID,
+      source: SOURCE,
+      cstationId: SOURCE_AID,
+      matchedBgName: "航海王 埃鲁巴夫篇",
+      matchedCsName: "测试番剧",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("unexpected network request");
+  };
+  try {
+    const result = await ensureMappingForAnime(ANIME_ID, { source: SOURCE });
+
+    assert.equal(result.matched, false);
+    assert.equal(result.reason, "source-already-mapped");
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ensureMappingForAnime does not terminally block retry for weak occupied candidates", async () => {
+  const weakAnimeId = EXTRA_ANIME_ID;
+  const weakSourceAid = EXTRA_SOURCE_AID;
+  db.insert(anime)
+    .values({
+      id: weakAnimeId,
+      name: "弱匹配番剧",
+      nameCn: "弱匹配番剧",
+      aliases: JSON.stringify([]),
+      airDate: "2026-04-01",
+      updatedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  db.insert(cstationCatalog)
+    .values({
+      source: SOURCE,
+      id: weakSourceAid,
+      name: "弱匹配动画",
+      subname: "弱匹配动画",
+      year: "2026",
+      detailFetchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: RANGE_ANIME_ID,
+      source: SOURCE,
+      cstationId: weakSourceAid,
+      matchedBgName: "航海王 埃鲁巴夫篇",
+      matchedCsName: "弱匹配动画",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const result = await ensureMappingForAnime(weakAnimeId, { source: SOURCE });
+  const retry = db.select().from(matchRetryState)
+    .where(and(eq(matchRetryState.animeId, weakAnimeId), eq(matchRetryState.source, SOURCE)))
+    .get();
+  const manual = db.select().from(manualMatchState)
+    .where(and(eq(manualMatchState.animeId, weakAnimeId), eq(manualMatchState.source, SOURCE)))
+    .get();
+
+  assert.equal(result.matched, false);
+  assert.equal(result.reason, "no-catalog-match");
+  assert.equal(retry.retryCount, 1);
+  assert.ok(retry.retryAt);
+  assert.equal(manual, undefined);
+});
+
+test("retryPending honors refreshEpisodes=false for already mapped retry rows", async () => {
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: ANIME_ID,
+      source: SOURCE,
+      cstationId: SOURCE_AID,
+      matchedBgName: "测试番剧",
+      matchedCsName: "测试番剧",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  db.insert(matchRetryState)
+    .values({ animeId: ANIME_ID, source: SOURCE, retryCount: 1, retryAt: "2000-01-01 00:00:00", updatedAt: "2000-01-01 00:00:00" })
+    .run();
+
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("unexpected episode refresh");
+  };
+  try {
+    const stats = await retryPending({ mappingLimit: 10, episodeFetchLimit: 0, refreshEpisodes: false, sourceKeys: [SOURCE] });
+
+    assert.equal(stats.retried, 1);
+    assert.equal(stats.refreshed, 0);
+    assert.equal(stats.errors, 0);
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("importMappedReview updates source id and episode range", async () => {
-  const NEW_SOURCE_AID = SOURCE_AID + 1;
   db.insert(cstationCatalog)
     .values({
       source: SOURCE,
@@ -742,6 +1097,66 @@ test("getAnimeDetail does not report ready for stale episodes from a previous so
   assert.equal(detail.data.channels.length, 0);
 });
 
+test("getPlayUrl ignores stale episodes from previous source ids", async () => {
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: ANIME_ID,
+      source: "ffzy",
+      cstationId: SOURCE_AID,
+      matchedBgName: "测试番剧",
+      matchedCsName: "测试番剧",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  db.insert(episodes)
+    .values([
+      {
+        animeId: ANIME_ID,
+        sourceName: "ffzy",
+        sourceAid: SOURCE_AID - 1,
+        epIndex: 1,
+        sourceEpIndex: 1,
+        epName: "旧来源第1集",
+        videoUrl: "https://example.invalid/stale-source.m3u8",
+        updatedAt: "2026-05-30 00:00:00",
+      },
+      {
+        animeId: ANIME_ID,
+        sourceName: "ffzy",
+        sourceAid: SOURCE_AID,
+        epIndex: 1,
+        sourceEpIndex: 1,
+        epName: "当前来源第1集",
+        videoUrl: "https://example.invalid/current-source.m3u8",
+        updatedAt: "2026-05-30 00:00:00",
+      },
+    ])
+    .run();
+
+  const result = await getPlayUrl(ANIME_ID, 1, 1);
+
+  assert.equal(result.videoURL, "https://example.invalid/current-source.m3u8");
+});
+
+test("getPlayUrl returns null when episodes exist without a current mapping", async () => {
+  db.insert(episodes)
+    .values({
+      animeId: ANIME_ID,
+      sourceName: "ffzy",
+      sourceAid: SOURCE_AID,
+      epIndex: 1,
+      sourceEpIndex: 1,
+      epName: "残留第1集",
+      videoUrl: "https://example.invalid/stale-without-map.m3u8",
+      updatedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const result = await getPlayUrl(ANIME_ID, 1, 1);
+
+  assert.equal(result, null);
+});
+
 test("episode fetch failures do not exhaust mapping retry state for existing mappings", async () => {
   db.insert(bangumiCstationMap)
     .values({
@@ -777,6 +1192,69 @@ test("episode fetch failures do not exhaust mapping retry state for existing map
   assert.equal(mappingRetry, undefined);
   assert.equal(fetchRetry.retryCount, 5);
   assert.equal(sourceStatus.status, "fetching");
+});
+
+test("getAnimeDetail ignores mappings and episodes from disabled sources", async () => {
+  db.update(cstationCatalog)
+    .set({ last: "2026-05-30 21:00:00" })
+    .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
+    .run();
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: ANIME_ID,
+      source: SOURCE,
+      cstationId: SOURCE_AID,
+      matchedBgName: "测试番剧",
+      matchedCsName: "测试番剧",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  db.insert(episodes)
+    .values({
+      animeId: ANIME_ID,
+      sourceName: SOURCE,
+      sourceAid: SOURCE_AID,
+      epIndex: 1,
+      sourceEpIndex: 1,
+      epName: "禁用源第1集",
+      videoUrl: "https://example.invalid/disabled-source.m3u8",
+      updatedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const detail = await getAnimeDetail(ANIME_ID);
+
+  assert.equal(detail.data.channels.length, 0);
+  assert.equal(detail.resourceSources.some((item) => item.source === SOURCE), false);
+});
+
+test("getPlayUrl ignores mappings from disabled sources", async () => {
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: ANIME_ID,
+      source: SOURCE,
+      cstationId: SOURCE_AID,
+      matchedBgName: "测试番剧",
+      matchedCsName: "测试番剧",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  db.insert(episodes)
+    .values({
+      animeId: ANIME_ID,
+      sourceName: SOURCE,
+      sourceAid: SOURCE_AID,
+      epIndex: 1,
+      sourceEpIndex: 1,
+      epName: "禁用源第1集",
+      videoUrl: "https://example.invalid/disabled-source.m3u8",
+      updatedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const result = await getPlayUrl(ANIME_ID, 1, 1);
+
+  assert.equal(result, null);
 });
 
 test("upsertAnime cleans dependent rows when a subject becomes non-anime", async () => {
@@ -841,6 +1319,28 @@ test("getAnimeDetail reports no_data when mapping retries are exhausted", async 
   assert.equal(ffzy.status, "no_data");
 });
 
+test("getAnimeDetail treats source_already_mapped as no_data without exposing internal notes", async () => {
+  db.insert(matchRetryState)
+    .values({ animeId: ANIME_ID, source: "ffzy", retryCount: 5, retryAt: null, updatedAt: "2026-05-30 00:00:00" })
+    .run();
+  db.insert(manualMatchState)
+    .values({
+      animeId: ANIME_ID,
+      source: "ffzy",
+      status: "source_already_mapped",
+      note: "source_aid 999 is already mapped by Bangumi ID 123",
+      updatedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const detail = await getAnimeDetail(ANIME_ID);
+  const ffzy = detail.resourceSources.find((item) => item.source === "ffzy");
+
+  assert.equal(detail.resourceStatus, "no_data");
+  assert.equal(ffzy.status, "no_data");
+  assert.equal(ffzy.note, "no mapping after retries");
+});
+
 test("getAnimeDetail reports wait_airing without treating it as matching", async () => {
   db.insert(manualMatchState)
     .values({ animeId: ANIME_ID, source: "ffzy", status: "wait_airing", note: "future broadcast", updatedAt: "2026-05-30 00:00:00" })
@@ -856,14 +1356,17 @@ test("getAnimeDetail reports wait_airing without treating it as matching", async
 
 test("getUpdates uses mapped cstation last timestamps instead of episode refresh time", async () => {
   const staleAnimeId = ANIME_ID + 1000;
-  db.update(cstationCatalog)
-    .set({ last: "2026-05-30 21:00:00" })
-    .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
+  db.insert(cstationCatalog)
+    .values({ source: "ffzy", id: SOURCE_AID, name: "测试番剧", last: "2026-05-30 21:00:00" })
+    .onConflictDoUpdate({
+      target: [cstationCatalog.source, cstationCatalog.id],
+      set: { last: "2026-05-30 21:00:00" },
+    })
     .run();
   db.insert(bangumiCstationMap)
     .values({
       animeId: ANIME_ID,
-      source: SOURCE,
+      source: "ffzy",
       cstationId: SOURCE_AID,
       matchedAt: "2026-05-30 00:00:00",
     })
@@ -871,7 +1374,7 @@ test("getUpdates uses mapped cstation last timestamps instead of episode refresh
   db.insert(episodes)
     .values({
       animeId: ANIME_ID,
-      sourceName: SOURCE,
+      sourceName: "ffzy",
       sourceAid: SOURCE_AID,
       epIndex: 9,
       sourceEpIndex: 9,
@@ -897,7 +1400,7 @@ test("getUpdates uses mapped cstation last timestamps instead of episode refresh
     .run();
   db.insert(cstationCatalog)
     .values({
-      source: SOURCE,
+      source: "ffzy",
       id: SOURCE_AID + 1000,
       name: "旧季度番",
       last: "2026-05-20 23:59:59",
@@ -906,7 +1409,7 @@ test("getUpdates uses mapped cstation last timestamps instead of episode refresh
   db.insert(bangumiCstationMap)
     .values({
       animeId: staleAnimeId,
-      source: SOURCE,
+      source: "ffzy",
       cstationId: SOURCE_AID + 1000,
       matchedAt: "2026-05-30 00:00:00",
     })
@@ -914,7 +1417,7 @@ test("getUpdates uses mapped cstation last timestamps instead of episode refresh
   db.insert(episodes)
     .values({
       animeId: staleAnimeId,
-      sourceName: SOURCE,
+      sourceName: "ffzy",
       sourceAid: SOURCE_AID + 1000,
       epIndex: 12,
       sourceEpIndex: 12,
@@ -933,72 +1436,49 @@ test("getUpdates uses mapped cstation last timestamps instead of episode refresh
     assert.ok(!ids.includes(staleAnimeId));
     assert.equal(current.updatedAt, "2026-05-30T13:00:00.000Z");
     assert.equal(current.latestEp, 9);
-    assert.equal(current.source, SOURCE);
+    assert.equal(current.source, "ffzy");
     assert.equal(current.sourceAid, SOURCE_AID);
   } finally {
     db.delete(episodes).where(eq(episodes.animeId, staleAnimeId)).run();
     db.delete(bangumiCstationMap).where(eq(bangumiCstationMap.animeId, staleAnimeId)).run();
-    db.delete(cstationCatalog).where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID + 1000))).run();
+    db.delete(cstationCatalog).where(and(eq(cstationCatalog.source, "ffzy"), eq(cstationCatalog.id, SOURCE_AID + 1000))).run();
     db.delete(anime).where(eq(anime.id, staleAnimeId)).run();
   }
 });
 
 test("getUpdates aggregates multiple mapped sources by newest catalog last", async () => {
-  const altSource = "alt_manual";
-  const altAid = SOURCE_AID + 2000;
-  db.update(cstationCatalog)
-    .set({ last: "2026-05-30 18:00:00" })
-    .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
-    .run();
   db.insert(cstationCatalog)
-    .values({ source: altSource, id: altAid, name: "测试番剧 Alt", last: "2026-05-30 22:00:00" })
+    .values({ source: "ffzy", id: SOURCE_AID, name: "测试番剧", last: "2026-05-30 18:00:00" })
+    .onConflictDoUpdate({
+      target: [cstationCatalog.source, cstationCatalog.id],
+      set: { last: "2026-05-30 18:00:00" },
+    })
     .run();
   db.insert(bangumiCstationMap)
-    .values([
-      { animeId: ANIME_ID, source: SOURCE, cstationId: SOURCE_AID, matchedAt: "2026-05-30 00:00:00" },
-      { animeId: ANIME_ID, source: altSource, cstationId: altAid, matchedAt: "2026-05-30 00:00:00" },
-    ])
+    .values({ animeId: ANIME_ID, source: "ffzy", cstationId: SOURCE_AID, matchedAt: "2026-05-30 00:00:00" })
     .run();
   db.insert(episodes)
-    .values([
-      {
-        animeId: ANIME_ID,
-        sourceName: SOURCE,
-        sourceAid: SOURCE_AID,
-        epIndex: 3,
-        sourceEpIndex: 3,
-        epName: "第3集",
-        videoUrl: "https://example.invalid/3.m3u8",
-        updatedAt: "2026-05-30 18:01:00",
-      },
-      {
-        animeId: ANIME_ID,
-        sourceName: altSource,
-        sourceAid: altAid,
-        epIndex: 4,
-        sourceEpIndex: 4,
-        epName: "第4集",
-        videoUrl: "https://example.invalid/4.m3u8",
-        updatedAt: "2026-05-30 22:01:00",
-      },
-    ])
+    .values({
+      animeId: ANIME_ID,
+      sourceName: "ffzy",
+      sourceAid: SOURCE_AID,
+      epIndex: 3,
+      sourceEpIndex: 3,
+      epName: "第3集",
+      videoUrl: "https://example.invalid/3.m3u8",
+      updatedAt: "2026-05-30 18:01:00",
+    })
     .run();
 
-  try {
-    const result = await getUpdates({ days: 7, limit: 20, today: "2026-05-30 23:59:59" });
-    const current = result.data.find((item) => item.id === ANIME_ID);
+  const result = await getUpdates({ days: 7, limit: 20, today: "2026-05-30 23:59:59" });
+  const current = result.data.find((item) => item.id === ANIME_ID);
 
-    assert.equal(current.source, altSource);
-    assert.equal(current.sourceAid, altAid);
-    assert.equal(current.updatedAt, "2026-05-30T14:00:00.000Z");
-    assert.equal(current.latestEp, 4);
-    assert.equal(current.sourceUpdates.length, 2);
-    assert.deepEqual(current.sourceUpdates.map((item) => item.source), [altSource, SOURCE]);
-  } finally {
-    db.delete(episodes).where(and(eq(episodes.animeId, ANIME_ID), eq(episodes.sourceName, altSource))).run();
-    db.delete(bangumiCstationMap).where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, altSource))).run();
-    db.delete(cstationCatalog).where(and(eq(cstationCatalog.source, altSource), eq(cstationCatalog.id, altAid))).run();
-  }
+  assert.equal(current.source, "ffzy");
+  assert.equal(current.sourceAid, SOURCE_AID);
+  assert.equal(current.updatedAt, "2026-05-30T10:00:00.000Z");
+  assert.equal(current.latestEp, 3);
+  assert.equal(current.sourceUpdates.length, 1);
+  assert.deepEqual(current.sourceUpdates.map((item) => item.source), ["ffzy"]);
 });
 
 test("getUpdates skips ranged mappings when the Bangumi episode slice did not change", async () => {
@@ -1041,6 +1521,38 @@ test("getUpdates skips ranged mappings when the Bangumi episode slice did not ch
 
   const result = await getUpdates({ days: 7, limit: 20, today: "2026-05-30 23:59:59" });
   const current = result.data.find((item) => item.id === RANGE_ANIME_ID);
+
+  assert.equal(current, undefined);
+});
+
+test("getUpdates ignores mappings from disabled sources", async () => {
+  db.update(cstationCatalog)
+    .set({ last: "2026-05-30 22:00:00" })
+    .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
+    .run();
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: ANIME_ID,
+      source: SOURCE,
+      cstationId: SOURCE_AID,
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  db.insert(episodes)
+    .values({
+      animeId: ANIME_ID,
+      sourceName: SOURCE,
+      sourceAid: SOURCE_AID,
+      epIndex: 3,
+      sourceEpIndex: 3,
+      epName: "禁用源第3集",
+      videoUrl: "https://example.invalid/disabled-source-3.m3u8",
+      updatedAt: "2026-05-30 22:01:00",
+    })
+    .run();
+
+  const result = await getUpdates({ days: 7, limit: 20, today: "2026-05-30 23:59:59" });
+  const current = result.data.find((item) => item.id === ANIME_ID);
 
   assert.equal(current, undefined);
 });
