@@ -186,14 +186,14 @@ test("analyzeUnmappedMappings exports unmapped rows from retry state", () => {
     .values({ animeId: ANIME_ID, source: SOURCE, retryCount: 5, retryAt: null, updatedAt: "2026-05-30 00:00:00" })
     .run();
 
-  const result = analyzeUnmappedMappings({ source: SOURCE, limit: 1 });
+  const result = analyzeUnmappedMappings({ source: SOURCE });
   const row = result.rows.find((item) => item.anime_id === ANIME_ID && item.source === SOURCE);
 
   assert.ok(row);
   assert.equal(row.unmatched_reason, "max_retries");
   assert.equal(row.decision, "");
-  assert.equal(row.source_aid, SOURCE_AID);
-  assert.equal(row.suggestion_1_source_aid, SOURCE_AID);
+  assert.equal(row.source_aid, "");
+  assert.equal("suggestion_1_source_aid" in row, false);
 });
 
 test("analyzeUnmappedMappings does not export rows that already have a mapping", () => {
@@ -208,7 +208,7 @@ test("analyzeUnmappedMappings does not export rows that already have a mapping",
     })
     .run();
 
-  const result = analyzeUnmappedMappings({ source: SOURCE, limit: 1 });
+  const result = analyzeUnmappedMappings({ source: SOURCE });
   const row = result.rows.find((item) => item.anime_id === ANIME_ID && item.source === SOURCE);
 
   assert.equal(row, undefined);
@@ -216,19 +216,20 @@ test("analyzeUnmappedMappings does not export rows that already have a mapping",
 
 test("exportManualReview puts human decision columns first", async () => {
   await withTempPath(async (filePath) => {
-    await exportManualReview(filePath, { source: SOURCE, limit: 1 });
+    await exportManualReview(filePath, { source: SOURCE });
     const header = (await readFile(filePath, "utf8")).split("\n")[0].split(",");
 
-    assert.deepEqual(header.slice(0, 7), [
+    assert.deepEqual(header.slice(0, 6), [
       "anime_id",
       "bg_title",
       "source",
-      "match_score",
       "unmatched_reason",
       "decision",
       "source_aid",
     ]);
     assert.equal(header.includes("current_decision"), false);
+    assert.equal(header.includes("match_score"), false);
+    assert.equal(header.some((column) => column.startsWith("suggestion_")), false);
   });
 });
 
@@ -350,8 +351,8 @@ test("importManualReview applies match decisions directly and clears retry state
     .run();
 
   const csv = [
-    "source,anime_id,decision,source_aid,match_score,reviewer_note",
-    `${SOURCE},${ANIME_ID},match,${SOURCE_AID},0.92,confirmed`,
+    "source,anime_id,decision,source_aid,reviewer_note",
+    `${SOURCE},${ANIME_ID},match,${SOURCE_AID},confirmed`,
   ].join("\n");
 
   const stats = await withCsv(csv, (filePath) => importManualReview(filePath, { refreshEpisodes: false }));
@@ -362,7 +363,7 @@ test("importManualReview applies match decisions directly and clears retry state
   assert.equal(stats.updated, 1);
   assert.equal(stats.matched, 1);
   assert.equal(mapping.cstationId, SOURCE_AID);
-  assert.equal(mapping.score, 0.92);
+  assert.equal(mapping.score, null);
   assert.equal(mapping.matchedBgName, "测试番剧");
   assert.equal(mapping.matchedCsName, "测试番剧");
   const retry = db.select().from(matchRetryState)
@@ -431,7 +432,7 @@ test("analyzeUnmappedMappings keeps wait_airing rows exported", async () => {
     `${SOURCE},${ANIME_ID},wait_airing,,future broadcast`,
   ].join("\n"), (filePath) => importManualReview(filePath, { refreshEpisodes: false }));
 
-  const result = analyzeUnmappedMappings({ source: SOURCE, limit: 1 });
+  const result = analyzeUnmappedMappings({ source: SOURCE });
   const row = result.rows.find((item) => item.anime_id === ANIME_ID && item.source === SOURCE);
 
   assert.ok(row);
@@ -440,7 +441,7 @@ test("analyzeUnmappedMappings keeps wait_airing rows exported", async () => {
   assert.equal(row.reviewer_note, "future broadcast");
 });
 
-test("analyzeUnmappedMappings keeps wait_airing reason without suggestions", async () => {
+test("analyzeUnmappedMappings keeps wait_airing reason without scoring", async () => {
   db.delete(cstationCatalog)
     .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
     .run();
@@ -450,15 +451,15 @@ test("analyzeUnmappedMappings keeps wait_airing reason without suggestions", asy
     `${SOURCE},${ANIME_ID},wait_airing,,future broadcast`,
   ].join("\n"), (filePath) => importManualReview(filePath, { refreshEpisodes: false }));
 
-  const result = analyzeUnmappedMappings({ source: SOURCE, limit: 1 });
+  const result = analyzeUnmappedMappings({ source: SOURCE });
   const row = result.rows.find((item) => item.anime_id === ANIME_ID && item.source === SOURCE);
 
   assert.ok(row);
   assert.equal(row.unmatched_reason, "wait_airing");
-  assert.equal(row.suggestion_count, 0);
+  assert.equal("suggestion_count" in row, false);
 });
 
-test("analyzeUnmappedMappings keeps no_resource rows exported without suggestions", async () => {
+test("analyzeUnmappedMappings keeps no_resource rows exported without scoring", async () => {
   db.delete(cstationCatalog)
     .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
     .run();
@@ -468,12 +469,12 @@ test("analyzeUnmappedMappings keeps no_resource rows exported without suggestion
     `${SOURCE},${ANIME_ID},no_resource,,confirmed unavailable`,
   ].join("\n"), (filePath) => importManualReview(filePath, { refreshEpisodes: false }));
 
-  const result = analyzeUnmappedMappings({ source: SOURCE, limit: 1 });
+  const result = analyzeUnmappedMappings({ source: SOURCE });
   const row = result.rows.find((item) => item.anime_id === ANIME_ID && item.source === SOURCE);
 
   assert.ok(row);
   assert.equal(row.unmatched_reason, "no_resource");
-  assert.equal(row.suggestion_count, 0);
+  assert.equal("suggestion_count" in row, false);
   assert.equal(row.decision, "");
   assert.equal(row.reviewer_note, "confirmed unavailable");
 });
@@ -499,7 +500,7 @@ test("analyzeUnmappedMappings keeps source_already_mapped reason without suggest
     })
     .run();
 
-  const result = analyzeUnmappedMappings({ source: SOURCE, limit: 1, minScore: 0.99 });
+  const result = analyzeUnmappedMappings({ source: SOURCE });
   const row = result.rows.find((item) => item.anime_id === EXTRA_ANIME_ID);
 
   assert.ok(row);
@@ -514,8 +515,8 @@ test("match decisions clear previous wait_airing state", async () => {
   ].join("\n"), (filePath) => importManualReview(filePath, { refreshEpisodes: false }));
 
   await withCsv([
-    "source,anime_id,decision,source_aid,match_score,reviewer_note",
-    `${SOURCE},${ANIME_ID},match,${SOURCE_AID},0.95,now available`,
+    "source,anime_id,decision,source_aid,reviewer_note",
+    `${SOURCE},${ANIME_ID},match,${SOURCE_AID},now available`,
   ].join("\n"), (filePath) => importManualReview(filePath, { refreshEpisodes: false }));
 
   assert.equal(db.select().from(manualMatchState).where(eq(manualMatchState.animeId, ANIME_ID)).get(), undefined);
@@ -524,9 +525,9 @@ test("match decisions clear previous wait_airing state", async () => {
 
 test("importManualReview validates wait_airing anime ids before applying any decision", async () => {
   const csv = [
-    "source,anime_id,decision,source_aid,match_score,reviewer_note",
-    `${SOURCE},${ANIME_ID},match,${SOURCE_AID},0.95,valid row`,
-    `${SOURCE},999999999,wait_airing,,,invalid row`,
+    "source,anime_id,decision,source_aid,reviewer_note",
+    `${SOURCE},${ANIME_ID},match,${SOURCE_AID},valid row`,
+    `${SOURCE},999999999,wait_airing,,invalid row`,
   ].join("\n");
 
   await assert.rejects(
@@ -540,8 +541,8 @@ test("importManualReview validates wait_airing anime ids before applying any dec
 
 test("importManualReview stores episode range mapping fields", async () => {
   const csv = [
-    "source,anime_id,decision,source_aid,match_score,source_ep_start,source_ep_end,display_ep_offset,reviewer_note",
-    `${SOURCE},${ANIME_ID},match,${SOURCE_AID},0.95,1156,,1155,split sequel`,
+    "source,anime_id,decision,source_aid,source_ep_start,source_ep_end,display_ep_offset,reviewer_note",
+    `${SOURCE},${ANIME_ID},match,${SOURCE_AID},1156,,1155,split sequel`,
   ].join("\n");
 
   await withCsv(csv, (filePath) => importManualReview(filePath, { refreshEpisodes: false }));
@@ -926,8 +927,8 @@ test("importMappedReview updates source id and episode range", async () => {
     .run();
 
   const csv = [
-    "source,anime_id,decision,source_aid,match_score,source_ep_start,source_ep_end,display_ep_offset,reviewer_note",
-    `${SOURCE},${ANIME_ID},update,${NEW_SOURCE_AID},0.88,12,24,11,range update`,
+    "source,anime_id,decision,source_aid,source_ep_start,source_ep_end,display_ep_offset,reviewer_note",
+    `${SOURCE},${ANIME_ID},update,${NEW_SOURCE_AID},12,24,11,range update`,
   ].join("\n");
 
   const stats = await withCsv(csv, (filePath) => importMappedReview(filePath, { refreshEpisodes: false }));
@@ -944,6 +945,7 @@ test("importMappedReview updates source id and episode range", async () => {
   assert.equal(mapping.sourceEpStart, 12);
   assert.equal(mapping.sourceEpEnd, 24);
   assert.equal(mapping.displayEpOffset, 11);
+  assert.equal(mapping.score, null);
   assert.equal(mapping.matchedCsName, "测试番剧 新来源");
   assert.equal(staleEpisodes.length, 0);
 

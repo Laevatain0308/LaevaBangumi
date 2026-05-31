@@ -44,7 +44,6 @@ const REVIEW_BASE_COLUMNS = [
   "anime_id",
   "bg_title",
   "source",
-  "match_score",
   "unmatched_reason",
   "decision",
   "source_aid",
@@ -53,9 +52,6 @@ const REVIEW_BASE_COLUMNS = [
   "display_ep_offset",
   "bg_aliases",
   "air_date",
-  "match_confidence",
-  "suggestion_count",
-  "suggestion_scope",
   "reviewer_note",
 ];
 
@@ -160,32 +156,10 @@ function filterCatalogByYear(catalog, year) {
   });
 }
 
-function normalizedReviewLimit(limit) {
-  const parsed = parseInt(limit, 10);
-  if (Number.isNaN(parsed) || parsed <= 0) return 5;
-  return Math.min(parsed, 20);
-}
-
 function normalizedRowLimit(limit) {
   if (limit == null || limit === "") return null;
   const parsed = parseInt(limit, 10);
   return Number.isNaN(parsed) || parsed <= 0 ? null : parsed;
-}
-
-function reviewColumns(limit) {
-  const columns = [...REVIEW_BASE_COLUMNS];
-  for (let i = 1; i <= limit; i++) {
-    columns.push(
-      `suggestion_${i}_source_aid`,
-      `suggestion_${i}_score`,
-      `suggestion_${i}_title`,
-      `suggestion_${i}_subname`,
-      `suggestion_${i}_year`,
-      `suggestion_${i}_matched_bg_name`,
-      `suggestion_${i}_matched_source_name`
-    );
-  }
-  return columns;
 }
 
 function unmatchedReasonForRetry(retry) {
@@ -202,92 +176,45 @@ function unmatchedReasonForState(manual, retry) {
   return unmatchedReasonForRetry(retry);
 }
 
-function rankReviewSuggestions(a, catalog, { limit, minScore, relaxedYearFallback }) {
-  const names = animeTitles(a);
-  const year = bangumi.extractYear(a.airDate);
-  const filteredCatalog = filterCatalogByYear(catalog, year);
-  let suggestions = rankMatches(names, year, filteredCatalog, { limit, minScore });
-  let scope = year ? "year-filtered" : "all-years";
-
-  if (suggestions.length === 0 && relaxedYearFallback && year) {
-    suggestions = rankMatches(names, null, catalog, { limit, minScore });
-    scope = suggestions.length > 0 ? "relaxed-year" : "none";
-  } else if (suggestions.length === 0) {
-    scope = "none";
-  }
-
-  return { suggestions, scope };
-}
-
-function reviewRowForAnime(a, source, unmatchedReason, ranked, limit, manualState = null) {
-  const top = ranked.suggestions[0] || null;
-  const keepReasonWithoutSuggestion = MANUAL_BLOCKED_STATUSES.has(unmatchedReason);
-  const row = {
+function reviewRowForAnime(a, source, unmatchedReason, manualState = null) {
+  return {
     anime_id: a.id,
     bg_title: a.nameCn || a.name,
-    match_score: top ? Number(top.score).toFixed(4) : "",
-    unmatched_reason: top || keepReasonWithoutSuggestion ? unmatchedReason : "no_candidate",
+    source,
+    unmatched_reason: unmatchedReason,
     decision: "",
-    source_aid: top?.video?.id || "",
+    source_aid: "",
     source_ep_start: "",
     source_ep_end: "",
     display_ep_offset: "",
-    source,
     bg_aliases: JSON.stringify(animeTitles(a)),
     air_date: a.airDate || "",
-    match_confidence: top?.confidence || "",
-    suggestion_count: ranked.suggestions.length,
-    suggestion_scope: ranked.scope,
     reviewer_note: manualState?.note || "",
   };
-
-  for (let i = 0; i < limit; i++) {
-    const suggestion = ranked.suggestions[i] || null;
-    const rank = i + 1;
-    row[`suggestion_${rank}_source_aid`] = suggestion?.video?.id || "";
-    row[`suggestion_${rank}_score`] = suggestion ? Number(suggestion.score).toFixed(4) : "";
-    row[`suggestion_${rank}_title`] = suggestion?.video?.name || "";
-    row[`suggestion_${rank}_subname`] = suggestion?.video?.subname || "";
-    row[`suggestion_${rank}_year`] = suggestion?.video?.year || "";
-    row[`suggestion_${rank}_matched_bg_name`] = suggestion?.matchedName || "";
-    row[`suggestion_${rank}_matched_source_name`] = suggestion?.matchedSourceName || "";
-  }
-
-  return row;
 }
 
 export function analyzeUnmappedMappings({
   source = null,
-  limit = 5,
-  minScore = 0.25,
-  relaxedYearFallback = true,
 } = {}) {
-  const normalizedLimit = normalizedReviewLimit(limit);
   const sources = sourcesForReview(source);
   const rows = [];
   const stats = {
     animeSources: 0,
     undecided: 0,
-    withSuggestions: 0,
-    withoutSuggestions: 0,
   };
 
   for (const sourceKey of sources) {
     const mapped = mappedAnimeIdsForSource(sourceKey);
     const retryByAnimeId = retryStateByAnimeIdForSource(sourceKey);
     const manualByAnimeId = manualBlockedAutoMatchStateByAnimeIdForSource(sourceKey);
-    const catalog = db.select().from(cstationCatalog).where(eq(cstationCatalog.source, sourceKey)).all();
     const unmapped = allAnimeRows().filter((a) => !mapped.has(a.id));
 
     for (const a of unmapped) {
-      const ranked = rankReviewSuggestions(a, catalog, { limit: normalizedLimit, minScore, relaxedYearFallback });
       const manual = manualByAnimeId.get(a.id);
       const unmatchedReason = unmatchedReasonForState(manual, retryByAnimeId.get(a.id));
       stats.animeSources++;
       stats.undecided++;
-      if (ranked.suggestions.length > 0) stats.withSuggestions++;
-      else stats.withoutSuggestions++;
-      rows.push(reviewRowForAnime(a, sourceKey, unmatchedReason, ranked, normalizedLimit, manual));
+      rows.push(reviewRowForAnime(a, sourceKey, unmatchedReason, manual));
     }
   }
 
@@ -296,9 +223,8 @@ export function analyzeUnmappedMappings({
 
 export async function exportManualReview(filePath = DEFAULT_REVIEW_PATH, options = {}) {
   const result = analyzeUnmappedMappings(options);
-  const limit = normalizedReviewLimit(options.limit);
   await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(filePath, toCsv(result.rows, reviewColumns(limit)), "utf8");
+  await writeFile(filePath, toCsv(result.rows, REVIEW_BASE_COLUMNS), "utf8");
   const stats = { filePath, rows: result.rows.length, ...result.stats };
   log("manual-match", "manual review exported", stats);
   return stats;
@@ -618,11 +544,6 @@ function findCatalogItem(source, sourceAid) {
     .get();
 }
 
-function scoreFromReviewRow(row) {
-  const score = Number(row.match_score || row.suggestion_1_score || row.score || row.candidate_score || "");
-  return Number.isFinite(score) ? score : null;
-}
-
 function clearRetryState(animeId, source) {
   db.insert(matchRetryState)
     .values({ animeId, source, retryCount: 0, retryAt: null, updatedAt: now() })
@@ -689,7 +610,7 @@ function deleteMappingArtifacts(animeId, source) {
   clearEpisodeFetchRetryState(animeId, source);
 }
 
-function applyManualMapping({ row, animeRow, source, sourceItem, sourceAid, episodeRange }) {
+function applyManualMapping({ animeRow, source, sourceItem, sourceAid, episodeRange }) {
   deleteMappingArtifacts(animeRow.id, source);
 
   db.insert(bangumiCstationMap)
@@ -700,7 +621,7 @@ function applyManualMapping({ row, animeRow, source, sourceItem, sourceAid, epis
       sourceEpStart: episodeRange.sourceEpStart,
       sourceEpEnd: episodeRange.sourceEpEnd,
       displayEpOffset: episodeRange.displayEpOffset,
-      score: scoreFromReviewRow(row),
+      score: null,
       matchedBgName: animeRow.nameCn || animeRow.name,
       matchedCsName: sourceItem.name,
       matchedAt: now(),
@@ -712,7 +633,7 @@ function applyManualMapping({ row, animeRow, source, sourceItem, sourceAid, epis
         sourceEpStart: episodeRange.sourceEpStart,
         sourceEpEnd: episodeRange.sourceEpEnd,
         displayEpOffset: episodeRange.displayEpOffset,
-        score: scoreFromReviewRow(row),
+        score: null,
         matchedBgName: animeRow.nameCn || animeRow.name,
         matchedCsName: sourceItem.name,
         matchedAt: now(),
@@ -789,7 +710,7 @@ export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refre
     }
     const episodeRange = parseEpisodeRange(row, line, errors);
 
-    actions.push({ type: "match", row, animeRow, source, sourceItem, sourceAid, episodeRange });
+    actions.push({ type: "match", animeRow, source, sourceItem, sourceAid, episodeRange });
   }
 
   if (errors.length > 0) throw new Error(`manual review import failed:\n${errors.join("\n")}`);
@@ -924,7 +845,7 @@ export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, 
       continue;
     }
     const episodeRange = parseEpisodeRange(row, line, errors);
-    actions.push({ type: "update", row, animeRow, source, sourceItem, sourceAid, episodeRange });
+    actions.push({ type: "update", animeRow, source, sourceItem, sourceAid, episodeRange });
   }
 
   if (errors.length > 0) throw new Error(`mapped review import failed:\n${errors.join("\n")}`);
