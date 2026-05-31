@@ -4,13 +4,47 @@ import { getDispatcher, getProxyStatus } from "../lib/proxy.js";
 const BG = "https://api.bgm.tv";
 const TIMEOUT = 30000;
 const UA = "laevatain/aslan (https://github.com/Laevatain0308/aslan)";
+const DEFAULT_RETRY_DELAYS_MS = [500, 1500];
+const RETRYABLE_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
 
-async function fetchJson(url, opts = {}) {
+function sleep(ms) {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function describeFetchError(err) {
+  const cause = err.cause;
+  if (cause) return `${cause.code || cause.name || "cause"}: ${cause.message || String(cause)}`;
+  return err.message;
+}
+
+function isRetryableFetchError(err) {
+  if (err?.name === "AbortError") return true;
+  const code = err?.cause?.code || err?.code;
+  if (code && RETRYABLE_ERROR_CODES.has(code)) return true;
+  const causeName = err?.cause?.name;
+  return causeName === "ConnectTimeoutError" || causeName === "SocketError";
+}
+
+export async function fetchJson(url, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? TIMEOUT;
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const { headers: extraHeaders, timeoutMs: _timeoutMs, ...restOpts } = opts;
+  const retryDelaysMs = opts.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const { headers: extraHeaders, timeoutMs: _timeoutMs, retryDelaysMs: _retryDelaysMs, fetchImpl: _fetchImpl, ...restOpts } = opts;
+
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
     const dispatcher = getDispatcher();
     const fetchOpts = {
       ...restOpts,
@@ -20,19 +54,22 @@ async function fetchJson(url, opts = {}) {
     if (dispatcher) fetchOpts.dispatcher = dispatcher;
     let res;
     try {
-      res = await fetch(url, fetchOpts);
-    } catch (err) {
-      const proxy = getProxyStatus();
-      const cause = err.cause;
-      const detail = cause
-        ? `${cause.code || cause.name || "cause"}: ${cause.message || String(cause)}`
-        : err.message;
-      throw new Error(`Bangumi fetch failed (${detail}; proxy=${proxy.enabled ? proxy.url : "disabled"})`, { cause: err });
+      try {
+        res = await fetchImpl(url, fetchOpts);
+      } catch (err) {
+        if (isRetryableFetchError(err) && attempt < retryDelaysMs.length) {
+          await sleep(retryDelaysMs[attempt]);
+          continue;
+        }
+        const proxy = getProxyStatus();
+        const detail = describeFetchError(err);
+        throw new Error(`Bangumi fetch failed (${detail}; proxy=${proxy.enabled ? proxy.url : "disabled"}; after ${attempt + 1} attempts)`, { cause: err });
+      }
+      if (!res.ok) throw new Error(`Bangumi HTTP ${res.status}: ${res.statusText}`);
+      return res.json();
+    } finally {
+      clearTimeout(t);
     }
-    if (!res.ok) throw new Error(`Bangumi HTTP ${res.status}: ${res.statusText}`);
-    return res.json();
-  } finally {
-    clearTimeout(t);
   }
 }
 
