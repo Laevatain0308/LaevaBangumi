@@ -10,7 +10,7 @@ importMappedReview(input, { refreshEpisodes })
   .then((stats) => {
     console.log(`mapped review imported: ${stats.filePath} (${stats.updated}/${stats.rows} rows)`);
     console.log(
-      `matched=${stats.matched} deleted=${stats.deleted} wait_airing=${stats.waitAiring} skipped=${stats.skipped} refreshed=${stats.refreshed}`
+      `matched=${stats.matched} deleted=${stats.deleted} wait_airing=${stats.waitAiring} no_resource=${stats.noResource} skipped=${stats.skipped} refreshed=${stats.refreshed}`
     );
   })
   .catch((err) => {

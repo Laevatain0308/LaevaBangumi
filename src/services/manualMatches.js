@@ -14,6 +14,7 @@ export const DEFAULT_REVIEW_PATH = "data/manual/manual_review.csv";
 export const DEFAULT_MAPPED_REVIEW_PATH = "data/manual/mapped_review.csv";
 
 const MAX_RETRIES = 5;
+const MANUAL_BLOCKED_STATUSES = new Set(["wait_airing", "no_resource", "source_already_mapped"]);
 
 const ANALYSIS_COLUMNS = [
   "source",
@@ -146,7 +147,7 @@ function manualBlockedAutoMatchStateByAnimeIdForSource(source) {
       .from(manualMatchState)
       .where(eq(manualMatchState.source, source))
       .all()
-      .filter((row) => ["wait_airing", "source_already_mapped"].includes(row.status))
+      .filter((row) => MANUAL_BLOCKED_STATUSES.has(row.status))
       .map((row) => [row.animeId, row])
   );
 }
@@ -196,6 +197,7 @@ function unmatchedReasonForRetry(retry) {
 
 function unmatchedReasonForState(manual, retry) {
   if (manual?.status === "wait_airing") return "wait_airing";
+  if (manual?.status === "no_resource") return "no_resource";
   if (manual?.status === "source_already_mapped") return "source_already_mapped";
   return unmatchedReasonForRetry(retry);
 }
@@ -219,7 +221,7 @@ function rankReviewSuggestions(a, catalog, { limit, minScore, relaxedYearFallbac
 
 function reviewRowForAnime(a, source, unmatchedReason, ranked, limit, manualState = null) {
   const top = ranked.suggestions[0] || null;
-  const keepReasonWithoutSuggestion = ["wait_airing", "source_already_mapped"].includes(unmatchedReason);
+  const keepReasonWithoutSuggestion = MANUAL_BLOCKED_STATUSES.has(unmatchedReason);
   const row = {
     anime_id: a.id,
     bg_title: a.nameCn || a.name,
@@ -595,6 +597,7 @@ function normalizeDecision(decision) {
   if (!value) return "";
   if (["match", "matched", "yes", "y", "true", "confirmed", "confirm", "accepted", "有匹配", "匹配", "确认"].includes(value)) return "match";
   if (["wait_airing", "wait", "waiting", "future", "待播出", "等待播出", "未播出"].includes(value)) return "wait_airing";
+  if (["no_resource", "no_match", "none", "missing", "unavailable", "无资源", "无匹配", "没有资源", "无"].includes(value)) return "no_resource";
   return "invalid";
 }
 
@@ -604,6 +607,7 @@ function normalizeMappedDecision(decision) {
   if (["match", "matched", "update", "updated", "change", "modify", "yes", "y", "true", "confirmed", "confirm", "accepted", "有匹配", "匹配", "确认", "更新"].includes(value)) return "update";
   if (["delete", "remove", "unlink", "unmap", "删除", "移除", "取消映射"].includes(value)) return "delete";
   if (["wait_airing", "wait", "waiting", "future", "待播出", "等待播出", "未播出"].includes(value)) return "wait_airing";
+  if (["no_resource", "no_match", "none", "missing", "unavailable", "无资源", "无匹配", "没有资源", "无"].includes(value)) return "no_resource";
   return "invalid";
 }
 
@@ -663,6 +667,18 @@ function markWaitAiring(animeId, source, note) {
   clearEpisodeFetchRetryState(animeId, source);
 }
 
+function markNoResource(animeId, source, note) {
+  db.insert(manualMatchState)
+    .values({ animeId, source, status: "no_resource", note, updatedAt: now() })
+    .onConflictDoUpdate({
+      target: [manualMatchState.animeId, manualMatchState.source],
+      set: { status: "no_resource", note, updatedAt: now() },
+    })
+    .run();
+  blockAutoRetry(animeId, source);
+  clearEpisodeFetchRetryState(animeId, source);
+}
+
 function deleteMappingArtifacts(animeId, source) {
   db.delete(episodes)
     .where(and(eq(episodes.animeId, animeId), eq(episodes.sourceName, source)))
@@ -719,7 +735,7 @@ function existingMapping(animeId, source) {
 export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refreshEpisodes = true } = {}) {
   const raw = await readFile(filePath, "utf8");
   const rows = parseCsv(raw);
-  const stats = { filePath, rows: rows.length, updated: 0, matched: 0, waitAiring: 0, refreshed: 0, skipped: 0 };
+  const stats = { filePath, rows: rows.length, updated: 0, matched: 0, waitAiring: 0, noResource: 0, refreshed: 0, skipped: 0 };
   const errors = [];
   const actions = [];
 
@@ -735,7 +751,7 @@ export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refre
     const source = String(row.source || "").trim();
     const note = row.reviewer_note || null;
     if (decision === "invalid") {
-      errors.push(`line ${line}: unsupported decision "${row.decision}". Leave it blank, use match, or use wait_airing.`);
+      errors.push(`line ${line}: unsupported decision "${row.decision}". Leave it blank, use match, wait_airing, or no_resource.`);
       continue;
     }
     if (!animeId) {
@@ -754,6 +770,10 @@ export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refre
 
     if (decision === "wait_airing") {
       actions.push({ type: "wait_airing", animeId, source, note });
+      continue;
+    }
+    if (decision === "no_resource") {
+      actions.push({ type: "no_resource", animeId, source, note });
       continue;
     }
 
@@ -783,6 +803,13 @@ export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refre
         continue;
       }
 
+      if (action.type === "no_resource") {
+        markNoResource(action.animeId, action.source, action.note);
+        stats.updated++;
+        stats.noResource++;
+        continue;
+      }
+
       if (action.type === "match") {
         applyManualMapping(action);
         stats.updated++;
@@ -795,6 +822,10 @@ export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refre
 
   for (const action of actions) {
     if (action.type === "wait_airing") {
+      continue;
+    }
+
+    if (action.type === "no_resource") {
       continue;
     }
 
@@ -821,10 +852,15 @@ function applyMappedWaitAiring(animeId, source, note) {
   markWaitAiring(animeId, source, note);
 }
 
+function applyMappedNoResource(animeId, source, note) {
+  deleteMappingArtifacts(animeId, source);
+  markNoResource(animeId, source, note);
+}
+
 export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, { refreshEpisodes = true } = {}) {
   const raw = await readFile(filePath, "utf8");
   const rows = parseCsv(raw);
-  const stats = { filePath, rows: rows.length, updated: 0, matched: 0, deleted: 0, waitAiring: 0, refreshed: 0, skipped: 0 };
+  const stats = { filePath, rows: rows.length, updated: 0, matched: 0, deleted: 0, waitAiring: 0, noResource: 0, refreshed: 0, skipped: 0 };
   const errors = [];
   const actions = [];
 
@@ -841,7 +877,7 @@ export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, 
     const source = String(row.source || "").trim();
     const note = row.reviewer_note || null;
     if (decision === "invalid") {
-      errors.push(`line ${line}: unsupported decision "${row.decision}". Leave it blank, use update, delete, or wait_airing.`);
+      errors.push(`line ${line}: unsupported decision "${row.decision}". Leave it blank, use update, delete, wait_airing, or no_resource.`);
       continue;
     }
     if (!animeId) {
@@ -870,6 +906,10 @@ export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, 
     }
     if (decision === "wait_airing") {
       actions.push({ type: "wait_airing", animeId, source, note });
+      continue;
+    }
+    if (decision === "no_resource") {
+      actions.push({ type: "no_resource", animeId, source, note });
       continue;
     }
 
@@ -905,6 +945,13 @@ export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, 
         continue;
       }
 
+      if (action.type === "no_resource") {
+        applyMappedNoResource(action.animeId, action.source, action.note);
+        stats.updated++;
+        stats.noResource++;
+        continue;
+      }
+
       if (action.type === "update") {
         applyManualMapping(action);
         stats.updated++;
@@ -921,6 +968,10 @@ export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, 
     }
 
     if (action.type === "wait_airing") {
+      continue;
+    }
+
+    if (action.type === "no_resource") {
       continue;
     }
 

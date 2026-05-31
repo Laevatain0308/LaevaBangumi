@@ -317,16 +317,30 @@ test("importManualReview leaves blank decisions unchanged", async () => {
   assert.equal(db.select().from(bangumiCstationMap).where(eq(bangumiCstationMap.animeId, ANIME_ID)).get(), undefined);
 });
 
-test("importManualReview rejects no_match decisions because blank means unmapped", async () => {
+test("importManualReview records no_resource and blocks retry", async () => {
+  db.insert(matchRetryState)
+    .values({ animeId: ANIME_ID, source: SOURCE, retryCount: 1, retryAt: "2026-05-30 00:00:00", updatedAt: "2026-05-30 00:00:00" })
+    .run();
+
   const csv = [
     "source,anime_id,decision,source_aid,reviewer_note",
     `${SOURCE},${ANIME_ID},no_match,,no resource on source`,
   ].join("\n");
 
-  await assert.rejects(
-    () => withCsv(csv, (filePath) => importManualReview(filePath, { refreshEpisodes: false })),
-    /unsupported decision/
-  );
+  const stats = await withCsv(csv, (filePath) => importManualReview(filePath, { refreshEpisodes: false }));
+  const manual = db.select().from(manualMatchState)
+    .where(and(eq(manualMatchState.animeId, ANIME_ID), eq(manualMatchState.source, SOURCE)))
+    .get();
+  const retry = db.select().from(matchRetryState)
+    .where(and(eq(matchRetryState.animeId, ANIME_ID), eq(matchRetryState.source, SOURCE)))
+    .get();
+
+  assert.equal(stats.updated, 1);
+  assert.equal(stats.noResource, 1);
+  assert.equal(manual.status, "no_resource");
+  assert.equal(manual.note, "no resource on source");
+  assert.equal(retry.retryCount, 5);
+  assert.equal(retry.retryAt, null);
   assert.equal(db.select().from(bangumiCstationMap).where(eq(bangumiCstationMap.animeId, ANIME_ID)).get(), undefined);
 });
 
@@ -442,6 +456,26 @@ test("analyzeUnmappedMappings keeps wait_airing reason without suggestions", asy
   assert.ok(row);
   assert.equal(row.unmatched_reason, "wait_airing");
   assert.equal(row.suggestion_count, 0);
+});
+
+test("analyzeUnmappedMappings keeps no_resource rows exported without suggestions", async () => {
+  db.delete(cstationCatalog)
+    .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
+    .run();
+
+  await withCsv([
+    "source,anime_id,decision,source_aid,reviewer_note",
+    `${SOURCE},${ANIME_ID},no_resource,,confirmed unavailable`,
+  ].join("\n"), (filePath) => importManualReview(filePath, { refreshEpisodes: false }));
+
+  const result = analyzeUnmappedMappings({ source: SOURCE, limit: 1 });
+  const row = result.rows.find((item) => item.anime_id === ANIME_ID && item.source === SOURCE);
+
+  assert.ok(row);
+  assert.equal(row.unmatched_reason, "no_resource");
+  assert.equal(row.suggestion_count, 0);
+  assert.equal(row.decision, "");
+  assert.equal(row.reviewer_note, "confirmed unavailable");
 });
 
 test("analyzeUnmappedMappings keeps source_already_mapped reason without suggestions", () => {
@@ -622,7 +656,21 @@ test("retryPending skips source ids blocked for manual review", async () => {
   assert.equal(stats.retried, 0);
 });
 
-test("batchMatch rechecks source ids blocked by a previous occupied mapping", async () => {
+test("retryPending skips manually confirmed no_resource rows", async () => {
+  db.insert(matchRetryState)
+    .values({ animeId: ANIME_ID, source: SOURCE, retryCount: 1, retryAt: "2000-01-01 00:00:00", updatedAt: "2026-05-30 00:00:00" })
+    .run();
+  db.insert(manualMatchState)
+    .values({ animeId: ANIME_ID, source: SOURCE, status: "no_resource", note: "confirmed unavailable", updatedAt: "2026-05-30 00:00:00" })
+    .run();
+
+  const stats = await retryPending({ mappingLimit: 10, episodeFetchLimit: 0, refreshEpisodes: false, sourceKeys: [SOURCE] });
+
+  assert.equal(stats.pending.mapping, 0);
+  assert.equal(stats.retried, 0);
+});
+
+test("batchMatch skips source ids blocked by a previous occupied mapping", async () => {
   seedRangeAnime();
   db.insert(bangumiCstationMap)
     .values({
@@ -647,9 +695,38 @@ test("batchMatch rechecks source ids blocked by a previous occupied mapping", as
     .where(and(eq(manualMatchState.animeId, ANIME_ID), eq(manualMatchState.source, SOURCE)))
     .get();
 
-  assert.equal(stats.matched, 1);
-  assert.equal(mapping.cstationId, SOURCE_AID);
-  assert.equal(manual, undefined);
+  assert.equal(stats.matched, 0);
+  assert.equal(mapping, undefined);
+  assert.equal(manual.status, "source_already_mapped");
+});
+
+test("batchMatch skips manually confirmed no_resource rows", async () => {
+  db.insert(manualMatchState)
+    .values({ animeId: ANIME_ID, source: SOURCE, status: "no_resource", note: "confirmed unavailable", updatedAt: "2026-05-30 00:00:00" })
+    .run();
+
+  const stats = await batchMatch({ refreshEpisodes: false, sourceKeys: [SOURCE], animeIds: [ANIME_ID] });
+  const mapping = db.select().from(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
+    .get();
+
+  assert.equal(stats.matched, 0);
+  assert.equal(mapping, undefined);
+});
+
+test("ensureMappingForAnime does not bypass no_resource with refresh", async () => {
+  db.insert(manualMatchState)
+    .values({ animeId: ANIME_ID, source: SOURCE, status: "no_resource", note: "confirmed unavailable", updatedAt: "2026-05-30 00:00:00" })
+    .run();
+
+  const result = await ensureMappingForAnime(ANIME_ID, { source: SOURCE, refresh: true });
+  const mapping = db.select().from(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
+    .get();
+
+  assert.equal(result.matched, false);
+  assert.equal(result.reason, "no-resource");
+  assert.equal(mapping, undefined);
 });
 
 test("retryPending limits mapping retries per run", async () => {
@@ -965,6 +1042,59 @@ test("importMappedReview can convert an existing mapping to wait_airing", async 
   assert.equal(mapping, undefined);
   assert.equal(manual.status, "wait_airing");
   assert.equal(manual.note, "future split");
+});
+
+test("importMappedReview can convert an existing wrong mapping to no_resource", async () => {
+  db.insert(bangumiCstationMap)
+    .values({
+      animeId: ANIME_ID,
+      source: SOURCE,
+      cstationId: SOURCE_AID,
+      matchedBgName: "测试番剧",
+      matchedCsName: "错误资源",
+      matchedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+  db.insert(episodes)
+    .values({
+      animeId: ANIME_ID,
+      sourceName: SOURCE,
+      sourceAid: SOURCE_AID,
+      epIndex: 1,
+      sourceEpIndex: 1,
+      epName: "第1集",
+      videoUrl: "https://example.invalid/1.m3u8",
+      updatedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const csv = [
+    "source,anime_id,decision,source_aid,reviewer_note",
+    `${SOURCE},${ANIME_ID},no_resource,${SOURCE_AID},wrong mapping and unavailable`,
+  ].join("\n");
+
+  const stats = await withCsv(csv, (filePath) => importMappedReview(filePath, { refreshEpisodes: false }));
+  const mapping = db.select().from(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
+    .get();
+  const staleEpisodes = db.select().from(episodes)
+    .where(and(eq(episodes.animeId, ANIME_ID), eq(episodes.sourceName, SOURCE)))
+    .all();
+  const manual = db.select().from(manualMatchState)
+    .where(and(eq(manualMatchState.animeId, ANIME_ID), eq(manualMatchState.source, SOURCE)))
+    .get();
+  const retry = db.select().from(matchRetryState)
+    .where(and(eq(matchRetryState.animeId, ANIME_ID), eq(matchRetryState.source, SOURCE)))
+    .get();
+
+  assert.equal(stats.updated, 1);
+  assert.equal(stats.noResource, 1);
+  assert.equal(mapping, undefined);
+  assert.equal(staleEpisodes.length, 0);
+  assert.equal(manual.status, "no_resource");
+  assert.equal(manual.note, "wrong mapping and unavailable");
+  assert.equal(retry.retryCount, 5);
+  assert.equal(retry.retryAt, null);
 });
 
 test("refreshEpisodesForAnime filters source episodes and stores display indexes", async () => {
@@ -1329,6 +1459,25 @@ test("getAnimeDetail treats source_already_mapped as no_data without exposing in
       source: "ffzy",
       status: "source_already_mapped",
       note: "source_aid 999 is already mapped by Bangumi ID 123",
+      updatedAt: "2026-05-30 00:00:00",
+    })
+    .run();
+
+  const detail = await getAnimeDetail(ANIME_ID);
+  const ffzy = detail.resourceSources.find((item) => item.source === "ffzy");
+
+  assert.equal(detail.resourceStatus, "no_data");
+  assert.equal(ffzy.status, "no_data");
+  assert.equal(ffzy.note, "no mapping after retries");
+});
+
+test("getAnimeDetail treats no_resource as no_data without exposing reviewer notes", async () => {
+  db.insert(manualMatchState)
+    .values({
+      animeId: ANIME_ID,
+      source: "ffzy",
+      status: "no_resource",
+      note: "reviewer confirmed no resource",
       updatedAt: "2026-05-30 00:00:00",
     })
     .run();

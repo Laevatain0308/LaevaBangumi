@@ -29,6 +29,8 @@ const MAX_RETRIES = RETRY_DELAYS.length;
 const AUTO_MATCH_SCORE = 0.8;
 const DEFAULT_MAPPING_RETRY_BATCH_LIMIT = 20;
 const DEFAULT_EPISODE_FETCH_RETRY_BATCH_LIMIT = 30;
+const MANUAL_MATCH_BLOCKING_STATUSES = new Set(["wait_airing", "no_resource", "source_already_mapped"]);
+const MANUAL_NO_DATA_STATUSES = new Set(["no_resource", "source_already_mapped"]);
 
 function now() {
   return new Date().toISOString().replace("T", " ").slice(0, 19);
@@ -162,15 +164,15 @@ function getEpisodeFetchRetryState(animeId, source) {
     .get();
 }
 
-function getManualWaitAiringState(animeId, source) {
+function getManualBlockingState(animeId, source) {
   return db.select()
     .from(manualMatchState)
     .where(and(
       eq(manualMatchState.animeId, animeId),
-      eq(manualMatchState.source, source),
-      eq(manualMatchState.status, "wait_airing")
+      eq(manualMatchState.source, source)
     ))
-    .get();
+    .all()
+    .find((row) => MANUAL_MATCH_BLOCKING_STATUSES.has(row.status));
 }
 
 function setManualMatchState(animeId, source, status, note = null) {
@@ -558,9 +560,9 @@ export async function ensureMappingForAnime(animeId, { source, refresh = false }
     return { animeId, matched: true, cstationId: existing.cstationId, reason: "already-mapped" };
   }
 
-  const waitAiring = getManualWaitAiringState(animeId, source);
-  if (!existing && !refresh && waitAiring) {
-    return { animeId, matched: false, reason: "wait-airing" };
+  const manualBlock = getManualBlockingState(animeId, source);
+  if (!existing && manualBlock) {
+    return { animeId, matched: false, reason: manualBlock.status.replaceAll("_", "-") };
   }
 
   const retry = getRetryState(animeId, source);
@@ -758,13 +760,11 @@ export async function retryPending({
   const episodeSourceKeys = episodeAnimeSourceKeys(sourceKeys);
   const retryRows = db.select().from(matchRetryState).all();
   const episodeRetryRows = db.select().from(episodeFetchRetryState).all();
-  const waitAiringKeys = manualWaitAiringKeys(sourceKeys);
-  const sourceAlreadyMappedKeys = manualSourceAlreadyMappedKeys(sourceKeys);
+  const manualBlockedKeys = manualBlockingKeys(sourceKeys);
   const animeById = new Map(list.map((a) => [a.id, a]));
   const pending = retryRows.filter((row) => {
     if (!sourceKeys.includes(row.source)) return false;
-    if (waitAiringKeys.has(`${row.animeId}:${row.source}`)) return false;
-    if (sourceAlreadyMappedKeys.has(`${row.animeId}:${row.source}`)) return false;
+    if (manualBlockedKeys.has(`${row.animeId}:${row.source}`)) return false;
     if (episodeSourceKeys.has(`${row.animeId}:${row.source}`)) return false;
     if (!animeById.has(row.animeId)) return false;
     if (!row.retryAt) return false;
@@ -773,7 +773,7 @@ export async function retryPending({
   });
   const pendingEpisodeFetches = episodeRetryRows.filter((row) => {
     if (!sourceKeys.includes(row.source)) return false;
-    if (waitAiringKeys.has(`${row.animeId}:${row.source}`)) return false;
+    if (manualBlockedKeys.has(`${row.animeId}:${row.source}`)) return false;
     if (!animeById.has(row.animeId)) return false;
     if (!mapped.has(`${row.animeId}:${row.source}`)) return false;
     if (!row.retryAt) return false;
@@ -854,8 +854,7 @@ export async function batchMatch({ refreshEpisodes = true, includeCoolingDown = 
   const sourceKeys = getEnabledSourceKeys(explicitSourceKeys);
   const mapped = mappedAnimeSourceKeys(sourceKeys);
   const retryByAnimeSource = retryStateByAnimeSource(sourceKeys);
-  const waitAiringKeys = manualWaitAiringKeys(sourceKeys);
-  const sourceAlreadyMappedKeys = manualSourceAlreadyMappedKeys(sourceKeys);
+  const manualBlockedKeys = manualBlockingKeys(sourceKeys);
 
   const animeIdSet = animeIds ? new Set(animeIds.map((id) => parseInt(id, 10)).filter(Boolean)) : null;
   const unmatched = db.select().from(anime).all().filter((a) => {
@@ -870,13 +869,11 @@ export async function batchMatch({ refreshEpisodes = true, includeCoolingDown = 
     try {
       for (const source of sourceKeys) {
         if (mapped.has(`${a.id}:${source}`)) continue;
-        if (waitAiringKeys.has(`${a.id}:${source}`)) continue;
-        const key = `${a.id}:${source}`;
+        if (manualBlockedKeys.has(`${a.id}:${source}`)) continue;
         const retry = retryByAnimeSource.get(`${a.id}:${source}`);
         if (!includeCoolingDown && retry?.retryAt && retry.retryAt > now()) continue;
-        const recheckSourceAlreadyMapped = sourceAlreadyMappedKeys.has(key);
-        if ((retry?.retryCount ?? 0) >= MAX_RETRIES && !recheckSourceAlreadyMapped) continue;
-        const mapping = await ensureMappingForAnime(a.id, { source, refresh: recheckSourceAlreadyMapped });
+        if ((retry?.retryCount ?? 0) >= MAX_RETRIES) continue;
+        const mapping = await ensureMappingForAnime(a.id, { source });
         if (!mapping.matched) continue;
         stats.matched++;
         if (refreshEpisodes) {
@@ -949,22 +946,12 @@ function retryStateByAnimeSource(sourceKeys) {
   );
 }
 
-function manualWaitAiringKeys(sourceKeys) {
+function manualBlockingKeys(sourceKeys) {
   return new Set(
     db.select({ animeId: manualMatchState.animeId, source: manualMatchState.source, status: manualMatchState.status })
       .from(manualMatchState)
       .all()
-      .filter((r) => sourceKeys.includes(r.source) && r.status === "wait_airing")
-      .map((r) => `${r.animeId}:${r.source}`)
-  );
-}
-
-function manualSourceAlreadyMappedKeys(sourceKeys) {
-  return new Set(
-    db.select({ animeId: manualMatchState.animeId, source: manualMatchState.source, status: manualMatchState.status })
-      .from(manualMatchState)
-      .all()
-      .filter((r) => sourceKeys.includes(r.source) && r.status === "source_already_mapped")
+      .filter((r) => sourceKeys.includes(r.source) && MANUAL_MATCH_BLOCKING_STATUSES.has(r.status))
       .map((r) => `${r.animeId}:${r.source}`)
   );
 }
@@ -1103,7 +1090,7 @@ function getResourceSourceStatuses(mappedRows, episodeRows, retryRows, manualRow
   const retryBySource = new Map(retryRows.map((row) => [row.source, row]));
   const manualBySource = new Map(
     manualRows
-      .filter((row) => row.status === "wait_airing")
+      .filter((row) => MANUAL_MATCH_BLOCKING_STATUSES.has(row.status))
       .map((row) => [row.source, row])
   );
   const nowTs = now();
@@ -1116,17 +1103,24 @@ function getResourceSourceStatuses(mappedRows, episodeRows, retryRows, manualRow
     const retrying = retry?.retryAt && retry.retryAt > nowTs;
     let status = "matching";
     if (mapped && episodeSources.has(`${source.key}:${mapped.cstationId}`)) status = "ready";
-    else if (!mapped && manual) status = "wait_airing";
+    else if (!mapped && manual?.status === "wait_airing") status = "wait_airing";
+    else if (!mapped && manual && MANUAL_NO_DATA_STATUSES.has(manual.status)) status = "no_data";
     else if (retryCount >= MAX_RETRIES) status = "no_data";
     else if (retrying) status = "retrying";
     else if (mapped) status = "fetching";
+
+    const note = manual?.status === "wait_airing"
+      ? manual.note
+      : (manual && MANUAL_NO_DATA_STATUSES.has(manual.status)) || retryCount >= MAX_RETRIES
+        ? "no mapping after retries"
+        : null;
 
     return {
       source: source.key,
       name: source.name,
       status,
       cstationId: mapped?.cstationId ?? null,
-      note: manual?.note || (retryCount >= MAX_RETRIES ? "no mapping after retries" : null),
+      note,
     };
   });
 }

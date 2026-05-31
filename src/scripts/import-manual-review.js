@@ -10,7 +10,7 @@ importManualReview(input, { refreshEpisodes })
   .then((stats) => {
     console.log(`manual review imported: ${stats.filePath} (${stats.updated}/${stats.rows} rows)`);
     console.log(
-      `matched=${stats.matched} wait_airing=${stats.waitAiring} skipped=${stats.skipped} refreshed=${stats.refreshed}`
+      `matched=${stats.matched} wait_airing=${stats.waitAiring} no_resource=${stats.noResource} skipped=${stats.skipped} refreshed=${stats.refreshed}`
     );
   })
   .catch((err) => {
