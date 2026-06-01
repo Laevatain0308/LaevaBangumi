@@ -459,7 +459,7 @@ test("analyzeUnmappedMappings keeps wait_airing reason without scoring", async (
   assert.equal("suggestion_count" in row, false);
 });
 
-test("analyzeUnmappedMappings keeps no_resource rows exported without scoring", async () => {
+test("analyzeUnmappedMappings skips no_resource rows by default", async () => {
   db.delete(cstationCatalog)
     .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
     .run();
@@ -470,6 +470,22 @@ test("analyzeUnmappedMappings keeps no_resource rows exported without scoring", 
   ].join("\n"), (filePath) => importManualReview(filePath, { refreshEpisodes: false }));
 
   const result = analyzeUnmappedMappings({ source: SOURCE });
+  const row = result.rows.find((item) => item.anime_id === ANIME_ID && item.source === SOURCE);
+
+  assert.equal(row, undefined);
+});
+
+test("analyzeUnmappedMappings can include no_resource rows without scoring", async () => {
+  db.delete(cstationCatalog)
+    .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
+    .run();
+
+  await withCsv([
+    "source,anime_id,decision,source_aid,reviewer_note",
+    `${SOURCE},${ANIME_ID},no_resource,,confirmed unavailable`,
+  ].join("\n"), (filePath) => importManualReview(filePath, { refreshEpisodes: false }));
+
+  const result = analyzeUnmappedMappings({ source: SOURCE, includeNoResource: true });
   const row = result.rows.find((item) => item.anime_id === ANIME_ID && item.source === SOURCE);
 
   assert.ok(row);

@@ -195,6 +195,7 @@ function reviewRowForAnime(a, source, unmatchedReason, manualState = null) {
 
 export function analyzeUnmappedMappings({
   source = null,
+  includeNoResource = false,
 } = {}) {
   const sources = sourcesForReview(source);
   const rows = [];
@@ -212,6 +213,7 @@ export function analyzeUnmappedMappings({
     for (const a of unmapped) {
       const manual = manualByAnimeId.get(a.id);
       const unmatchedReason = unmatchedReasonForState(manual, retryByAnimeId.get(a.id));
+      if (!includeNoResource && unmatchedReason === "no_resource") continue;
       stats.animeSources++;
       stats.undecided++;
       rows.push(reviewRowForAnime(a, sourceKey, unmatchedReason, manual));
