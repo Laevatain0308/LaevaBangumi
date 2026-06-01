@@ -215,9 +215,11 @@ function coverFromItem(item) {
   return normalizeCoverUrl((item.images && (item.images.large || item.images.common)) || item.image || null);
 }
 
-function normalizeCoverUrl(url) {
+export function normalizeCoverUrl(url) {
   if (!url) return null;
-  return String(url).replace("/r/400/pic/cover/", "/pic/cover/");
+  return String(url)
+    .replace(/^http:\/\//, "https://")
+    .replace("/r/400/pic/cover/", "/pic/cover/");
 }
 
 function infoboxValue(infobox, keys) {

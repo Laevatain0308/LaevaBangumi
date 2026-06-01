@@ -6,6 +6,7 @@ import {
   encodeCoverSource,
   verifyCoverProxySignature,
 } from "../src/lib/coverProxyUrl.js";
+import { normalizeCoverUrl } from "../src/services/anime.js";
 
 const SECRET = "test-cover-secret";
 const SOURCE_URL = "https://lain.bgm.tv/pic/cover/l/13/c5/400602_ZI8Y9.jpg";
@@ -47,4 +48,15 @@ test("verifyCoverProxySignature rejects tampered cover input", () => {
 
   assert.equal(verifyCoverProxySignature({ id: 400603, encodedUrl: encoded, signature: sig, secret: SECRET }), false);
   assert.equal(verifyCoverProxySignature({ id: 400602, encodedUrl: encoded, signature: sig, secret: "wrong" }), false);
+});
+
+test("normalizeCoverUrl upgrades Bangumi cover URLs to HTTPS", () => {
+  assert.equal(
+    normalizeCoverUrl("http://lain.bgm.tv/pic/cover/l/13/c5/400602_ZI8Y9.jpg"),
+    "https://lain.bgm.tv/pic/cover/l/13/c5/400602_ZI8Y9.jpg"
+  );
+  assert.equal(
+    normalizeCoverUrl("http://lain.bgm.tv/r/400/pic/cover/l/13/c5/400602_ZI8Y9.jpg"),
+    "https://lain.bgm.tv/pic/cover/l/13/c5/400602_ZI8Y9.jpg"
+  );
 });
