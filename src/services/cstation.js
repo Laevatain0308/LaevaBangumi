@@ -17,27 +17,55 @@ export function parseEpisodes(dl, { mediaFlag = "ffm3u8" } = {}) {
 
   for (const dd of ddList) {
     if (dd["@_flag"] !== mediaFlag) continue;
-    const raw = dd["#text"] || "";
-    // 格式: 第01集$url#第02集$url#...
-    const parts = raw.split("#");
-    for (const part of parts) {
-      const sep = part.lastIndexOf("$");
-      if (sep === -1) continue;
-      const label = part.slice(0, sep).trim();
-      const url = part.slice(sep + 1).trim();
-      if (!url) continue;
-      const epIndex = extractEpIndex(label);
-      episodes.push({ epIndex, epName: label, videoUrl: url });
+    const raw = String(dd["#text"] || "");
+    const entries = raw.split("#")
+      .map(parsePlayEntry)
+      .filter(Boolean);
+    const usedIndexes = new Set([
+      ...episodes.map((ep) => ep.epIndex),
+      ...entries.map((entry) => entry.explicitIndex).filter((value) => value != null),
+    ]);
+    let nextFallbackIndex = 1;
+
+    for (const entry of entries) {
+      const epIndex = entry.explicitIndex ?? nextAvailableIndex(usedIndexes, nextFallbackIndex);
+      usedIndexes.add(epIndex);
+      nextFallbackIndex = epIndex + 1;
+      episodes.push({ epIndex, epName: entry.label, videoUrl: entry.url });
     }
   }
 
   return episodes;
 }
 
-/** 从 "第01集" 提取序号 */
+function parsePlayEntry(part) {
+  const sep = part.lastIndexOf("$");
+  if (sep === -1) return null;
+  const label = part.slice(0, sep).trim();
+  const url = part.slice(sep + 1).trim();
+  if (!url) return null;
+  return { label, url, explicitIndex: extractEpIndex(label) };
+}
+
+function nextAvailableIndex(usedIndexes, start) {
+  let index = Math.max(1, start);
+  while (usedIndexes.has(index)) index++;
+  return index;
+}
+
 function extractEpIndex(label) {
-  const m = label.match(/(\d+)/);
-  return m ? parseInt(m[1], 10) : 0;
+  const text = String(label || "").trim();
+  const patterns = [
+    /第\s*0*(\d+)\s*(?:集|话|話|回|期|章|幕)/i,
+    /(?:^|[\s._-])(?:ep|episode|e)\s*0*(\d+)(?:$|[\s._-])/i,
+    /^0*(\d+)\s*(?:集|话|話|回|期|章|幕)$/i,
+    /^0*(\d+)$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return parseInt(match[1], 10);
+  }
+  return null;
 }
 
 /** 搜索并根据 XML raw 提取完整信息（按分类依次尝试，命中即停） */
