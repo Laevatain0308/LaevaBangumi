@@ -52,3 +52,16 @@ test("getAnimeDetail returns signed external cover proxy URL when configured", a
   assert.match(result.data.coverUrl, /^https:\/\/img\.example\.test\/cover\/999910001-[a-f0-9]{12}\.jpg\?/);
   assert.ok(new URL(result.data.coverUrl).searchParams.get("u"));
 });
+
+test("external cover proxy URL is built from normalized HTTPS source even for legacy database rows", async () => {
+  db.update(anime)
+    .set({ coverUrl: "http://lain.bgm.tv/r/400/pic/cover/l/13/c5/400602_ZI8Y9.jpg" })
+    .where(eq(anime.id, ANIME_ID))
+    .run();
+
+  const result = await getAnimeDetail(ANIME_ID);
+  const encoded = new URL(result.data.coverUrl).searchParams.get("u");
+  const sourceUrl = Buffer.from(encoded, "base64url").toString("utf8");
+
+  assert.equal(sourceUrl, "https://lain.bgm.tv/pic/cover/l/13/c5/400602_ZI8Y9.jpg");
+});

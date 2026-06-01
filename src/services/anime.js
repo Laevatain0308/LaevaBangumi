@@ -205,10 +205,11 @@ function clearSourceAlreadyMapped(animeId, source) {
 }
 
 function proxyCover(id, coverUrl, hasCover) {
-  const externalProxyUrl = buildCoverProxyUrl({ id, sourceUrl: coverUrl });
+  const normalizedCoverUrl = normalizeCoverUrl(coverUrl);
+  const externalProxyUrl = buildCoverProxyUrl({ id, sourceUrl: normalizedCoverUrl });
   if (externalProxyUrl) return externalProxyUrl;
   if (hasCover) return `/anime/api/cover?id=${id}`;
-  return coverUrl;
+  return normalizedCoverUrl;
 }
 
 function coverFromItem(item) {
