@@ -4,7 +4,6 @@ import { decodeCoverSource, verifyCoverSignature } from "./signature.js";
 import { allowedHostsFromEnv, isAllowedCoverSource } from "./sourcePolicy.js";
 import { cacheRootFromEnv, getCachedFile, safeCachePath, writeCachedFile } from "./cache.js";
 
-const PORT = parseInt(process.env.PORT, 10) || 3010;
 const SECRET = process.env.COVER_PROXY_SECRET;
 const MAX_BYTES = parseInt(process.env.COVER_MAX_BYTES, 10) || 8 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = parseInt(process.env.COVER_FETCH_TIMEOUT_MS, 10) || 15000;
@@ -129,11 +128,4 @@ export function createApp() {
   });
 
   return app;
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const app = createApp();
-  app.listen(PORT, "127.0.0.1", () => {
-    console.log(`[cover-proxy] listening on http://127.0.0.1:${PORT}`);
-  });
 }

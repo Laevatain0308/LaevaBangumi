@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'LaevaCoverProxy',
-      script: 'src/index.js',
+      script: 'src/server.js',
       interpreter: 'node',
       env: {
         NODE_ENV: 'production',
