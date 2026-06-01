@@ -18,6 +18,7 @@ import { hydrateCatalogDetails, saveCatalog } from "./catalog.js";
 import { getEnabledSources } from "../lib/cstationConfig.js";
 import { collectBangumiTitles, matchOne, rankMatches } from "../lib/matcher.js";
 import { downloadCover } from "../lib/cover.js";
+import { buildCoverProxyUrl } from "../lib/coverProxyUrl.js";
 import { debug, log, warn, error } from "../lib/logger.js";
 
 const DETAIL_FRESH_MS = 12 * 60 * 60 * 1000;
@@ -204,6 +205,8 @@ function clearSourceAlreadyMapped(animeId, source) {
 }
 
 function proxyCover(id, coverUrl, hasCover) {
+  const externalProxyUrl = buildCoverProxyUrl({ id, sourceUrl: coverUrl });
+  if (externalProxyUrl) return externalProxyUrl;
   if (hasCover) return `/anime/api/cover?id=${id}`;
   return coverUrl;
 }

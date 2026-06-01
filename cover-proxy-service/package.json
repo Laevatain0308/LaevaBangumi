@@ -1,0 +1,14 @@
+{
+  "name": "laeva-cover-proxy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "undici": "^8.3.0"
+  },
+  "devDependencies": {}
+}
