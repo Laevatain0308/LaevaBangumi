@@ -73,8 +73,93 @@ function animeTitles(a) {
   });
 }
 
+function normalizedSubjectRow(row) {
+  const aliases = sqlite.prepare(`
+    SELECT alias FROM subject_aliases
+    WHERE bangumi_id = ?
+    ORDER BY alias
+  `).all(row.bangumi_id).map((item) => item.alias);
+  return {
+    id: row.bangumi_id,
+    name: row.name,
+    nameCn: row.name_cn,
+    aliases: JSON.stringify(aliases),
+    platform: row.platform,
+    airDate: row.air_date,
+    airWeekday: row.air_weekday,
+    calendarWeekday: row.calendar_weekday,
+    eps: row.eps,
+    totalEpisodes: row.total_episodes,
+    summary: row.summary,
+    coverUrl: row.cover_url,
+    hasCover: row.has_cover,
+    ratingScore: row.rating_score,
+    rank: row.rating_rank,
+    detailFetchedAt: row.metadata_fetched_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function normalizedMappingRow(row) {
+  return {
+    animeId: row.bangumi_id,
+    source: row.source,
+    cstationId: row.source_aid,
+    sourceEpStart: row.source_ep_start,
+    sourceEpEnd: row.source_ep_end,
+    displayEpOffset: row.display_ep_offset,
+    score: row.score,
+    matchedBgName: row.matched_bg_name,
+    matchedCsName: row.matched_resource_name,
+    matchedAt: row.matched_at,
+  };
+}
+
+function normalizedCatalogRow(row) {
+  return {
+    source: row.source,
+    id: row.source_aid,
+    name: row.title,
+    subname: row.subtitle,
+    year: row.year,
+    last: row.latest_text,
+    detailFetchedAt: row.detail_fetched_at,
+  };
+}
+
+function normalizedRetryRow(row) {
+  return {
+    animeId: row.bangumi_id,
+    source: row.source,
+    retryCount: row.retry_count,
+    retryAt: row.retry_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function normalizedManualStateRow(row) {
+  return {
+    animeId: row.bangumi_id,
+    source: row.source,
+    status: row.status,
+    note: row.note,
+    updatedAt: row.updated_at,
+  };
+}
+
 function allAnimeRows() {
-  return db.select().from(anime).all();
+  const rowsById = new Map(
+    db.select().from(anime).all().map((row) => [row.id, row])
+  );
+  const normalized = sqlite.prepare(`
+    SELECT * FROM subjects
+    ORDER BY bangumi_id
+  `).all().map(normalizedSubjectRow);
+  for (const row of normalized) {
+    rowsById.set(row.id, row);
+  }
+  return [...rowsById.values()];
 }
 
 function sourcesForReview(source) {
@@ -82,41 +167,59 @@ function sourcesForReview(source) {
 }
 
 function mappedAnimeIdsForSource(source) {
-  return new Set(
+  const ids = new Set(
     db.select({ animeId: bangumiCstationMap.animeId })
       .from(bangumiCstationMap)
       .where(eq(bangumiCstationMap.source, source))
       .all()
       .map((row) => row.animeId)
   );
+  for (const row of sqlite.prepare(`
+    SELECT bangumi_id FROM resource_mappings
+    WHERE source = ?
+  `).all(source)) {
+    ids.add(row.bangumi_id);
+  }
+  return ids;
 }
 
 function retryStateByAnimeIdForSource(source) {
-  return new Map(
+  const rowsById = new Map(
     db.select()
       .from(matchRetryState)
       .where(eq(matchRetryState.source, source))
       .all()
       .map((row) => [row.animeId, row])
   );
+  for (const row of sqlite.prepare(`
+    SELECT * FROM retry_state
+    WHERE source = ? AND kind = 'mapping'
+  `).all(source).map(normalizedRetryRow)) {
+    rowsById.set(row.animeId, row);
+  }
+  return rowsById;
 }
 
 function manualStateByAnimeIdForSource(source) {
-  return new Map(
+  const rowsById = new Map(
     db.select()
       .from(manualMatchState)
       .where(eq(manualMatchState.source, source))
       .all()
       .map((row) => [row.animeId, row])
   );
+  for (const row of sqlite.prepare(`
+    SELECT * FROM manual_resource_state
+    WHERE source = ?
+  `).all(source).map(normalizedManualStateRow)) {
+    rowsById.set(row.animeId, row);
+  }
+  return rowsById;
 }
 
 function manualBlockedAutoMatchStateByAnimeIdForSource(source) {
   return new Map(
-    db.select()
-      .from(manualMatchState)
-      .where(eq(manualMatchState.source, source))
-      .all()
+    [...manualStateByAnimeIdForSource(source).values()]
       .filter((row) => MANUAL_BLOCKED_STATUSES.has(row.status))
       .map((row) => [row.animeId, row])
   );
@@ -211,12 +314,17 @@ function enabled(value) {
 }
 
 function episodeStatsForMapping(mapping) {
-  const rows = db.select()
+  const normalizedRows = sqlite.prepare(`
+    SELECT ep_index, source_ep_index
+    FROM episodes
+    WHERE bangumi_id = ? AND source = ? AND source_aid = ?
+  `).all(mapping.animeId, mapping.source, mapping.cstationId);
+  const rows = normalizedRows.length > 0 ? normalizedRows : db.select()
     .from(episodes)
     .where(and(eq(episodes.animeId, mapping.animeId), eq(episodes.sourceName, mapping.source)))
     .all();
   const sourceIndexes = rows
-    .map((row) => row.sourceEpIndex ?? row.epIndex)
+    .map((row) => row.sourceEpIndex ?? row.source_ep_index ?? row.epIndex ?? row.ep_index)
     .filter((value) => Number.isFinite(value));
   return {
     episodeCount: rows.length,
@@ -227,6 +335,36 @@ function episodeStatsForMapping(mapping) {
 
 function mappingKey(row) {
   return `${row.source}:${row.cstationId}`;
+}
+
+function allCatalogRows() {
+  const rowsByKey = new Map(
+    db.select()
+      .from(cstationCatalog)
+      .all()
+      .map((row) => [`${row.source}:${row.id}`, row])
+  );
+  for (const row of sqlite.prepare("SELECT * FROM resource_items").all().map(normalizedCatalogRow)) {
+    rowsByKey.set(`${row.source}:${row.id}`, row);
+  }
+  return [...rowsByKey.values()];
+}
+
+function mappingMergeKey(row) {
+  return `${row.animeId}:${row.source}`;
+}
+
+function allMappingRows() {
+  const rowsByKey = new Map(
+    db.select()
+      .from(bangumiCstationMap)
+      .all()
+      .map((row) => [mappingMergeKey(row), row])
+  );
+  for (const row of sqlite.prepare("SELECT * FROM resource_mappings").all().map(normalizedMappingRow)) {
+    rowsByKey.set(mappingMergeKey(row), row);
+  }
+  return [...rowsByKey.values()];
 }
 
 function mappedRowForReview(mapping, animeRow, sourceItem, episodeStats) {
@@ -285,15 +423,9 @@ export function analyzeMappedMappings({
   const multiMapped = enabled(multiMappedOnly);
   const animeById = new Map(allAnimeRows().map((row) => [row.id, row]));
   const catalogByKey = new Map(
-    db.select()
-      .from(cstationCatalog)
-      .all()
-      .map((row) => [`${row.source}:${row.id}`, row])
+    allCatalogRows().map((row) => [`${row.source}:${row.id}`, row])
   );
-  const mappings = db.select()
-    .from(bangumiCstationMap)
-    .all()
-    .filter((row) => sources.includes(row.source));
+  const mappings = allMappingRows().filter((row) => sources.includes(row.source));
   const mappedCounts = new Map();
   for (const row of mappings) {
     const key = mappingKey(row);
@@ -401,10 +533,25 @@ function normalizeMappedDecision(decision) {
 }
 
 function findCatalogItem(source, sourceAid) {
+  const normalized = sqlite.prepare(`
+    SELECT * FROM resource_items
+    WHERE source = ? AND source_aid = ?
+  `).get(source, sourceAid);
+  if (normalized) return normalizedCatalogRow(normalized);
+
   return db.select()
     .from(cstationCatalog)
     .where(and(eq(cstationCatalog.source, source), eq(cstationCatalog.id, sourceAid)))
     .get();
+}
+
+function findAnimeRow(animeId) {
+  const normalized = sqlite.prepare(`
+    SELECT * FROM subjects
+    WHERE bangumi_id = ?
+  `).get(animeId);
+  if (normalized) return normalizedSubjectRow(normalized);
+  return db.select().from(anime).where(eq(anime.id, animeId)).get();
 }
 
 function ensureSubjectFromAnime(animeId) {
@@ -641,6 +788,12 @@ function applyManualMapping({ animeRow, source, sourceItem, sourceAid, episodeRa
 }
 
 function existingMapping(animeId, source) {
+  const normalized = sqlite.prepare(`
+    SELECT * FROM resource_mappings
+    WHERE bangumi_id = ? AND source = ?
+  `).get(animeId, source);
+  if (normalized) return normalizedMappingRow(normalized);
+
   return db.select()
     .from(bangumiCstationMap)
     .where(and(eq(bangumiCstationMap.animeId, animeId), eq(bangumiCstationMap.source, source)))
@@ -677,7 +830,7 @@ export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refre
       errors.push(`line ${line}: source is required`);
       continue;
     }
-    const animeRow = db.select().from(anime).where(eq(anime.id, animeId)).get();
+    const animeRow = findAnimeRow(animeId);
     if (!animeRow) {
       errors.push(`line ${line}: anime_id ${animeId} does not exist`);
       continue;
@@ -804,7 +957,7 @@ export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, 
       continue;
     }
 
-    const animeRow = db.select().from(anime).where(eq(anime.id, animeId)).get();
+    const animeRow = findAnimeRow(animeId);
     if (!animeRow) {
       errors.push(`line ${line}: anime_id ${animeId} does not exist`);
       continue;

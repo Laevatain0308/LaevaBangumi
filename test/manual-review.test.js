@@ -206,6 +206,36 @@ test("analyzeUnmappedMappings exports unmapped rows from retry state", () => {
   assert.equal("suggestion_1_source_aid" in row, false);
 });
 
+test("analyzeUnmappedMappings exports normalized subjects without legacy anime rows", () => {
+  sqlite.exec(`
+    INSERT INTO subjects (bangumi_id, name, name_cn, air_date, created_at, updated_at)
+    VALUES (${EXTRA_ANIME_ID}, 'Normalized Raw', '标准化番剧', '2026-04-03', datetime('now'), datetime('now'))
+    ON CONFLICT(bangumi_id) DO UPDATE SET
+      name = excluded.name,
+      name_cn = excluded.name_cn,
+      air_date = excluded.air_date,
+      updated_at = excluded.updated_at;
+    INSERT INTO subject_aliases (bangumi_id, alias)
+    VALUES (${EXTRA_ANIME_ID}, 'Normalized Alias')
+    ON CONFLICT(bangumi_id, alias) DO NOTHING;
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    VALUES (${EXTRA_ANIME_ID}, '${SOURCE}', 'mapping', 5, null, datetime('now'))
+    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+      retry_count = excluded.retry_count,
+      retry_at = excluded.retry_at,
+      updated_at = excluded.updated_at;
+  `);
+
+  const result = analyzeUnmappedMappings({ source: SOURCE });
+  const row = result.rows.find((item) => item.anime_id === EXTRA_ANIME_ID && item.source === SOURCE);
+
+  assert.ok(row);
+  assert.equal(row.bg_title, "标准化番剧");
+  assert.equal(row.unmatched_reason, "max_retries");
+  assert.equal(row.air_date, "2026-04-03");
+  assert.deepEqual(JSON.parse(row.bg_aliases), ["标准化番剧", "Normalized Raw", "Normalized Alias"]);
+});
+
 test("prewarmAnime maps requested local IDs and refreshes episodes immediately", async () => {
   let metadataCalls = 0;
   let refreshCalls = 0;
@@ -357,6 +387,42 @@ test("analyzeUnmappedMappings does not export rows that already have a mapping",
   assert.equal(row, undefined);
 });
 
+test("analyzeUnmappedMappings skips normalized mappings without legacy mappings", () => {
+  sqlite.exec(`
+    INSERT INTO subjects (bangumi_id, name, name_cn, created_at, updated_at)
+    VALUES (${ANIME_ID}, 'テスト番組', '测试番剧', datetime('now'), datetime('now'))
+    ON CONFLICT(bangumi_id) DO UPDATE SET
+      name = excluded.name,
+      name_cn = excluded.name_cn,
+      updated_at = excluded.updated_at;
+    INSERT INTO resource_sources (source, name, enabled)
+    VALUES ('${SOURCE}', '测试资源', 1)
+    ON CONFLICT(source) DO UPDATE SET name = excluded.name, enabled = excluded.enabled;
+    INSERT INTO resource_items (source, source_aid, title, updated_at)
+    VALUES ('${SOURCE}', ${SOURCE_AID}, '测试番剧', datetime('now'))
+    ON CONFLICT(source, source_aid) DO UPDATE SET
+      title = excluded.title,
+      updated_at = excluded.updated_at;
+    INSERT INTO resource_mappings (
+      bangumi_id, source, source_aid, score, matched_bg_name, matched_resource_name, matched_at
+    )
+    VALUES (
+      ${ANIME_ID}, '${SOURCE}', ${SOURCE_AID}, 0.91, '测试番剧', '测试番剧', '2026-05-30 00:00:00'
+    )
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      source_aid = excluded.source_aid,
+      score = excluded.score,
+      matched_bg_name = excluded.matched_bg_name,
+      matched_resource_name = excluded.matched_resource_name,
+      matched_at = excluded.matched_at;
+  `);
+
+  const result = analyzeUnmappedMappings({ source: SOURCE });
+  const row = result.rows.find((item) => item.anime_id === ANIME_ID && item.source === SOURCE);
+
+  assert.equal(row, undefined);
+});
+
 test("exportManualReview puts human decision columns first", async () => {
   await withTempPath(async (filePath) => {
     await exportManualReview(filePath, { source: SOURCE });
@@ -417,6 +483,77 @@ test("analyzeMappedMappings exports existing mappings for review", () => {
   assert.equal(row.episode_count, 1);
   assert.equal(row.source_ep_min, 1156);
   assert.equal(row.source_ep_max, 1156);
+});
+
+test("analyzeMappedMappings exports normalized mappings without legacy mappings", () => {
+  sqlite.exec(`
+    INSERT INTO subjects (bangumi_id, name, name_cn, air_date, created_at, updated_at)
+    VALUES (${ANIME_ID}, 'テスト番組', '测试番剧', '2026-04-01', datetime('now'), datetime('now'))
+    ON CONFLICT(bangumi_id) DO UPDATE SET
+      name = excluded.name,
+      name_cn = excluded.name_cn,
+      air_date = excluded.air_date,
+      updated_at = excluded.updated_at;
+    INSERT INTO subject_aliases (bangumi_id, alias)
+    VALUES (${ANIME_ID}, 'Manual Review Test')
+    ON CONFLICT(bangumi_id, alias) DO NOTHING;
+    INSERT INTO resource_sources (source, name, enabled)
+    VALUES ('${SOURCE}', '测试资源', 1)
+    ON CONFLICT(source) DO UPDATE SET name = excluded.name, enabled = excluded.enabled;
+    INSERT INTO resource_items (source, source_aid, title, subtitle, year, updated_at)
+    VALUES ('${SOURCE}', ${SOURCE_AID}, 'Normalized Source Title', 'normalized alias', '2026', datetime('now'))
+    ON CONFLICT(source, source_aid) DO UPDATE SET
+      title = excluded.title,
+      subtitle = excluded.subtitle,
+      year = excluded.year,
+      updated_at = excluded.updated_at;
+    INSERT INTO resource_mappings (
+      bangumi_id, source, source_aid, source_ep_start, source_ep_end,
+      display_ep_offset, score, matched_bg_name, matched_resource_name, matched_at
+    )
+    VALUES (
+      ${ANIME_ID}, '${SOURCE}', ${SOURCE_AID}, 1156, null,
+      1155, 0.91, '测试番剧', 'Normalized Source Title', '2026-05-30 00:00:00'
+    )
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      source_aid = excluded.source_aid,
+      source_ep_start = excluded.source_ep_start,
+      source_ep_end = excluded.source_ep_end,
+      display_ep_offset = excluded.display_ep_offset,
+      score = excluded.score,
+      matched_bg_name = excluded.matched_bg_name,
+      matched_resource_name = excluded.matched_resource_name,
+      matched_at = excluded.matched_at;
+    INSERT INTO episodes (
+      bangumi_id, source, source_aid, ep_index, source_ep_index, ep_name, video_url, updated_at
+    )
+    VALUES (
+      ${ANIME_ID}, '${SOURCE}', ${SOURCE_AID}, 1, 1156, '第1156集',
+      'https://example.invalid/1156.m3u8', datetime('now')
+    )
+    ON CONFLICT(bangumi_id, source, source_aid, ep_index) DO UPDATE SET
+      source_ep_index = excluded.source_ep_index,
+      ep_name = excluded.ep_name,
+      video_url = excluded.video_url,
+      updated_at = excluded.updated_at;
+  `);
+
+  const result = analyzeMappedMappings({ source: SOURCE });
+  const row = result.rows.find((item) => item.anime_id === ANIME_ID && item.source === SOURCE);
+
+  assert.ok(row);
+  assert.equal(row.source_aid, SOURCE_AID);
+  assert.equal(row.source_title, "Normalized Source Title");
+  assert.equal(row.source_ep_start, 1156);
+  assert.equal(row.source_ep_end, "");
+  assert.equal(row.display_ep_offset, 1155);
+  assert.equal(row.match_score, "0.9100");
+  assert.equal(row.matched_source_name, "Normalized Source Title");
+  assert.equal(row.episode_count, 1);
+  assert.equal(row.source_ep_min, 1156);
+  assert.equal(row.source_ep_max, 1156);
+  assert.equal(row.source_subname, "normalized alias");
+  assert.equal(row.source_year, "2026");
 });
 
 test("exportMappedReview puts editable mapping columns first", async () => {
@@ -1182,6 +1319,60 @@ test("importMappedReview updates source id and episode range", async () => {
   db.delete(cstationCatalog)
     .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, NEW_SOURCE_AID)))
     .run();
+});
+
+test("importMappedReview updates normalized-only mapping and source item", async () => {
+  sqlite.exec(`
+    INSERT INTO subjects (bangumi_id, name, name_cn, created_at, updated_at)
+    VALUES (${ANIME_ID}, 'テスト番組', '测试番剧', datetime('now'), datetime('now'))
+    ON CONFLICT(bangumi_id) DO UPDATE SET
+      name = excluded.name,
+      name_cn = excluded.name_cn,
+      updated_at = excluded.updated_at;
+    INSERT INTO resource_sources (source, name, enabled)
+    VALUES ('${SOURCE}', '测试资源', 1)
+    ON CONFLICT(source) DO UPDATE SET name = excluded.name, enabled = excluded.enabled;
+    INSERT INTO resource_items (source, source_aid, title, updated_at)
+    VALUES ('${SOURCE}', ${NEW_SOURCE_AID}, '测试番剧 新来源', datetime('now'))
+    ON CONFLICT(source, source_aid) DO UPDATE SET
+      title = excluded.title,
+      updated_at = excluded.updated_at;
+    INSERT INTO resource_mappings (
+      bangumi_id, source, source_aid, source_ep_start, source_ep_end,
+      display_ep_offset, matched_bg_name, matched_resource_name, matched_at
+    )
+    VALUES (
+      ${ANIME_ID}, '${SOURCE}', ${SOURCE_AID}, null, null,
+      0, '测试番剧', '测试番剧', '2026-05-30 00:00:00'
+    )
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      source_aid = excluded.source_aid,
+      source_ep_start = excluded.source_ep_start,
+      source_ep_end = excluded.source_ep_end,
+      display_ep_offset = excluded.display_ep_offset,
+      matched_bg_name = excluded.matched_bg_name,
+      matched_resource_name = excluded.matched_resource_name,
+      matched_at = excluded.matched_at;
+  `);
+
+  const csv = [
+    "source,anime_id,decision,source_aid,source_ep_start,source_ep_end,display_ep_offset,reviewer_note",
+    `${SOURCE},${ANIME_ID},update,${NEW_SOURCE_AID},12,24,11,range update`,
+  ].join("\n");
+
+  const stats = await withCsv(csv, (filePath) => importMappedReview(filePath, { refreshEpisodes: false }));
+  const normalizedMapping = sqlite.prepare(`
+    SELECT * FROM resource_mappings
+    WHERE bangumi_id = ? AND source = ?
+  `).get(ANIME_ID, SOURCE);
+
+  assert.equal(stats.updated, 1);
+  assert.equal(stats.matched, 1);
+  assert.equal(normalizedMapping.source_aid, NEW_SOURCE_AID);
+  assert.equal(normalizedMapping.source_ep_start, 12);
+  assert.equal(normalizedMapping.source_ep_end, 24);
+  assert.equal(normalizedMapping.display_ep_offset, 11);
+  assert.equal(normalizedMapping.matched_resource_name, "测试番剧 新来源");
 });
 
 test("importMappedReview deletes mappings and marks them as manual unmapped", async () => {
