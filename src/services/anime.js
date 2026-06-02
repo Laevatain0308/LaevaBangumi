@@ -2038,7 +2038,7 @@ function formatAnimeDetail(a, fresh, mappedRows = null) {
       .map((ep) => ({
         index: ep.epIndex,
         name: ep.epName,
-        url: `/anime/api/play?id=${a.id}&ch=${chIdx + 1}&ep=${ep.epIndex}`,
+        playUrl: `/anime/api/play?id=${a.id}&ch=${chIdx + 1}&ep=${ep.epIndex}`,
       })),
   }));
 

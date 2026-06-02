@@ -121,6 +121,56 @@ test("detail exposes the new stable Aslan DTO contract", async () => {
   }
 });
 
+test("legacy fallback detail still exposes playUrl without episode url", async () => {
+  const legacySubjectId = 990547889;
+  initDb();
+  sqlite.exec(`
+    DELETE FROM subject_aliases WHERE bangumi_id = ${legacySubjectId};
+    DELETE FROM subject_tags WHERE bangumi_id = ${legacySubjectId};
+    DELETE FROM resource_mappings WHERE bangumi_id = ${legacySubjectId};
+    DELETE FROM episodes WHERE bangumi_id = ${legacySubjectId} OR anime_id = ${legacySubjectId};
+    DELETE FROM subjects WHERE bangumi_id = ${legacySubjectId};
+    DELETE FROM bangumi_cstation_map WHERE anime_id = ${legacySubjectId};
+    DELETE FROM anime WHERE id = ${legacySubjectId};
+
+    INSERT INTO anime (
+      id, name, name_cn, summary, platform, air_date, air_weekday,
+      eps, total_episodes, cover_url, has_cover, rating_score, rank,
+      tags, detail_fetched_at, created_at, updated_at
+    ) VALUES (
+      ${legacySubjectId}, 'Legacy raw title', '旧表中文标题', 'legacy summary',
+      'TV', '2026-04-02', 4, 12, 12, 'https://example.invalid/legacy-cover.jpg',
+      0, 7.1, 4321, '["旧表Tag"]', datetime('now'), datetime('now'), datetime('now')
+    );
+    INSERT INTO bangumi_cstation_map (
+      anime_id, source, cstation_id, score, matched_bg_name, matched_cs_name, matched_at
+    ) VALUES (
+      ${legacySubjectId}, 'ffzy', 456, 0.91, '旧表中文标题', '旧表资源标题', datetime('now')
+    );
+    INSERT INTO episodes (
+      anime_id, source_name, source_aid, ep_index, ep_name, video_url, updated_at
+    ) VALUES (
+      ${legacySubjectId}, 'ffzy', 456, 1, '第01集', 'https://example.invalid/legacy-1.m3u8', datetime('now')
+    );
+
+    UPDATE episodes SET bangumi_id = NULL WHERE anime_id = ${legacySubjectId};
+    DELETE FROM resource_mappings WHERE bangumi_id = ${legacySubjectId};
+    DELETE FROM subjects WHERE bangumi_id = ${legacySubjectId};
+  `);
+
+  const server = createServer().listen(0);
+  try {
+    const response = await getJson(server, `/api/detail?id=${legacySubjectId}`);
+    assert.equal(response.status, 200);
+    const episode = response.body.data.channels[0].episodes[0];
+    assert.equal(episode.playUrl, `/anime/api/play?id=${legacySubjectId}&ch=1&ep=1`);
+    assert.equal(Object.hasOwn(episode, "url"), false);
+    assert.equal(Object.hasOwn(response.body.data, "bangumiId"), false);
+  } finally {
+    server.close();
+  }
+});
+
 test("play exposes videoUrl without legacy videoURL", async () => {
   seedContractSubject();
   const server = createServer().listen(0);
