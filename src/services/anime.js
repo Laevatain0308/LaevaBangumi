@@ -1487,10 +1487,9 @@ function parseVotesCount(value) {
 }
 
 function normalizedSourceStatuses(id) {
-  const rows = sqlite.prepare(`
+  const mappings = sqlite.prepare(`
     SELECT
-      rs.source,
-      rs.name,
+      rm.source,
       rm.source_aid,
       EXISTS (
         SELECT 1 FROM episodes e
@@ -1499,21 +1498,60 @@ function normalizedSourceStatuses(id) {
           AND e.source_aid = rm.source_aid
       ) AS has_episodes
     FROM resource_mappings rm
-    JOIN resource_sources rs ON rs.source = rm.source
-    WHERE rm.bangumi_id = ? AND rs.enabled = 1
-    ORDER BY rs.source ASC, rm.source_aid ASC
+    WHERE rm.bangumi_id = ?
+  `).all(id);
+  const retries = sqlite.prepare(`
+    SELECT source, retry_count, retry_at
+    FROM retry_state
+    WHERE bangumi_id = ? AND kind = 'mapping'
+  `).all(id);
+  const manualRows = sqlite.prepare(`
+    SELECT source, status, note
+    FROM manual_resource_state
+    WHERE bangumi_id = ?
   `).all(id);
 
-  return rows.map((row) => ({
-    source: row.source,
-    name: row.name,
-    status: row.has_episodes ? "ready" : "fetching",
-    sourceAid: row.source_aid,
-    note: null,
-  }));
+  const mappedBySource = new Map(mappings.map((row) => [row.source, row]));
+  const retryBySource = new Map(retries.map((row) => [row.source, row]));
+  const manualBySource = new Map(
+    manualRows
+      .filter((row) => MANUAL_MATCH_BLOCKING_STATUSES.has(row.status))
+      .map((row) => [row.source, row])
+  );
+  const nowTs = now();
+
+  return getEnabledSources().map((source) => {
+    const mapped = mappedBySource.get(source.key);
+    const retry = retryBySource.get(source.key);
+    const manual = manualBySource.get(source.key);
+    const retryCount = retry?.retry_count ?? 0;
+    const retrying = retry?.retry_at && retry.retry_at > nowTs;
+    let status = "matching";
+    if (mapped?.has_episodes) status = "ready";
+    else if (!mapped && manual?.status === "wait_airing") status = "wait_airing";
+    else if (!mapped && manual && MANUAL_NO_DATA_STATUSES.has(manual.status)) status = "no_data";
+    else if (retryCount >= MAX_RETRIES) status = "no_data";
+    else if (retrying) status = "retrying";
+    else if (mapped) status = "fetching";
+
+    const note = manual?.status === "wait_airing"
+      ? manual.note
+      : (manual && MANUAL_NO_DATA_STATUSES.has(manual.status)) || retryCount >= MAX_RETRIES
+        ? "no mapping after retries"
+        : null;
+
+    return {
+      source: source.key,
+      name: source.name,
+      status,
+      sourceAid: mapped?.source_aid ?? null,
+      note,
+    };
+  });
 }
 
 function collectNormalizedEpisodeChannels(id) {
+  const enabledSources = enabledSourceSet();
   const rows = sqlite.prepare(`
     SELECT
       e.source,
@@ -1533,7 +1571,7 @@ function collectNormalizedEpisodeChannels(id) {
     LEFT JOIN resource_items ri ON ri.source = e.source AND ri.source_aid = e.source_aid
     WHERE e.bangumi_id = ?
     ORDER BY e.source ASC, e.source_aid ASC, e.ep_index ASC
-  `).all(id);
+  `).all(id).filter((row) => enabledSources.has(row.source));
 
   const channels = new Map();
   for (const row of rows) {
@@ -1876,18 +1914,36 @@ export async function getPlayUrl(id, ch, ep) {
 }
 
 export async function getCalendarView() {
-  const all = db.select().from(anime).all();
+  const all = db.all(sql`
+    SELECT
+      bangumi_id AS id,
+      name,
+      name_cn AS nameCn,
+      cover_url AS coverUrl,
+      has_cover AS hasCover,
+      rating_score AS ratingScore,
+      eps,
+      total_episodes AS totalEpisodes,
+      air_date AS airDate,
+      COALESCE(calendar_weekday, air_weekday) AS calendarWeekday
+    FROM subjects
+  `);
   if (all.length === 0) {
     return { data: [], freshness: "empty", error: "暂无数据，请等待首次同步完成" };
   }
 
   const epStats = db.all(sql`
-    SELECT anime_id, ep_index, updated_at FROM episodes e1
-    WHERE updated_at = (SELECT MAX(updated_at) FROM episodes e2 WHERE e2.anime_id = e1.anime_id)
+    SELECT bangumi_id AS id, ep_index AS latestEp, updated_at AS lastUpdated
+    FROM episodes e1
+    WHERE updated_at = (
+      SELECT MAX(updated_at)
+      FROM episodes e2
+      WHERE e2.bangumi_id = e1.bangumi_id
+    )
   `);
   const epMap = {};
   for (const s of epStats) {
-    epMap[s.anime_id] = { latestEp: s.ep_index, lastUpdated: s.updated_at };
+    epMap[s.id] = { latestEp: s.latestEp, lastUpdated: s.lastUpdated };
   }
 
   return { data: groupByWeekday(all, epMap), freshness: "cache" };
@@ -1902,28 +1958,28 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
   const sourceOrder = new Map(enabledSources.map((source, index) => [source, index]));
   const rows = db.all(sql`
     SELECT
-      a.id,
-      a.name,
-      a.name_cn AS nameCn,
-      a.summary,
-      a.cover_url AS coverUrl,
-      a.has_cover AS hasCover,
-      m.source,
-      m.cstation_id AS sourceAid,
-      m.source_ep_start AS sourceEpStart,
-      m.source_ep_end AS sourceEpEnd,
-      m.display_ep_offset AS displayEpOffset,
-      c.last AS sourceUpdatedAt,
+      s.bangumi_id AS id,
+      s.name,
+      s.name_cn AS nameCn,
+      s.summary,
+      s.cover_url AS coverUrl,
+      s.has_cover AS hasCover,
+      rm.source,
+      rm.source_aid AS sourceAid,
+      rm.source_ep_start AS sourceEpStart,
+      rm.source_ep_end AS sourceEpEnd,
+      rm.display_ep_offset AS displayEpOffset,
+      ri.latest_text AS sourceUpdatedAt,
       MAX(e.ep_index) AS latestEp,
       MAX(e.updated_at) AS episodeUpdatedAt
-    FROM bangumi_cstation_map m
-    JOIN anime a ON a.id = m.anime_id
-    JOIN cstation_catalog c ON c.source = m.source AND c.id = m.cstation_id
+    FROM resource_mappings rm
+    JOIN subjects s ON s.bangumi_id = rm.bangumi_id
+    JOIN resource_items ri ON ri.source = rm.source AND ri.source_aid = rm.source_aid
     LEFT JOIN episodes e
-      ON e.anime_id = m.anime_id
-      AND e.source_name = m.source
-      AND e.source_aid = m.cstation_id
-    GROUP BY m.anime_id, m.source, m.cstation_id
+      ON e.bangumi_id = rm.bangumi_id
+      AND e.source = rm.source
+      AND e.source_aid = rm.source_aid
+    GROUP BY rm.bangumi_id, rm.source, rm.source_aid
   `);
 
   const latestByAnime = new Map();

@@ -206,6 +206,7 @@ export const resourceMappings = sqliteTable("resource_mappings", {
   matchedBgName: text("matched_bg_name"),
   matchedResourceName: text("matched_resource_name"),
   matchedAt: text("matched_at").default("(datetime('now'))").notNull(),
+  updatedAt: text("updated_at").default("(datetime('now'))").notNull(),
 }, (table) => ({
   pk: uniqueIndex("idx_resource_mappings_unique").on(table.bangumiId, table.source),
 }));

@@ -19,6 +19,12 @@ function tableColumns(name) {
   return new Set(sqlite.prepare(`PRAGMA table_info(${name})`).all().map((row) => row.name));
 }
 
+function addColumnIfMissing(table, column, definition) {
+  if (!tableColumns(table).has(column)) {
+    sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+  }
+}
+
 function createEpisodesTable() {
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS episodes (
@@ -264,6 +270,7 @@ export function initDb() {
       matched_bg_name TEXT,
       matched_resource_name TEXT,
       matched_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (bangumi_id, source)
     );
 
@@ -297,6 +304,12 @@ export function initDb() {
   `);
 
   migrateEpisodesTableIfNeeded();
+  addColumnIfMissing("resource_mappings", "updated_at", "TEXT");
+  sqlite.exec(`
+    UPDATE resource_mappings
+    SET updated_at = COALESCE(updated_at, matched_at, datetime('now'))
+    WHERE updated_at IS NULL;
+  `);
   sqlite.exec(`
     INSERT OR IGNORE INTO resource_sources (source, name, enabled)
       VALUES ('ffzy', '非凡资源', 1);
@@ -331,11 +344,12 @@ export function initDb() {
 
     INSERT INTO resource_mappings (
       bangumi_id, source, source_aid, source_ep_start, source_ep_end,
-      display_ep_offset, score, matched_bg_name, matched_resource_name, matched_at
+      display_ep_offset, score, matched_bg_name, matched_resource_name, matched_at, updated_at
     )
     SELECT
       anime_id, source, cstation_id, source_ep_start, source_ep_end,
-      display_ep_offset, score, matched_bg_name, matched_cs_name, matched_at
+      display_ep_offset, score, matched_bg_name, matched_cs_name, matched_at,
+      COALESCE(matched_at, datetime('now'))
     FROM bangumi_cstation_map
     WHERE anime_id IN (SELECT bangumi_id FROM subjects)
     ON CONFLICT(bangumi_id, source) DO UPDATE SET
@@ -346,11 +360,263 @@ export function initDb() {
       score = excluded.score,
       matched_bg_name = excluded.matched_bg_name,
       matched_resource_name = excluded.matched_resource_name,
-      matched_at = excluded.matched_at;
+      matched_at = excluded.matched_at,
+      updated_at = excluded.updated_at;
+
+    INSERT INTO resource_items (
+      source, source_aid, title, subtitle, category, year, latest_text, detail_fetched_at
+    )
+    SELECT source, id, name, subname, category, year, last, detail_fetched_at
+    FROM cstation_catalog
+    WHERE true
+    ON CONFLICT(source, source_aid) DO UPDATE SET
+      title = excluded.title,
+      subtitle = excluded.subtitle,
+      category = excluded.category,
+      year = excluded.year,
+      latest_text = COALESCE(excluded.latest_text, resource_items.latest_text),
+      detail_fetched_at = COALESCE(excluded.detail_fetched_at, resource_items.detail_fetched_at),
+      updated_at = datetime('now');
 
     UPDATE episodes
     SET bangumi_id = COALESCE(bangumi_id, anime_id),
         source = COALESCE(source, source_name)
     WHERE bangumi_id IS NULL OR source IS NULL;
+
+    DROP TRIGGER IF EXISTS trg_anime_subjects_ai;
+    DROP TRIGGER IF EXISTS trg_anime_subjects_au;
+    DROP TRIGGER IF EXISTS trg_cstation_catalog_resource_items_ai;
+    DROP TRIGGER IF EXISTS trg_cstation_catalog_resource_items_au;
+    DROP TRIGGER IF EXISTS trg_bangumi_cstation_map_resource_mappings_ai;
+    DROP TRIGGER IF EXISTS trg_match_retry_state_retry_ai;
+    DROP TRIGGER IF EXISTS trg_match_retry_state_retry_au;
+    DROP TRIGGER IF EXISTS trg_manual_match_state_resource_ai;
+    DROP TRIGGER IF EXISTS trg_manual_match_state_resource_au;
+    DROP TRIGGER IF EXISTS trg_episodes_normalized_ai;
+
+    CREATE TRIGGER IF NOT EXISTS trg_anime_subjects_ai
+    AFTER INSERT ON anime
+    BEGIN
+      INSERT INTO subjects (
+        bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
+        calendar_weekday, eps, total_episodes, cover_url, has_cover,
+        rating_score, rating_rank, metadata_fetched_at, created_at, updated_at
+      )
+      VALUES (
+        NEW.id, NEW.name, NEW.name_cn, NEW.summary, NEW.platform, NEW.air_date, NEW.air_weekday,
+        NEW.calendar_weekday, NEW.eps, NEW.total_episodes, NEW.cover_url, COALESCE(NEW.has_cover, 0),
+        NEW.rating_score, NEW.rank, NEW.detail_fetched_at, NEW.created_at, NEW.updated_at
+      )
+      ON CONFLICT(bangumi_id) DO UPDATE SET
+        name = excluded.name,
+        name_cn = excluded.name_cn,
+        summary = excluded.summary,
+        platform = excluded.platform,
+        air_date = excluded.air_date,
+        air_weekday = excluded.air_weekday,
+        calendar_weekday = excluded.calendar_weekday,
+        eps = excluded.eps,
+        total_episodes = excluded.total_episodes,
+        cover_url = excluded.cover_url,
+        has_cover = excluded.has_cover,
+        rating_score = excluded.rating_score,
+        rating_rank = excluded.rating_rank,
+        metadata_fetched_at = excluded.metadata_fetched_at,
+        updated_at = excluded.updated_at;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_anime_subjects_au
+    AFTER UPDATE ON anime
+    BEGIN
+      INSERT INTO subjects (
+        bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
+        calendar_weekday, eps, total_episodes, cover_url, has_cover,
+        rating_score, rating_rank, metadata_fetched_at, created_at, updated_at
+      )
+      VALUES (
+        NEW.id, NEW.name, NEW.name_cn, NEW.summary, NEW.platform, NEW.air_date, NEW.air_weekday,
+        NEW.calendar_weekday, NEW.eps, NEW.total_episodes, NEW.cover_url, COALESCE(NEW.has_cover, 0),
+        NEW.rating_score, NEW.rank, NEW.detail_fetched_at, NEW.created_at, NEW.updated_at
+      )
+      ON CONFLICT(bangumi_id) DO UPDATE SET
+        name = excluded.name,
+        name_cn = excluded.name_cn,
+        summary = excluded.summary,
+        platform = excluded.platform,
+        air_date = excluded.air_date,
+        air_weekday = excluded.air_weekday,
+        calendar_weekday = excluded.calendar_weekday,
+        eps = excluded.eps,
+        total_episodes = excluded.total_episodes,
+        cover_url = excluded.cover_url,
+        has_cover = excluded.has_cover,
+        rating_score = excluded.rating_score,
+        rating_rank = excluded.rating_rank,
+        metadata_fetched_at = excluded.metadata_fetched_at,
+        updated_at = excluded.updated_at;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_cstation_catalog_resource_items_ai
+    AFTER INSERT ON cstation_catalog
+    BEGIN
+      INSERT OR IGNORE INTO resource_sources (source, name, enabled)
+      VALUES (NEW.source, NEW.source, 1);
+
+      INSERT INTO resource_items (
+        source, source_aid, title, subtitle, category, year, latest_text, detail_fetched_at
+      )
+      VALUES (
+        NEW.source, NEW.id, NEW.name, NEW.subname, NEW.category, NEW.year, NEW.last, NEW.detail_fetched_at
+      )
+      ON CONFLICT(source, source_aid) DO UPDATE SET
+        title = excluded.title,
+        subtitle = excluded.subtitle,
+        category = excluded.category,
+        year = excluded.year,
+        latest_text = COALESCE(excluded.latest_text, resource_items.latest_text),
+        detail_fetched_at = COALESCE(excluded.detail_fetched_at, resource_items.detail_fetched_at),
+        updated_at = datetime('now');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_cstation_catalog_resource_items_au
+    AFTER UPDATE ON cstation_catalog
+    BEGIN
+      INSERT INTO resource_items (
+        source, source_aid, title, subtitle, category, year, latest_text, detail_fetched_at
+      )
+      VALUES (
+        NEW.source, NEW.id, NEW.name, NEW.subname, NEW.category, NEW.year, NEW.last, NEW.detail_fetched_at
+      )
+      ON CONFLICT(source, source_aid) DO UPDATE SET
+        title = excluded.title,
+        subtitle = excluded.subtitle,
+        category = excluded.category,
+        year = excluded.year,
+        latest_text = COALESCE(excluded.latest_text, resource_items.latest_text),
+        detail_fetched_at = COALESCE(excluded.detail_fetched_at, resource_items.detail_fetched_at),
+        updated_at = datetime('now');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_bangumi_cstation_map_resource_mappings_ai
+    AFTER INSERT ON bangumi_cstation_map
+    BEGIN
+      INSERT INTO subjects (
+        bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
+        calendar_weekday, eps, total_episodes, cover_url, has_cover,
+        rating_score, rating_rank, metadata_fetched_at, created_at, updated_at
+      )
+      SELECT
+        id, name, name_cn, summary, platform, air_date, air_weekday,
+        calendar_weekday, eps, total_episodes, cover_url, COALESCE(has_cover, 0),
+        rating_score, rank, detail_fetched_at, created_at, updated_at
+      FROM anime
+      WHERE id = NEW.anime_id
+      ON CONFLICT(bangumi_id) DO UPDATE SET
+        name = excluded.name,
+        name_cn = excluded.name_cn,
+        summary = excluded.summary,
+        platform = excluded.platform,
+        air_date = excluded.air_date,
+        air_weekday = excluded.air_weekday,
+        calendar_weekday = excluded.calendar_weekday,
+        eps = excluded.eps,
+        total_episodes = excluded.total_episodes,
+        cover_url = excluded.cover_url,
+        has_cover = excluded.has_cover,
+        rating_score = excluded.rating_score,
+        rating_rank = excluded.rating_rank,
+        metadata_fetched_at = excluded.metadata_fetched_at,
+        updated_at = excluded.updated_at;
+
+      INSERT OR IGNORE INTO resource_sources (source, name, enabled)
+      VALUES (NEW.source, NEW.source, 1);
+
+      INSERT INTO resource_mappings (
+        bangumi_id, source, source_aid, source_ep_start, source_ep_end,
+        display_ep_offset, score, matched_bg_name, matched_resource_name, matched_at, updated_at
+      )
+      SELECT
+        NEW.anime_id, NEW.source, NEW.cstation_id, NEW.source_ep_start, NEW.source_ep_end,
+        NEW.display_ep_offset, NEW.score, NEW.matched_bg_name, NEW.matched_cs_name, NEW.matched_at,
+        COALESCE(NEW.matched_at, datetime('now'))
+      WHERE EXISTS (SELECT 1 FROM subjects WHERE bangumi_id = NEW.anime_id)
+      ON CONFLICT(bangumi_id, source) DO UPDATE SET
+        source_aid = excluded.source_aid,
+        source_ep_start = excluded.source_ep_start,
+        source_ep_end = excluded.source_ep_end,
+        display_ep_offset = excluded.display_ep_offset,
+        score = excluded.score,
+        matched_bg_name = excluded.matched_bg_name,
+        matched_resource_name = excluded.matched_resource_name,
+        matched_at = excluded.matched_at,
+        updated_at = excluded.updated_at;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_match_retry_state_retry_ai
+    AFTER INSERT ON match_retry_state
+    BEGIN
+      INSERT INTO subjects (bangumi_id, name, name_cn, summary, platform, air_date, air_weekday, calendar_weekday, eps, total_episodes, cover_url, has_cover, rating_score, rating_rank, metadata_fetched_at, created_at, updated_at)
+      SELECT id, name, name_cn, summary, platform, air_date, air_weekday, calendar_weekday, eps, total_episodes, cover_url, COALESCE(has_cover, 0), rating_score, rank, detail_fetched_at, created_at, updated_at
+      FROM anime
+      WHERE id = NEW.anime_id
+      AND true
+      ON CONFLICT(bangumi_id) DO NOTHING;
+
+      INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+      VALUES (NEW.anime_id, NEW.source, 'mapping', NEW.retry_count, NEW.retry_at, NEW.updated_at)
+      ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+        retry_count = excluded.retry_count,
+        retry_at = excluded.retry_at,
+        updated_at = excluded.updated_at;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_match_retry_state_retry_au
+    AFTER UPDATE ON match_retry_state
+    BEGIN
+      INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+      VALUES (NEW.anime_id, NEW.source, 'mapping', NEW.retry_count, NEW.retry_at, NEW.updated_at)
+      ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+        retry_count = excluded.retry_count,
+        retry_at = excluded.retry_at,
+        updated_at = excluded.updated_at;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_manual_match_state_resource_ai
+    AFTER INSERT ON manual_match_state
+    BEGIN
+      INSERT INTO subjects (bangumi_id, name, name_cn, summary, platform, air_date, air_weekday, calendar_weekday, eps, total_episodes, cover_url, has_cover, rating_score, rating_rank, metadata_fetched_at, created_at, updated_at)
+      SELECT id, name, name_cn, summary, platform, air_date, air_weekday, calendar_weekday, eps, total_episodes, cover_url, COALESCE(has_cover, 0), rating_score, rank, detail_fetched_at, created_at, updated_at
+      FROM anime
+      WHERE id = NEW.anime_id
+      AND true
+      ON CONFLICT(bangumi_id) DO NOTHING;
+
+      INSERT INTO manual_resource_state (bangumi_id, source, status, note, updated_at)
+      VALUES (NEW.anime_id, NEW.source, NEW.status, NEW.note, NEW.updated_at)
+      ON CONFLICT(bangumi_id, source) DO UPDATE SET
+        status = excluded.status,
+        note = excluded.note,
+        updated_at = excluded.updated_at;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_manual_match_state_resource_au
+    AFTER UPDATE ON manual_match_state
+    BEGIN
+      INSERT INTO manual_resource_state (bangumi_id, source, status, note, updated_at)
+      VALUES (NEW.anime_id, NEW.source, NEW.status, NEW.note, NEW.updated_at)
+      ON CONFLICT(bangumi_id, source) DO UPDATE SET
+        status = excluded.status,
+        note = excluded.note,
+        updated_at = excluded.updated_at;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_episodes_normalized_ai
+    AFTER INSERT ON episodes
+    BEGIN
+      UPDATE episodes
+      SET bangumi_id = COALESCE(NEW.bangumi_id, NEW.anime_id),
+          source = COALESCE(NEW.source, NEW.source_name)
+      WHERE id = NEW.id;
+    END;
   `);
 }
