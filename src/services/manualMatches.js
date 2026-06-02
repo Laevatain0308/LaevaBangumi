@@ -535,14 +535,69 @@ function deleteMappingArtifacts(animeId, source) {
   db.delete(episodes)
     .where(and(eq(episodes.animeId, animeId), eq(episodes.sourceName, source)))
     .run();
+  sqlite.prepare(`
+    DELETE FROM episodes
+    WHERE bangumi_id = ? AND source = ?
+  `).run(animeId, source);
   db.delete(bangumiCstationMap)
     .where(and(eq(bangumiCstationMap.animeId, animeId), eq(bangumiCstationMap.source, source)))
     .run();
+  sqlite.prepare(`
+    DELETE FROM resource_mappings
+    WHERE bangumi_id = ? AND source = ?
+  `).run(animeId, source);
   clearEpisodeFetchRetryState(animeId, source);
+}
+
+function upsertNormalizedResourceMapping({
+  animeId,
+  source,
+  sourceAid,
+  episodeRange,
+  matchedBgName,
+  matchedResourceName,
+}) {
+  ensureSubjectFromAnime(animeId);
+  sqlite.prepare(`
+    INSERT INTO resource_sources (source, name, enabled)
+    VALUES (?, ?, 1)
+    ON CONFLICT(source) DO UPDATE SET updated_at = datetime('now')
+  `).run(source, source);
+  sqlite.prepare(`
+    INSERT INTO resource_mappings (
+      bangumi_id, source, source_aid, source_ep_start, source_ep_end,
+      display_ep_offset, score, matched_bg_name, matched_resource_name, matched_at, updated_at
+    )
+    VALUES (
+      @animeId, @source, @sourceAid, @sourceEpStart, @sourceEpEnd,
+      @displayEpOffset, null, @matchedBgName, @matchedResourceName, datetime('now'), datetime('now')
+    )
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      source_aid = excluded.source_aid,
+      source_ep_start = excluded.source_ep_start,
+      source_ep_end = excluded.source_ep_end,
+      display_ep_offset = excluded.display_ep_offset,
+      score = excluded.score,
+      matched_bg_name = excluded.matched_bg_name,
+      matched_resource_name = excluded.matched_resource_name,
+      matched_at = excluded.matched_at,
+      updated_at = excluded.updated_at
+  `).run({
+    animeId,
+    source,
+    sourceAid,
+    sourceEpStart: episodeRange.sourceEpStart,
+    sourceEpEnd: episodeRange.sourceEpEnd,
+    displayEpOffset: episodeRange.displayEpOffset,
+    matchedBgName,
+    matchedResourceName,
+  });
 }
 
 function applyManualMapping({ animeRow, source, sourceItem, sourceAid, episodeRange }) {
   deleteMappingArtifacts(animeRow.id, source);
+  const matchedBgName = animeRow.nameCn || animeRow.name;
+  const matchedResourceName = sourceItem.name;
 
   db.insert(bangumiCstationMap)
     .values({
@@ -553,8 +608,8 @@ function applyManualMapping({ animeRow, source, sourceItem, sourceAid, episodeRa
       sourceEpEnd: episodeRange.sourceEpEnd,
       displayEpOffset: episodeRange.displayEpOffset,
       score: null,
-      matchedBgName: animeRow.nameCn || animeRow.name,
-      matchedCsName: sourceItem.name,
+      matchedBgName,
+      matchedCsName: matchedResourceName,
       matchedAt: now(),
     })
     .onConflictDoUpdate({
@@ -565,12 +620,20 @@ function applyManualMapping({ animeRow, source, sourceItem, sourceAid, episodeRa
         sourceEpEnd: episodeRange.sourceEpEnd,
         displayEpOffset: episodeRange.displayEpOffset,
         score: null,
-        matchedBgName: animeRow.nameCn || animeRow.name,
-        matchedCsName: sourceItem.name,
+        matchedBgName,
+        matchedCsName: matchedResourceName,
         matchedAt: now(),
       },
     })
     .run();
+  upsertNormalizedResourceMapping({
+    animeId: animeRow.id,
+    source,
+    sourceAid,
+    episodeRange,
+    matchedBgName,
+    matchedResourceName,
+  });
 
   clearRetryState(animeRow.id, source);
   clearEpisodeFetchRetryState(animeRow.id, source);

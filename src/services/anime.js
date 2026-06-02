@@ -743,6 +743,36 @@ async function upsertMap(animeId, source, cstationId, score, matchedBgName, matc
 }
 
 function getMap(animeId, source) {
+  const normalized = sqlite.prepare(`
+    SELECT
+      bangumi_id,
+      source,
+      source_aid,
+      source_ep_start,
+      source_ep_end,
+      display_ep_offset,
+      score,
+      matched_bg_name,
+      matched_resource_name,
+      matched_at
+    FROM resource_mappings
+    WHERE bangumi_id = ? AND source = ?
+  `).get(animeId, source);
+  if (normalized) {
+    return {
+      animeId: normalized.bangumi_id,
+      source: normalized.source,
+      cstationId: normalized.source_aid,
+      sourceEpStart: normalized.source_ep_start,
+      sourceEpEnd: normalized.source_ep_end,
+      displayEpOffset: normalized.display_ep_offset,
+      score: normalized.score,
+      matchedBgName: normalized.matched_bg_name,
+      matchedCsName: normalized.matched_resource_name,
+      matchedAt: normalized.matched_at,
+    };
+  }
+
   return db.select()
     .from(bangumiCstationMap)
     .where(and(eq(bangumiCstationMap.animeId, animeId), eq(bangumiCstationMap.source, source)))
@@ -750,6 +780,19 @@ function getMap(animeId, source) {
 }
 
 function getAutoExclusiveSourceOwner(source, cstationId, animeId) {
+  const normalizedOwner = sqlite.prepare(`
+    SELECT bangumi_id, source, source_aid
+    FROM resource_mappings
+    WHERE source = ? AND source_aid = ? AND bangumi_id <> ?
+  `).get(source, cstationId, animeId);
+  if (normalizedOwner) {
+    return {
+      animeId: normalizedOwner.bangumi_id,
+      source: normalizedOwner.source,
+      cstationId: normalizedOwner.source_aid,
+    };
+  }
+
   return db.select()
     .from(bangumiCstationMap)
     .where(and(eq(bangumiCstationMap.source, source), eq(bangumiCstationMap.cstationId, cstationId)))

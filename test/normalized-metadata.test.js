@@ -3,31 +3,30 @@ import assert from "node:assert/strict";
 import { initDb, sqlite } from "../src/db/index.js";
 import { upsertAnime } from "../src/services/anime.js";
 
+const METADATA_SUBJECT_ID = 547888;
+
 function resetTables() {
   initDb();
-  sqlite.exec(`
-    DELETE FROM episodes;
-    DELETE FROM resource_mappings;
-    DELETE FROM retry_state;
-    DELETE FROM manual_resource_state;
-    DELETE FROM subject_tags;
-    DELETE FROM tags;
-    DELETE FROM subject_aliases;
-    DELETE FROM subjects;
-    DELETE FROM bangumi_cstation_map;
-    DELETE FROM match_retry_state;
-    DELETE FROM episode_fetch_retry_state;
-    DELETE FROM manual_match_state;
-    DELETE FROM anime;
-    DELETE FROM anime_other;
-  `);
+  sqlite.prepare("DELETE FROM episodes WHERE bangumi_id = ? OR anime_id = ?").run(METADATA_SUBJECT_ID, METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM resource_mappings WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM retry_state WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM manual_resource_state WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM subject_tags WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM subject_aliases WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM subjects WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM bangumi_cstation_map WHERE anime_id = ?").run(METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM match_retry_state WHERE anime_id = ?").run(METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM episode_fetch_retry_state WHERE anime_id = ?").run(METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM manual_match_state WHERE anime_id = ?").run(METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM anime WHERE id = ?").run(METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM anime_other WHERE id = ?").run(METADATA_SUBJECT_ID);
 }
 
 test("upsertAnime persists Bangumi detail metadata into normalized subject tables", async () => {
   resetTables();
 
   await upsertAnime({
-    id: 547888,
+    id: METADATA_SUBJECT_ID,
     type: 2,
     name: "Raw Title",
     name_cn: "中文标题",
@@ -61,7 +60,7 @@ test("upsertAnime persists Bangumi detail metadata into normalized subject table
     ],
   }, 3, { detailFetched: true });
 
-  const subject = sqlite.prepare("SELECT * FROM subjects WHERE bangumi_id = ?").get(547888);
+  const subject = sqlite.prepare("SELECT * FROM subjects WHERE bangumi_id = ?").get(METADATA_SUBJECT_ID);
   assert.equal(subject.id, undefined);
   assert.equal(subject.name, "Raw Title");
   assert.equal(subject.name_cn, "中文标题");
@@ -81,7 +80,7 @@ test("upsertAnime persists Bangumi detail metadata into normalized subject table
 
   const aliases = sqlite
     .prepare("SELECT alias FROM subject_aliases WHERE bangumi_id = ? ORDER BY alias")
-    .all(547888)
+    .all(METADATA_SUBJECT_ID)
     .map((row) => row.alias);
   assert.deepEqual(aliases, ["Alias A", "Alias B"]);
 
@@ -90,6 +89,6 @@ test("upsertAnime persists Bangumi detail metadata into normalized subject table
     FROM subject_tags st
     JOIN tags t ON t.tag_id = st.tag_id
     WHERE st.bangumi_id = ?
-  `).all(547888);
+  `).all(METADATA_SUBJECT_ID);
   assert.deepEqual(tags, [{ name: "原创", count: 10, total_count: 20 }]);
 });
