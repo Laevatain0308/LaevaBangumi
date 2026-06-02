@@ -1,5 +1,5 @@
 import { eq, and, like, or, sql, isNotNull, notInArray } from "drizzle-orm";
-import { db } from "../db/index.js";
+import { db, sqlite } from "../db/index.js";
 import {
   anime,
   episodes,
@@ -1171,7 +1171,196 @@ function clearStaleCalendarEntries(activeAnimeIds) {
   return result.changes ?? 0;
 }
 
+function formatSubjectSearchRow(row) {
+  return {
+    id: row.bangumi_id,
+    title: row.name_cn || row.name,
+    coverUrl: proxyCover(row.bangumi_id, row.cover_url, row.has_cover),
+  };
+}
+
+function searchSubjectsByKeyword(keyword) {
+  if (!keyword) return [];
+  return sqlite.prepare(`
+    SELECT DISTINCT s.bangumi_id, s.name, s.name_cn, s.cover_url, s.has_cover
+    FROM subjects s
+    LEFT JOIN subject_aliases a ON a.bangumi_id = s.bangumi_id
+    WHERE s.name LIKE @q OR s.name_cn LIKE @q OR a.alias LIKE @q
+    ORDER BY s.updated_at DESC
+    LIMIT 60
+  `).all({ q: `%${keyword}%` });
+}
+
+function searchSubjectsByTag(tag) {
+  if (!tag) return [];
+  return sqlite.prepare(`
+    SELECT DISTINCT s.bangumi_id, s.name, s.name_cn, s.cover_url, s.has_cover
+    FROM subjects s
+    JOIN subject_tags st ON st.bangumi_id = s.bangumi_id
+    JOIN tags t ON t.tag_id = st.tag_id
+    WHERE t.name = @tag
+    ORDER BY st.count DESC, s.updated_at DESC
+    LIMIT 60
+  `).all({ tag });
+}
+
+function subjectTagsFor(id) {
+  return sqlite.prepare(`
+    SELECT t.name, st.count, st.total_count
+    FROM subject_tags st
+    JOIN tags t ON t.tag_id = st.tag_id
+    WHERE st.bangumi_id = ?
+    ORDER BY st.count DESC, t.name ASC
+  `).all(id).map((row) => ({
+    name: row.name,
+    count: row.count,
+    totalCount: row.total_count,
+  }));
+}
+
+function subjectAliasesFor(id) {
+  return sqlite.prepare(`
+    SELECT alias FROM subject_aliases
+    WHERE bangumi_id = ?
+    ORDER BY alias ASC
+  `).all(id).map((row) => row.alias);
+}
+
+function parseVotesCount(value) {
+  const parsed = safeJson(value, []);
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+function normalizedSourceStatuses(id) {
+  const rows = sqlite.prepare(`
+    SELECT
+      rs.source,
+      rs.name,
+      rm.source_aid,
+      EXISTS (
+        SELECT 1 FROM episodes e
+        WHERE e.bangumi_id = rm.bangumi_id
+          AND e.source = rm.source
+          AND e.source_aid = rm.source_aid
+      ) AS has_episodes
+    FROM resource_mappings rm
+    JOIN resource_sources rs ON rs.source = rm.source
+    WHERE rm.bangumi_id = ? AND rs.enabled = 1
+    ORDER BY rs.source ASC, rm.source_aid ASC
+  `).all(id);
+
+  return rows.map((row) => ({
+    source: row.source,
+    name: row.name,
+    status: row.has_episodes ? "ready" : "fetching",
+    sourceAid: row.source_aid,
+    note: null,
+  }));
+}
+
+function collectNormalizedEpisodeChannels(id) {
+  const rows = sqlite.prepare(`
+    SELECT
+      e.source,
+      e.source_aid,
+      e.ep_index,
+      e.source_ep_index,
+      e.ep_name,
+      e.updated_at,
+      rs.name AS source_name,
+      ri.title AS resource_title
+    FROM episodes e
+    JOIN resource_mappings rm
+      ON rm.bangumi_id = e.bangumi_id
+      AND rm.source = e.source
+      AND rm.source_aid = e.source_aid
+    LEFT JOIN resource_sources rs ON rs.source = e.source
+    LEFT JOIN resource_items ri ON ri.source = e.source AND ri.source_aid = e.source_aid
+    WHERE e.bangumi_id = ?
+    ORDER BY e.source ASC, e.source_aid ASC, e.ep_index ASC
+  `).all(id);
+
+  const channels = new Map();
+  for (const row of rows) {
+    const key = `${row.source}:${row.source_aid}`;
+    if (!channels.has(key)) {
+      channels.set(key, {
+        id: key,
+        name: row.source_name || row.source,
+        source: row.source,
+        sourceAid: row.source_aid,
+        resourceTitle: row.resource_title,
+        episodes: [],
+      });
+    }
+    channels.get(key).episodes.push({
+      index: row.ep_index,
+      sourceIndex: row.source_ep_index,
+      name: row.ep_name,
+      playUrl: `/anime/api/play?id=${id}&ch=${channels.size}&ep=${row.ep_index}`,
+      updatedAt: row.updated_at,
+    });
+  }
+
+  return [...channels.values()];
+}
+
+function getNormalizedAnimeDetail(id) {
+  const subject = sqlite.prepare("SELECT * FROM subjects WHERE bangumi_id = ?").get(id);
+  if (!subject) return null;
+  const channels = collectNormalizedEpisodeChannels(id);
+  const sourceStatuses = normalizedSourceStatuses(id);
+  return {
+    data: {
+      id: subject.bangumi_id,
+      title: subject.name_cn || subject.name,
+      name: subject.name,
+      nameCn: subject.name_cn,
+      summary: displaySummary(subject.summary),
+      coverUrl: proxyCover(subject.bangumi_id, subject.cover_url, subject.has_cover),
+      airDate: subject.air_date,
+      airWeekday: subject.air_weekday,
+      platform: subject.platform,
+      eps: subject.eps,
+      totalEpisodes: subject.total_episodes,
+      ratingScore: subject.rating_score,
+      rank: subject.rating_rank,
+      votes: subject.rating_total,
+      votesCount: parseVotesCount(subject.rating_distribution_json),
+      tags: subjectTagsFor(id),
+      aliases: subjectAliasesFor(id),
+      channels,
+    },
+    freshness: isFresh(subject.metadata_fetched_at, DETAIL_FRESH_MS) ? "cache" : "stale",
+    resourceStatus: aggregateResourceStatus(sourceStatuses),
+    resourceSources: sourceStatuses,
+  };
+}
+
+function getNormalizedPlayUrl(id, ch, ep) {
+  const channels = collectNormalizedEpisodeChannels(id);
+  const channel = channels[ch - 1];
+  if (!channel) return null;
+  const episode = channel.episodes.find((row) => row.index === ep);
+  if (!episode) return null;
+  const row = sqlite.prepare(`
+    SELECT video_url FROM episodes
+    WHERE bangumi_id = @id AND source = @source AND source_aid = @sourceAid AND ep_index = @ep
+  `).get({ id, source: channel.source, sourceAid: channel.sourceAid, ep });
+  if (!row) return null;
+  return { videoUrl: row.video_url, directPlay: false, headers: {}, expiresAt: null };
+}
+
 export async function searchAnime(keyword) {
+  if (keyword && typeof keyword === "object") {
+    if (keyword.tag) return searchAnimeByTag(keyword.tag);
+    keyword = keyword.q || "";
+  }
+  const normalized = searchSubjectsByKeyword(keyword);
+  if (normalized.length > 0) {
+    return { data: normalized.map(formatSubjectSearchRow), freshness: "cache" };
+  }
+
   const q = `%${keyword}%`;
   const local = db.select()
     .from(anime)
@@ -1188,6 +1377,13 @@ export async function searchAnime(keyword) {
       title: a.nameCn || a.name,
       coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover),
     })),
+    freshness: "cache",
+  };
+}
+
+export async function searchAnimeByTag(tag) {
+  return {
+    data: searchSubjectsByTag(tag).map(formatSubjectSearchRow),
     freshness: "cache",
   };
 }
@@ -1238,6 +1434,9 @@ export async function enrichFromBangumiSearch(keyword) {
 }
 
 export async function getAnimeDetail(id) {
+  const normalized = getNormalizedAnimeDetail(id);
+  if (normalized) return normalized;
+
   let a = db.select().from(anime).where(eq(anime.id, id)).get();
 
   if (!a) {
@@ -1398,6 +1597,9 @@ function formatAnimeDetail(a, fresh, mappedRows = null) {
 }
 
 export async function getPlayUrl(id, ch, ep) {
+  const normalized = getNormalizedPlayUrl(id, ch, ep);
+  if (normalized) return normalized;
+
   const enabledSources = enabledSourceSet();
   const mappedRows = db.select()
     .from(bangumiCstationMap)
@@ -1415,7 +1617,7 @@ export async function getPlayUrl(id, ch, ep) {
   const epList = channels[chIdx].episodes.filter((e) => e.epIndex === ep);
   if (epList.length === 0) return null;
 
-  return { videoURL: epList[0].videoUrl, directPlay: false };
+  return { videoUrl: epList[0].videoUrl, directPlay: false, headers: {}, expiresAt: null };
 }
 
 export async function getCalendarView() {

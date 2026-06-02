@@ -48,14 +48,18 @@ export function createServer() {
 
   // ── /api/search ────────────────────────────────────────
   app.get("/api/search", async (req, res) => {
-    const q = req.query.q;
-    if (!q || q.length < 2) {
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const tag = typeof req.query.tag === "string" ? req.query.tag.trim() : "";
+    if (q && tag) {
+      return res.status(400).json({ data: [], updatedAt: ts(), meta: { total: 0, warnings: ["q 和 tag 不能同时使用"] } });
+    }
+    if (!tag && (!q || q.length < 2)) {
       return res.status(400).json({ data: [], updatedAt: ts(), meta: { total: 0, warnings: ["关键词至少需要 2 个字符"] } });
     }
     try {
-      log("api", "search requested", { q });
-      const result = await animeService.searchAnime(q);
-      enqueueSearch(q);
+      log("api", "search requested", tag ? { tag } : { q });
+      const result = tag ? await animeService.searchAnimeByTag(tag) : await animeService.searchAnime(q);
+      if (q) enqueueSearch(q);
       res.json({ data: result.data, updatedAt: ts(), meta: { freshness: result.freshness, total: result.data.length } });
     } catch (err) {
       error("api", "/api/search error", err);
@@ -134,12 +138,13 @@ export function createServer() {
   // ── /api/heartbeat ─────────────────────────────────────
   const visitors = new Map();
   const HEARTBEAT_TTL = 5 * 60 * 1000;
-  setInterval(() => {
+  const heartbeatCleanup = setInterval(() => {
     const cutoff = Date.now() - HEARTBEAT_TTL;
     for (const [k, v] of visitors) {
       if (v.lastSeen < cutoff) visitors.delete(k);
     }
   }, 60_000);
+  heartbeatCleanup.unref?.();
 
   app.get("/api/heartbeat", (req, res) => {
     const { visitorId, page } = req.query;
