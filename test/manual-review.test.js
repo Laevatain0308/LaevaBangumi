@@ -1287,7 +1287,7 @@ test("refreshEpisodesForAnime filters source episodes and stores display indexes
   assert.equal(rows[0].videoUrl, "https://example.invalid/1156.m3u8");
 
   const play = await getPlayUrl(RANGE_ANIME_ID, 1, 1);
-  assert.equal(play.videoURL, "https://example.invalid/1156.m3u8");
+  assert.equal(play.videoUrl, "https://example.invalid/1156.m3u8");
 });
 
 test("refreshEpisodesForAnime records catalog last on manually created mappings", async () => {
@@ -1457,7 +1457,7 @@ test("getPlayUrl ignores stale episodes from previous source ids", async () => {
 
   const result = await getPlayUrl(ANIME_ID, 1, 1);
 
-  assert.equal(result.videoURL, "https://example.invalid/current-source.m3u8");
+  assert.equal(result.videoUrl, "https://example.invalid/current-source.m3u8");
 });
 
 test("getPlayUrl returns null when episodes exist without a current mapping", async () => {
