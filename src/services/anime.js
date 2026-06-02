@@ -28,6 +28,13 @@ import {
   formatDetailEpisodeDto,
   formatPlayDto,
 } from "../dto/resourceDto.js";
+import {
+  findSubjectById,
+  listSubjectAliases,
+  listSubjectTags,
+  searchSubjectsByKeyword,
+  searchSubjectsByTag,
+} from "../repositories/subjectRepository.js";
 import { debug, log, warn, error } from "../lib/logger.js";
 
 const DETAIL_FRESH_MS = 12 * 60 * 60 * 1000;
@@ -1613,53 +1620,6 @@ function formatSubjectSearchRow(row) {
   });
 }
 
-function searchSubjectsByKeyword(keyword) {
-  if (!keyword) return [];
-  return sqlite.prepare(`
-    SELECT DISTINCT s.bangumi_id, s.name, s.name_cn, s.cover_url, s.has_cover
-    FROM subjects s
-    LEFT JOIN subject_aliases a ON a.bangumi_id = s.bangumi_id
-    WHERE s.name LIKE @q OR s.name_cn LIKE @q OR a.alias LIKE @q
-    ORDER BY s.updated_at DESC
-    LIMIT 60
-  `).all({ q: `%${keyword}%` });
-}
-
-function searchSubjectsByTag(tag) {
-  if (!tag) return [];
-  return sqlite.prepare(`
-    SELECT DISTINCT s.bangumi_id, s.name, s.name_cn, s.cover_url, s.has_cover
-    FROM subjects s
-    JOIN subject_tags st ON st.bangumi_id = s.bangumi_id
-    JOIN tags t ON t.tag_id = st.tag_id
-    WHERE t.name = @tag
-    ORDER BY st.count DESC, s.updated_at DESC
-    LIMIT 60
-  `).all({ tag });
-}
-
-function subjectTagsFor(id) {
-  return sqlite.prepare(`
-    SELECT t.name, st.count, st.total_count
-    FROM subject_tags st
-    JOIN tags t ON t.tag_id = st.tag_id
-    WHERE st.bangumi_id = ?
-    ORDER BY st.count DESC, t.name ASC
-  `).all(id).map((row) => ({
-    name: row.name,
-    count: row.count,
-    totalCount: row.total_count,
-  }));
-}
-
-function subjectAliasesFor(id) {
-  return sqlite.prepare(`
-    SELECT alias FROM subject_aliases
-    WHERE bangumi_id = ?
-    ORDER BY alias ASC
-  `).all(id).map((row) => row.alias);
-}
-
 function normalizedSourceStatuses(id) {
   const mappings = sqlite.prepare(`
     SELECT
@@ -1773,7 +1733,7 @@ function collectNormalizedEpisodeChannels(id) {
 }
 
 function getNormalizedAnimeDetail(id) {
-  const subject = sqlite.prepare("SELECT * FROM subjects WHERE bangumi_id = ?").get(id);
+  const subject = findSubjectById(id);
   if (!subject) return null;
   const channels = collectNormalizedEpisodeChannels(id);
   const sourceStatuses = normalizedSourceStatuses(id);
@@ -1781,8 +1741,8 @@ function getNormalizedAnimeDetail(id) {
     data: formatSubjectDetailDto({
       subject,
       coverUrl: proxyCover(subject.bangumi_id, subject.cover_url, subject.has_cover),
-      tags: subjectTagsFor(id),
-      aliases: subjectAliasesFor(id),
+      tags: listSubjectTags(id),
+      aliases: listSubjectAliases(id),
       channels,
     }),
     freshness: isFresh(subject.metadata_fetched_at, DETAIL_FRESH_MS) ? "cache" : "stale",
