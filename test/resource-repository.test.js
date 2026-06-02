@@ -12,6 +12,7 @@ import {
   listResourceMappingsWithEpisodePresenceForSubject,
   listRetryStateForSubject,
   upsertManualResourceState,
+  upsertResourceItem,
   upsertResourceMapping,
   upsertRetryState,
 } from "../src/repositories/resourceRepository.js";
@@ -247,4 +248,49 @@ test("resource repository upserts and deletes resource mappings", () => {
 
   deleteResourceMapping({ bangumiId: id, source: RESOURCE_SOURCE });
   assert.deepEqual(listResourceMappingsWithEpisodePresenceForSubject(id), []);
+});
+
+test("resource repository upserts resource items without erasing existing optional fields", () => {
+  initDb();
+  const source = `${RESOURCE_SOURCE}_items`;
+  const sourceAid = RESOURCE_AID + 2;
+  sqlite.prepare("DELETE FROM resource_items WHERE source = ?").run(source);
+  sqlite.prepare("DELETE FROM resource_sources WHERE source = ?").run(source);
+
+  upsertResourceItem({
+    source,
+    sourceAid,
+    title: "目录标题",
+    subtitle: "副标题",
+    category: "TV",
+    year: "2026",
+    latestText: "第01集",
+    detailFetchedAt: "2026-06-03 01:00:00",
+  });
+
+  upsertResourceItem({
+    source,
+    sourceAid,
+    title: "详情标题",
+    subtitle: null,
+    category: null,
+    year: null,
+    latestText: null,
+    detailFetchedAt: "2026-06-03 02:00:00",
+  });
+
+  const item = sqlite.prepare(`
+    SELECT * FROM resource_items
+    WHERE source = ? AND source_aid = ?
+  `).get(source, sourceAid);
+  assert.equal(item.title, "详情标题");
+  assert.equal(item.subtitle, "副标题");
+  assert.equal(item.category, "TV");
+  assert.equal(item.year, "2026");
+  assert.equal(item.latest_text, "第01集");
+  assert.equal(item.detail_fetched_at, "2026-06-03 02:00:00");
+
+  const sourceRow = sqlite.prepare("SELECT * FROM resource_sources WHERE source = ?").get(source);
+  assert.equal(sourceRow.name, source);
+  assert.equal(sourceRow.enabled, 1);
 });

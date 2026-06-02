@@ -95,6 +95,52 @@ export function findEpisodeVideoUrl({ bangumiId, source, sourceAid, epIndex }) {
   `).get({ bangumiId, source, sourceAid, epIndex });
 }
 
+export function upsertResourceItem({
+  source,
+  sourceAid,
+  title,
+  subtitle = null,
+  category = null,
+  year = null,
+  latestText = null,
+  detailFetchedAt = null,
+}) {
+  if (!source) throw new Error("resource item write requires source");
+  if (sourceAid == null) throw new Error("resource item write requires sourceAid");
+  if (!title) throw new Error("resource item write requires title");
+
+  sqlite.transaction(() => {
+    ensureResourceSource({ source });
+    sqlite.prepare(`
+      INSERT INTO resource_items (
+        source, source_aid, title, subtitle, category, year,
+        latest_text, detail_fetched_at, updated_at
+      )
+      VALUES (
+        @source, @sourceAid, @title, @subtitle, @category, @year,
+        @latestText, @detailFetchedAt, datetime('now')
+      )
+      ON CONFLICT(source, source_aid) DO UPDATE SET
+        title = excluded.title,
+        subtitle = COALESCE(excluded.subtitle, resource_items.subtitle),
+        category = COALESCE(excluded.category, resource_items.category),
+        year = COALESCE(excluded.year, resource_items.year),
+        latest_text = COALESCE(excluded.latest_text, resource_items.latest_text),
+        detail_fetched_at = COALESCE(excluded.detail_fetched_at, resource_items.detail_fetched_at),
+        updated_at = excluded.updated_at
+    `).run({
+      source,
+      sourceAid,
+      title,
+      subtitle,
+      category,
+      year,
+      latestText,
+      detailFetchedAt,
+    });
+  })();
+}
+
 export function upsertResourceMapping({
   bangumiId,
   source,

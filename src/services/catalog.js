@@ -3,6 +3,7 @@ import { db, sqlite } from "../db/index.js";
 import { cstationCatalog, sourceSyncState } from "../db/schema.js";
 import * as cstation from "./cstation.js";
 import { log, error } from "../lib/logger.js";
+import { upsertResourceItem } from "../repositories/resourceRepository.js";
 
 function now() {
   return new Date().toISOString().replace("T", " ").slice(0, 19);
@@ -39,29 +40,7 @@ export async function saveCatalog(catalog, { source } = {}) {
           set,
         })
         .run();
-      sqlite.prepare(`
-        INSERT INTO resource_sources (source, name, enabled)
-        VALUES (?, ?, 1)
-        ON CONFLICT(source) DO UPDATE SET updated_at = datetime('now')
-      `).run(source, source);
-      sqlite.prepare(`
-        INSERT INTO resource_items (
-          source, source_aid, title, subtitle, category, year,
-          latest_text, detail_fetched_at, updated_at
-        )
-        VALUES (
-          @source, @sourceAid, @title, @subtitle, @category, @year,
-          @latestText, @detailFetchedAt, datetime('now')
-        )
-        ON CONFLICT(source, source_aid) DO UPDATE SET
-          title = excluded.title,
-          subtitle = COALESCE(excluded.subtitle, resource_items.subtitle),
-          category = COALESCE(excluded.category, resource_items.category),
-          year = COALESCE(excluded.year, resource_items.year),
-          latest_text = COALESCE(excluded.latest_text, resource_items.latest_text),
-          detail_fetched_at = COALESCE(excluded.detail_fetched_at, resource_items.detail_fetched_at),
-          updated_at = excluded.updated_at
-      `).run({
+      upsertResourceItem({
         source,
         sourceAid: item.id,
         title: item.name,
