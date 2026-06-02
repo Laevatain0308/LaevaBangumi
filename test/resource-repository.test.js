@@ -2,14 +2,20 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { initDb, sqlite } from "../src/db/index.js";
 import {
+  deleteManualResourceState,
+  deleteManualResourceStateByStatus,
+  deleteRetryState,
   findEpisodeVideoUrl,
   listEpisodeChannelRowsForSubject,
   listManualResourceStatesForSubject,
   listResourceMappingsWithEpisodePresenceForSubject,
   listRetryStateForSubject,
+  upsertManualResourceState,
+  upsertRetryState,
 } from "../src/repositories/resourceRepository.js";
 
 const RESOURCE_SUBJECT_ID = 990547891;
+const RESOURCE_STATE_SUBJECT_ID = 990547892;
 const RESOURCE_SOURCE = "repo_source";
 const RESOURCE_AID = 777001;
 
@@ -77,4 +83,95 @@ test("resource repository reads normalized retry and manual state rows", () => {
     status: "wait_airing",
     note: "等待开播",
   }]);
+});
+
+test("resource repository writes retry and manual state rows", () => {
+  initDb();
+  sqlite.exec(`
+    DELETE FROM manual_resource_state WHERE bangumi_id = ${RESOURCE_STATE_SUBJECT_ID};
+    DELETE FROM retry_state WHERE bangumi_id = ${RESOURCE_STATE_SUBJECT_ID};
+    DELETE FROM subjects WHERE bangumi_id = ${RESOURCE_STATE_SUBJECT_ID};
+    INSERT INTO subjects (bangumi_id, name, rating_distribution_json)
+      VALUES (${RESOURCE_STATE_SUBJECT_ID}, 'Resource state raw', '[]');
+  `);
+
+  upsertRetryState({
+    bangumiId: RESOURCE_STATE_SUBJECT_ID,
+    source: RESOURCE_SOURCE,
+    kind: "mapping",
+    retryCount: 3,
+    retryAt: "2026-06-03 01:00:00",
+  });
+  upsertRetryState({
+    bangumiId: RESOURCE_STATE_SUBJECT_ID,
+    source: RESOURCE_SOURCE,
+    kind: "episode_fetch",
+    retryCount: 2,
+    retryAt: "2026-06-03 02:00:00",
+  });
+
+  assert.deepEqual(listRetryStateForSubject(RESOURCE_STATE_SUBJECT_ID, "mapping"), [{
+    source: RESOURCE_SOURCE,
+    retry_count: 3,
+    retry_at: "2026-06-03 01:00:00",
+  }]);
+  assert.deepEqual(listRetryStateForSubject(RESOURCE_STATE_SUBJECT_ID, "episode_fetch"), [{
+    source: RESOURCE_SOURCE,
+    retry_count: 2,
+    retry_at: "2026-06-03 02:00:00",
+  }]);
+
+  upsertRetryState({
+    bangumiId: RESOURCE_STATE_SUBJECT_ID,
+    source: RESOURCE_SOURCE,
+    kind: "mapping",
+    retryCount: 0,
+    retryAt: null,
+  });
+  assert.equal(listRetryStateForSubject(RESOURCE_STATE_SUBJECT_ID, "mapping")[0].retry_count, 0);
+  assert.equal(listRetryStateForSubject(RESOURCE_STATE_SUBJECT_ID, "mapping")[0].retry_at, null);
+
+  deleteRetryState({
+    bangumiId: RESOURCE_STATE_SUBJECT_ID,
+    source: RESOURCE_SOURCE,
+    kind: "episode_fetch",
+  });
+  assert.deepEqual(listRetryStateForSubject(RESOURCE_STATE_SUBJECT_ID, "episode_fetch"), []);
+
+  upsertManualResourceState({
+    bangumiId: RESOURCE_STATE_SUBJECT_ID,
+    source: RESOURCE_SOURCE,
+    status: "wait_airing",
+    note: "等待开播",
+  });
+  assert.deepEqual(listManualResourceStatesForSubject(RESOURCE_STATE_SUBJECT_ID), [{
+    source: RESOURCE_SOURCE,
+    status: "wait_airing",
+    note: "等待开播",
+  }]);
+
+  deleteManualResourceStateByStatus({
+    bangumiId: RESOURCE_STATE_SUBJECT_ID,
+    source: RESOURCE_SOURCE,
+    status: "no_resource",
+  });
+  assert.equal(listManualResourceStatesForSubject(RESOURCE_STATE_SUBJECT_ID).length, 1);
+
+  upsertManualResourceState({
+    bangumiId: RESOURCE_STATE_SUBJECT_ID,
+    source: RESOURCE_SOURCE,
+    status: "no_resource",
+    note: "暂无资源",
+  });
+  assert.deepEqual(listManualResourceStatesForSubject(RESOURCE_STATE_SUBJECT_ID), [{
+    source: RESOURCE_SOURCE,
+    status: "no_resource",
+    note: "暂无资源",
+  }]);
+
+  deleteManualResourceState({
+    bangumiId: RESOURCE_STATE_SUBJECT_ID,
+    source: RESOURCE_SOURCE,
+  });
+  assert.deepEqual(listManualResourceStatesForSubject(RESOURCE_STATE_SUBJECT_ID), []);
 });

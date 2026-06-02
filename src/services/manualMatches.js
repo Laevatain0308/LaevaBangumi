@@ -7,6 +7,12 @@ import { refreshEpisodesForAnime } from "./anime.js";
 import { getEnabledSources } from "../lib/cstationConfig.js";
 import { collectBangumiTitles } from "../lib/matcher.js";
 import { log } from "../lib/logger.js";
+import {
+  deleteManualResourceState,
+  deleteRetryState,
+  upsertManualResourceState,
+  upsertRetryState,
+} from "../repositories/resourceRepository.js";
 
 export const DEFAULT_REVIEW_PATH = "data/manual/manual_review.csv";
 export const DEFAULT_MAPPED_REVIEW_PATH = "data/manual/mapped_review.csv";
@@ -587,24 +593,14 @@ function clearRetryState(animeId, source) {
     })
     .run();
   ensureSubjectFromAnime(animeId);
-  sqlite.prepare(`
-    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
-    VALUES (?, ?, 'mapping', 0, null, datetime('now'))
-    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
-      retry_count = excluded.retry_count,
-      retry_at = excluded.retry_at,
-      updated_at = excluded.updated_at
-  `).run(animeId, source);
+  upsertRetryState({ bangumiId: animeId, source, kind: "mapping", retryCount: 0, retryAt: null });
 }
 
 function clearEpisodeFetchRetryState(animeId, source) {
   db.delete(episodeFetchRetryState)
     .where(and(eq(episodeFetchRetryState.animeId, animeId), eq(episodeFetchRetryState.source, source)))
     .run();
-  sqlite.prepare(`
-    DELETE FROM retry_state
-    WHERE bangumi_id = ? AND source = ? AND kind = 'episode_fetch'
-  `).run(animeId, source);
+  deleteRetryState({ bangumiId: animeId, source, kind: "episode_fetch" });
 }
 
 function blockAutoRetry(animeId, source) {
@@ -616,24 +612,14 @@ function blockAutoRetry(animeId, source) {
     })
     .run();
   ensureSubjectFromAnime(animeId);
-  sqlite.prepare(`
-    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
-    VALUES (?, ?, 'mapping', ?, null, datetime('now'))
-    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
-      retry_count = excluded.retry_count,
-      retry_at = excluded.retry_at,
-      updated_at = excluded.updated_at
-  `).run(animeId, source, MAX_RETRIES);
+  upsertRetryState({ bangumiId: animeId, source, kind: "mapping", retryCount: MAX_RETRIES, retryAt: null });
 }
 
 function clearManualMatchState(animeId, source) {
   db.delete(manualMatchState)
     .where(and(eq(manualMatchState.animeId, animeId), eq(manualMatchState.source, source)))
     .run();
-  sqlite.prepare(`
-    DELETE FROM manual_resource_state
-    WHERE bangumi_id = ? AND source = ?
-  `).run(animeId, source);
+  deleteManualResourceState({ bangumiId: animeId, source });
 }
 
 function markWaitAiring(animeId, source, note) {
@@ -645,14 +631,7 @@ function markWaitAiring(animeId, source, note) {
     })
     .run();
   ensureSubjectFromAnime(animeId);
-  sqlite.prepare(`
-    INSERT INTO manual_resource_state (bangumi_id, source, status, note, updated_at)
-    VALUES (?, ?, 'wait_airing', ?, datetime('now'))
-    ON CONFLICT(bangumi_id, source) DO UPDATE SET
-      status = excluded.status,
-      note = excluded.note,
-      updated_at = excluded.updated_at
-  `).run(animeId, source, note);
+  upsertManualResourceState({ bangumiId: animeId, source, status: "wait_airing", note });
   clearRetryState(animeId, source);
   clearEpisodeFetchRetryState(animeId, source);
 }
@@ -666,14 +645,7 @@ function markNoResource(animeId, source, note) {
     })
     .run();
   ensureSubjectFromAnime(animeId);
-  sqlite.prepare(`
-    INSERT INTO manual_resource_state (bangumi_id, source, status, note, updated_at)
-    VALUES (?, ?, 'no_resource', ?, datetime('now'))
-    ON CONFLICT(bangumi_id, source) DO UPDATE SET
-      status = excluded.status,
-      note = excluded.note,
-      updated_at = excluded.updated_at
-  `).run(animeId, source, note);
+  upsertManualResourceState({ bangumiId: animeId, source, status: "no_resource", note });
   blockAutoRetry(animeId, source);
   clearEpisodeFetchRetryState(animeId, source);
 }

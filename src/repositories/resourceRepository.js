@@ -1,5 +1,10 @@
 import { sqlite } from "../db/index.js";
 
+function assertResourceStateKey({ bangumiId, source }) {
+  if (!bangumiId) throw new Error("resource state write requires bangumiId");
+  if (!source) throw new Error("resource state write requires source");
+}
+
 export function listResourceMappingsWithEpisodePresenceForSubject(bangumiId) {
   return sqlite.prepare(`
     SELECT
@@ -63,4 +68,61 @@ export function findEpisodeVideoUrl({ bangumiId, source, sourceAid, epIndex }) {
       AND source_aid = @sourceAid
       AND ep_index = @epIndex
   `).get({ bangumiId, source, sourceAid, epIndex });
+}
+
+export function upsertRetryState({ bangumiId, source, kind, retryCount, retryAt = null }) {
+  assertResourceStateKey({ bangumiId, source });
+  if (!kind) throw new Error("retry state write requires kind");
+
+  sqlite.prepare(`
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    VALUES (@bangumiId, @source, @kind, @retryCount, @retryAt, datetime('now'))
+    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+      retry_count = excluded.retry_count,
+      retry_at = excluded.retry_at,
+      updated_at = excluded.updated_at
+  `).run({ bangumiId, source, kind, retryCount, retryAt });
+}
+
+export function deleteRetryState({ bangumiId, source, kind }) {
+  assertResourceStateKey({ bangumiId, source });
+  if (!kind) throw new Error("retry state delete requires kind");
+
+  sqlite.prepare(`
+    DELETE FROM retry_state
+    WHERE bangumi_id = @bangumiId AND source = @source AND kind = @kind
+  `).run({ bangumiId, source, kind });
+}
+
+export function upsertManualResourceState({ bangumiId, source, status, note = null }) {
+  assertResourceStateKey({ bangumiId, source });
+  if (!status) throw new Error("manual resource state write requires status");
+
+  sqlite.prepare(`
+    INSERT INTO manual_resource_state (bangumi_id, source, status, note, updated_at)
+    VALUES (@bangumiId, @source, @status, @note, datetime('now'))
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      status = excluded.status,
+      note = excluded.note,
+      updated_at = excluded.updated_at
+  `).run({ bangumiId, source, status, note });
+}
+
+export function deleteManualResourceState({ bangumiId, source }) {
+  assertResourceStateKey({ bangumiId, source });
+
+  sqlite.prepare(`
+    DELETE FROM manual_resource_state
+    WHERE bangumi_id = @bangumiId AND source = @source
+  `).run({ bangumiId, source });
+}
+
+export function deleteManualResourceStateByStatus({ bangumiId, source, status }) {
+  assertResourceStateKey({ bangumiId, source });
+  if (!status) throw new Error("manual resource state delete requires status");
+
+  sqlite.prepare(`
+    DELETE FROM manual_resource_state
+    WHERE bangumi_id = @bangumiId AND source = @source AND status = @status
+  `).run({ bangumiId, source, status });
 }
