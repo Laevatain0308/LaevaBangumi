@@ -5,6 +5,31 @@ function assertResourceStateKey({ bangumiId, source }) {
   if (!source) throw new Error("resource state write requires source");
 }
 
+function ensureResourceSource({ source, name = null, enabled = 1 }) {
+  if (!source) throw new Error("resource source write requires source");
+
+  sqlite.prepare(`
+    INSERT INTO resource_sources (source, name, enabled)
+    VALUES (@source, @name, @enabled)
+    ON CONFLICT(source) DO NOTHING
+  `).run({ source, name: name ?? source, enabled });
+
+  if (name == null) {
+    sqlite.prepare(`
+      UPDATE resource_sources
+      SET updated_at = datetime('now')
+      WHERE source = ?
+    `).run(source);
+    return;
+  }
+
+  sqlite.prepare(`
+    UPDATE resource_sources
+    SET name = @name, enabled = @enabled, updated_at = datetime('now')
+    WHERE source = @source
+  `).run({ source, name, enabled });
+}
+
 export function listResourceMappingsWithEpisodePresenceForSubject(bangumiId) {
   return sqlite.prepare(`
     SELECT
@@ -68,6 +93,67 @@ export function findEpisodeVideoUrl({ bangumiId, source, sourceAid, epIndex }) {
       AND source_aid = @sourceAid
       AND ep_index = @epIndex
   `).get({ bangumiId, source, sourceAid, epIndex });
+}
+
+export function upsertResourceMapping({
+  bangumiId,
+  source,
+  sourceAid,
+  sourceEpStart = null,
+  sourceEpEnd = null,
+  displayEpOffset = 0,
+  score = null,
+  matchedBgName = null,
+  matchedResourceName = null,
+  matchedAt = null,
+}) {
+  assertResourceStateKey({ bangumiId, source });
+  if (sourceAid == null) throw new Error("resource mapping write requires sourceAid");
+
+  sqlite.transaction(() => {
+    ensureResourceSource({ source });
+    sqlite.prepare(`
+      INSERT INTO resource_mappings (
+        bangumi_id, source, source_aid, source_ep_start, source_ep_end,
+        display_ep_offset, score, matched_bg_name, matched_resource_name, matched_at, updated_at
+      )
+      VALUES (
+        @bangumiId, @source, @sourceAid, @sourceEpStart, @sourceEpEnd,
+        @displayEpOffset, @score, @matchedBgName, @matchedResourceName,
+        COALESCE(@matchedAt, datetime('now')), datetime('now')
+      )
+      ON CONFLICT(bangumi_id, source) DO UPDATE SET
+        source_aid = excluded.source_aid,
+        source_ep_start = excluded.source_ep_start,
+        source_ep_end = excluded.source_ep_end,
+        display_ep_offset = excluded.display_ep_offset,
+        score = excluded.score,
+        matched_bg_name = excluded.matched_bg_name,
+        matched_resource_name = excluded.matched_resource_name,
+        matched_at = excluded.matched_at,
+        updated_at = excluded.updated_at
+    `).run({
+      bangumiId,
+      source,
+      sourceAid,
+      sourceEpStart,
+      sourceEpEnd,
+      displayEpOffset,
+      score,
+      matchedBgName,
+      matchedResourceName,
+      matchedAt,
+    });
+  })();
+}
+
+export function deleteResourceMapping({ bangumiId, source }) {
+  assertResourceStateKey({ bangumiId, source });
+
+  sqlite.prepare(`
+    DELETE FROM resource_mappings
+    WHERE bangumi_id = @bangumiId AND source = @source
+  `).run({ bangumiId, source });
 }
 
 export function upsertRetryState({ bangumiId, source, kind, retryCount, retryAt = null }) {

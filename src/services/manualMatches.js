@@ -9,8 +9,10 @@ import { collectBangumiTitles } from "../lib/matcher.js";
 import { log } from "../lib/logger.js";
 import {
   deleteManualResourceState,
+  deleteResourceMapping,
   deleteRetryState,
   upsertManualResourceState,
+  upsertResourceMapping,
   upsertRetryState,
 } from "../repositories/resourceRepository.js";
 
@@ -661,56 +663,8 @@ function deleteMappingArtifacts(animeId, source) {
   db.delete(bangumiCstationMap)
     .where(and(eq(bangumiCstationMap.animeId, animeId), eq(bangumiCstationMap.source, source)))
     .run();
-  sqlite.prepare(`
-    DELETE FROM resource_mappings
-    WHERE bangumi_id = ? AND source = ?
-  `).run(animeId, source);
+  deleteResourceMapping({ bangumiId: animeId, source });
   clearEpisodeFetchRetryState(animeId, source);
-}
-
-function upsertNormalizedResourceMapping({
-  animeId,
-  source,
-  sourceAid,
-  episodeRange,
-  matchedBgName,
-  matchedResourceName,
-}) {
-  ensureSubjectFromAnime(animeId);
-  sqlite.prepare(`
-    INSERT INTO resource_sources (source, name, enabled)
-    VALUES (?, ?, 1)
-    ON CONFLICT(source) DO UPDATE SET updated_at = datetime('now')
-  `).run(source, source);
-  sqlite.prepare(`
-    INSERT INTO resource_mappings (
-      bangumi_id, source, source_aid, source_ep_start, source_ep_end,
-      display_ep_offset, score, matched_bg_name, matched_resource_name, matched_at, updated_at
-    )
-    VALUES (
-      @animeId, @source, @sourceAid, @sourceEpStart, @sourceEpEnd,
-      @displayEpOffset, null, @matchedBgName, @matchedResourceName, datetime('now'), datetime('now')
-    )
-    ON CONFLICT(bangumi_id, source) DO UPDATE SET
-      source_aid = excluded.source_aid,
-      source_ep_start = excluded.source_ep_start,
-      source_ep_end = excluded.source_ep_end,
-      display_ep_offset = excluded.display_ep_offset,
-      score = excluded.score,
-      matched_bg_name = excluded.matched_bg_name,
-      matched_resource_name = excluded.matched_resource_name,
-      matched_at = excluded.matched_at,
-      updated_at = excluded.updated_at
-  `).run({
-    animeId,
-    source,
-    sourceAid,
-    sourceEpStart: episodeRange.sourceEpStart,
-    sourceEpEnd: episodeRange.sourceEpEnd,
-    displayEpOffset: episodeRange.displayEpOffset,
-    matchedBgName,
-    matchedResourceName,
-  });
 }
 
 function applyManualMapping({ animeRow, source, sourceItem, sourceAid, episodeRange }) {
@@ -745,11 +699,15 @@ function applyManualMapping({ animeRow, source, sourceItem, sourceAid, episodeRa
       },
     })
     .run();
-  upsertNormalizedResourceMapping({
-    animeId: animeRow.id,
+  ensureSubjectFromAnime(animeRow.id);
+  upsertResourceMapping({
+    bangumiId: animeRow.id,
     source,
     sourceAid,
-    episodeRange,
+    sourceEpStart: episodeRange.sourceEpStart,
+    sourceEpEnd: episodeRange.sourceEpEnd,
+    displayEpOffset: episodeRange.displayEpOffset,
+    score: null,
     matchedBgName,
     matchedResourceName,
   });

@@ -48,6 +48,7 @@ import {
   listManualResourceStatesForSubject,
   listResourceMappingsWithEpisodePresenceForSubject,
   listRetryStateForSubject,
+  upsertResourceMapping,
   upsertManualResourceState,
   upsertRetryState,
 } from "../repositories/resourceRepository.js";
@@ -530,30 +531,7 @@ async function upsertMap(animeId, source, cstationId, score, matchedBgName, matc
     })
     .run();
   ensureSubjectFromAnime(animeId);
-  sqlite.prepare(`
-    INSERT INTO resource_sources (source, name, enabled)
-    VALUES (?, ?, 1)
-    ON CONFLICT(source) DO UPDATE SET updated_at = datetime('now')
-  `).run(source, source);
-  sqlite.prepare(`
-    INSERT INTO resource_mappings (
-      bangumi_id, source, source_aid, source_ep_start, source_ep_end,
-      display_ep_offset, score, matched_bg_name, matched_resource_name, matched_at
-    )
-    VALUES (
-      @bangumiId, @source, @sourceAid, @sourceEpStart, @sourceEpEnd,
-      @displayEpOffset, @score, @matchedBgName, @matchedResourceName, datetime('now')
-    )
-    ON CONFLICT(bangumi_id, source) DO UPDATE SET
-      source_aid = excluded.source_aid,
-      source_ep_start = excluded.source_ep_start,
-      source_ep_end = excluded.source_ep_end,
-      display_ep_offset = excluded.display_ep_offset,
-      score = excluded.score,
-      matched_bg_name = excluded.matched_bg_name,
-      matched_resource_name = excluded.matched_resource_name,
-      matched_at = excluded.matched_at
-  `).run({
+  upsertResourceMapping({
     bangumiId: animeId,
     source,
     sourceAid: cstationId,

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { initDb, sqlite } from "../src/db/index.js";
 import {
   deleteManualResourceState,
+  deleteResourceMapping,
   deleteManualResourceStateByStatus,
   deleteRetryState,
   findEpisodeVideoUrl,
@@ -11,6 +12,7 @@ import {
   listResourceMappingsWithEpisodePresenceForSubject,
   listRetryStateForSubject,
   upsertManualResourceState,
+  upsertResourceMapping,
   upsertRetryState,
 } from "../src/repositories/resourceRepository.js";
 
@@ -174,4 +176,75 @@ test("resource repository writes retry and manual state rows", () => {
     source: RESOURCE_SOURCE,
   });
   assert.deepEqual(listManualResourceStatesForSubject(RESOURCE_STATE_SUBJECT_ID), []);
+});
+
+test("resource repository upserts and deletes resource mappings", () => {
+  const id = RESOURCE_STATE_SUBJECT_ID + 1;
+  sqlite.exec(`
+    DELETE FROM episodes WHERE bangumi_id = ${id};
+    DELETE FROM resource_mappings WHERE bangumi_id = ${id};
+    DELETE FROM subjects WHERE bangumi_id = ${id};
+    INSERT INTO subjects (bangumi_id, name, rating_distribution_json)
+      VALUES (${id}, 'Resource mapping raw', '[]');
+  `);
+
+  upsertResourceMapping({
+    bangumiId: id,
+    source: RESOURCE_SOURCE,
+    sourceAid: RESOURCE_AID,
+    sourceEpStart: 1,
+    sourceEpEnd: 12,
+    displayEpOffset: 0,
+    score: 0.91,
+    matchedBgName: "番剧标题",
+    matchedResourceName: "资源站标题",
+  });
+
+  let mapping = sqlite.prepare(`
+    SELECT * FROM resource_mappings
+    WHERE bangumi_id = ? AND source = ?
+  `).get(id, RESOURCE_SOURCE);
+  assert.equal(mapping.source_aid, RESOURCE_AID);
+  assert.equal(mapping.source_ep_start, 1);
+  assert.equal(mapping.source_ep_end, 12);
+  assert.equal(mapping.display_ep_offset, 0);
+  assert.equal(mapping.score, 0.91);
+  assert.equal(mapping.matched_bg_name, "番剧标题");
+  assert.equal(mapping.matched_resource_name, "资源站标题");
+  assert.ok(mapping.matched_at);
+  assert.ok(mapping.updated_at);
+  assert.equal(sqlite.prepare("SELECT enabled FROM resource_sources WHERE source = ?").get(RESOURCE_SOURCE).enabled, 1);
+
+  upsertResourceMapping({
+    bangumiId: id,
+    source: RESOURCE_SOURCE,
+    sourceAid: RESOURCE_AID + 1,
+    sourceEpStart: 3,
+    sourceEpEnd: null,
+    displayEpOffset: 2,
+    score: null,
+    matchedBgName: "手动番剧标题",
+    matchedResourceName: "手动资源站标题",
+  });
+
+  mapping = sqlite.prepare(`
+    SELECT * FROM resource_mappings
+    WHERE bangumi_id = ? AND source = ?
+  `).get(id, RESOURCE_SOURCE);
+  assert.equal(mapping.source_aid, RESOURCE_AID + 1);
+  assert.equal(mapping.source_ep_start, 3);
+  assert.equal(mapping.source_ep_end, null);
+  assert.equal(mapping.display_ep_offset, 2);
+  assert.equal(mapping.score, null);
+  assert.equal(mapping.matched_bg_name, "手动番剧标题");
+  assert.equal(mapping.matched_resource_name, "手动资源站标题");
+
+  assert.deepEqual(listResourceMappingsWithEpisodePresenceForSubject(id), [{
+    source: RESOURCE_SOURCE,
+    source_aid: RESOURCE_AID + 1,
+    has_episodes: 0,
+  }]);
+
+  deleteResourceMapping({ bangumiId: id, source: RESOURCE_SOURCE });
+  assert.deepEqual(listResourceMappingsWithEpisodePresenceForSubject(id), []);
 });
