@@ -1185,7 +1185,6 @@ export async function searchAnime(keyword) {
   return {
     data: local.map((a) => ({
       id: a.id,
-      bangumiId: a.id,
       title: a.nameCn || a.name,
       coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover),
     })),

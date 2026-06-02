@@ -46,6 +46,15 @@ test("searchAnime returns signed external cover proxy URL when configured", asyn
   assert.ok(new URL(row.coverUrl).searchParams.get("sig"));
 });
 
+test("searchAnime exposes the Bangumi subject id as id without a duplicate bangumiId field", async () => {
+  const result = await searchAnime("封面代理测试");
+  const row = result.data.find((item) => item.id === ANIME_ID);
+
+  assert.ok(row);
+  assert.equal(row.id, ANIME_ID);
+  assert.equal(Object.prototype.hasOwnProperty.call(row, "bangumiId"), false);
+});
+
 test("getAnimeDetail returns signed external cover proxy URL when configured", async () => {
   const result = await getAnimeDetail(ANIME_ID);
 
