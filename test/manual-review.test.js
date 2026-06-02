@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { and, eq } from "drizzle-orm";
-import { initDb, db } from "../src/db/index.js";
+import { initDb, db, sqlite } from "../src/db/index.js";
 import {
   anime,
   animeOther,
@@ -59,6 +59,16 @@ async function withTempPath(fn) {
 }
 
 function cleanup() {
+  sqlite.prepare("DELETE FROM episodes WHERE source = ?").run(SOURCE);
+  sqlite.prepare("DELETE FROM resource_mappings WHERE source = ?").run(SOURCE);
+  sqlite.prepare("DELETE FROM resource_items WHERE source = ?").run(SOURCE);
+  sqlite.prepare("DELETE FROM retry_state WHERE source = ?").run(SOURCE);
+  sqlite.prepare("DELETE FROM manual_resource_state WHERE source = ?").run(SOURCE);
+  sqlite.prepare("DELETE FROM episodes WHERE bangumi_id IN (?, ?, ?)").run(ANIME_ID, RANGE_ANIME_ID, EXTRA_ANIME_ID);
+  sqlite.prepare("DELETE FROM resource_mappings WHERE bangumi_id IN (?, ?, ?)").run(ANIME_ID, RANGE_ANIME_ID, EXTRA_ANIME_ID);
+  sqlite.prepare("DELETE FROM retry_state WHERE bangumi_id IN (?, ?, ?)").run(ANIME_ID, RANGE_ANIME_ID, EXTRA_ANIME_ID);
+  sqlite.prepare("DELETE FROM manual_resource_state WHERE bangumi_id IN (?, ?, ?)").run(ANIME_ID, RANGE_ANIME_ID, EXTRA_ANIME_ID);
+  sqlite.prepare("DELETE FROM subjects WHERE bangumi_id IN (?, ?, ?)").run(ANIME_ID, RANGE_ANIME_ID, EXTRA_ANIME_ID);
   db.delete(bangumiCstationMap)
     .where(eq(bangumiCstationMap.source, SOURCE))
     .run();
@@ -217,6 +227,10 @@ test("prewarmAnime maps requested local IDs and refreshes episodes immediately",
   const mapping = db.select().from(bangumiCstationMap)
     .where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
     .get();
+  const normalizedMapping = sqlite.prepare(`
+    SELECT * FROM resource_mappings
+    WHERE bangumi_id = ? AND source = ?
+  `).get(ANIME_ID, SOURCE);
 
   assert.equal(result.requested, 1);
   assert.equal(result.processed, 1);
@@ -226,6 +240,7 @@ test("prewarmAnime maps requested local IDs and refreshes episodes immediately",
   assert.equal(metadataCalls, 1);
   assert.equal(refreshCalls, 1);
   assert.equal(mapping.cstationId, SOURCE_AID);
+  assert.equal(normalizedMapping.source_aid, SOURCE_AID);
   assert.equal(result.items[0].sources[0].mapping, "matched");
   assert.equal(result.items[0].sources[0].episodes, "refreshed");
 });
@@ -463,6 +478,14 @@ test("importManualReview records no_resource and blocks retry", async () => {
   const retry = db.select().from(matchRetryState)
     .where(and(eq(matchRetryState.animeId, ANIME_ID), eq(matchRetryState.source, SOURCE)))
     .get();
+  const normalizedManual = sqlite.prepare(`
+    SELECT * FROM manual_resource_state
+    WHERE bangumi_id = ? AND source = ?
+  `).get(ANIME_ID, SOURCE);
+  const normalizedRetry = sqlite.prepare(`
+    SELECT * FROM retry_state
+    WHERE bangumi_id = ? AND source = ? AND kind = 'mapping'
+  `).get(ANIME_ID, SOURCE);
 
   assert.equal(stats.updated, 1);
   assert.equal(stats.noResource, 1);
@@ -470,6 +493,10 @@ test("importManualReview records no_resource and blocks retry", async () => {
   assert.equal(manual.note, "no resource on source");
   assert.equal(retry.retryCount, 5);
   assert.equal(retry.retryAt, null);
+  assert.equal(normalizedManual.status, "no_resource");
+  assert.equal(normalizedManual.note, "no resource on source");
+  assert.equal(normalizedRetry.retry_count, 5);
+  assert.equal(normalizedRetry.retry_at, null);
   assert.equal(db.select().from(bangumiCstationMap).where(eq(bangumiCstationMap.animeId, ANIME_ID)).get(), undefined);
 });
 
@@ -545,6 +572,14 @@ test("importManualReview records wait_airing and clears retry state", async () =
   const retry = db.select().from(matchRetryState)
     .where(and(eq(matchRetryState.animeId, ANIME_ID), eq(matchRetryState.source, SOURCE)))
     .get();
+  const normalizedManual = sqlite.prepare(`
+    SELECT * FROM manual_resource_state
+    WHERE bangumi_id = ? AND source = ?
+  `).get(ANIME_ID, SOURCE);
+  const normalizedRetry = sqlite.prepare(`
+    SELECT * FROM retry_state
+    WHERE bangumi_id = ? AND source = ? AND kind = 'mapping'
+  `).get(ANIME_ID, SOURCE);
 
   assert.equal(stats.updated, 1);
   assert.equal(stats.waitAiring, 1);
@@ -552,6 +587,10 @@ test("importManualReview records wait_airing and clears retry state", async () =
   assert.equal(manual.note, "future broadcast");
   assert.equal(retry.retryCount, 0);
   assert.equal(retry.retryAt, null);
+  assert.equal(normalizedManual.status, "wait_airing");
+  assert.equal(normalizedManual.note, "future broadcast");
+  assert.equal(normalizedRetry.retry_count, 0);
+  assert.equal(normalizedRetry.retry_at, null);
 });
 
 test("analyzeUnmappedMappings keeps wait_airing rows exported", async () => {
@@ -990,6 +1029,10 @@ test("ensureMappingForAnime does not terminally block retry for weak occupied ca
   const retry = db.select().from(matchRetryState)
     .where(and(eq(matchRetryState.animeId, weakAnimeId), eq(matchRetryState.source, SOURCE)))
     .get();
+  const normalizedRetry = sqlite.prepare(`
+    SELECT * FROM retry_state
+    WHERE bangumi_id = ? AND source = ? AND kind = 'mapping'
+  `).get(weakAnimeId, SOURCE);
   const manual = db.select().from(manualMatchState)
     .where(and(eq(manualMatchState.animeId, weakAnimeId), eq(manualMatchState.source, SOURCE)))
     .get();
@@ -998,6 +1041,8 @@ test("ensureMappingForAnime does not terminally block retry for weak occupied ca
   assert.equal(result.reason, "no-catalog-match");
   assert.equal(retry.retryCount, 1);
   assert.ok(retry.retryAt);
+  assert.equal(normalizedRetry.retry_count, 1);
+  assert.ok(normalizedRetry.retry_at);
   assert.equal(manual, undefined);
 });
 
@@ -1285,6 +1330,17 @@ test("refreshEpisodesForAnime filters source episodes and stores display indexes
   assert.deepEqual(rows.map((row) => row.epIndex), [1, 2]);
   assert.deepEqual(rows.map((row) => row.sourceEpIndex), [1156, 1157]);
   assert.equal(rows[0].videoUrl, "https://example.invalid/1156.m3u8");
+
+  const normalizedRows = sqlite.prepare(`
+    SELECT bangumi_id, source, source_aid, ep_index, source_ep_index, video_url
+    FROM episodes
+    WHERE bangumi_id = ? AND source = 'ffzy'
+    ORDER BY ep_index
+  `).all(RANGE_ANIME_ID);
+  assert.deepEqual(normalizedRows.map((row) => row.ep_index), [1, 2]);
+  assert.deepEqual(normalizedRows.map((row) => row.source_ep_index), [1156, 1157]);
+  assert.equal(normalizedRows[0].source_aid, RANGE_SOURCE_AID);
+  assert.equal(normalizedRows[0].video_url, "https://example.invalid/1156.m3u8");
 
   const play = await getPlayUrl(RANGE_ANIME_ID, 1, 1);
   assert.equal(play.videoUrl, "https://example.invalid/1156.m3u8");

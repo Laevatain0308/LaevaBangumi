@@ -407,6 +407,30 @@ function findCatalogItem(source, sourceAid) {
     .get();
 }
 
+function ensureSubjectFromAnime(animeId) {
+  const existing = sqlite.prepare("SELECT bangumi_id FROM subjects WHERE bangumi_id = ?").get(animeId);
+  if (existing) return true;
+  const a = db.select().from(anime).where(eq(anime.id, animeId)).get();
+  if (!a) return false;
+  sqlite.prepare(`
+    INSERT INTO subjects (
+      bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
+      calendar_weekday, eps, total_episodes, cover_url, has_cover,
+      rating_score, rating_rank, metadata_fetched_at, created_at, updated_at
+    )
+    VALUES (
+      @id, @name, @nameCn, @summary, @platform, @airDate, @airWeekday,
+      @calendarWeekday, @eps, @totalEpisodes, @coverUrl, COALESCE(@hasCover, 0),
+      @ratingScore, @rank, @detailFetchedAt, COALESCE(@createdAt, datetime('now')), COALESCE(@updatedAt, datetime('now'))
+    )
+    ON CONFLICT(bangumi_id) DO NOTHING
+  `).run({
+    ...a,
+    name: a.name || a.nameCn || `#${animeId}`,
+  });
+  return true;
+}
+
 function clearRetryState(animeId, source) {
   db.insert(matchRetryState)
     .values({ animeId, source, retryCount: 0, retryAt: null, updatedAt: now() })
@@ -415,12 +439,25 @@ function clearRetryState(animeId, source) {
       set: { retryCount: 0, retryAt: null, updatedAt: now() },
     })
     .run();
+  ensureSubjectFromAnime(animeId);
+  sqlite.prepare(`
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    VALUES (?, ?, 'mapping', 0, null, datetime('now'))
+    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+      retry_count = excluded.retry_count,
+      retry_at = excluded.retry_at,
+      updated_at = excluded.updated_at
+  `).run(animeId, source);
 }
 
 function clearEpisodeFetchRetryState(animeId, source) {
   db.delete(episodeFetchRetryState)
     .where(and(eq(episodeFetchRetryState.animeId, animeId), eq(episodeFetchRetryState.source, source)))
     .run();
+  sqlite.prepare(`
+    DELETE FROM retry_state
+    WHERE bangumi_id = ? AND source = ? AND kind = 'episode_fetch'
+  `).run(animeId, source);
 }
 
 function blockAutoRetry(animeId, source) {
@@ -431,12 +468,25 @@ function blockAutoRetry(animeId, source) {
       set: { retryCount: MAX_RETRIES, retryAt: null, updatedAt: now() },
     })
     .run();
+  ensureSubjectFromAnime(animeId);
+  sqlite.prepare(`
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    VALUES (?, ?, 'mapping', ?, null, datetime('now'))
+    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+      retry_count = excluded.retry_count,
+      retry_at = excluded.retry_at,
+      updated_at = excluded.updated_at
+  `).run(animeId, source, MAX_RETRIES);
 }
 
 function clearManualMatchState(animeId, source) {
   db.delete(manualMatchState)
     .where(and(eq(manualMatchState.animeId, animeId), eq(manualMatchState.source, source)))
     .run();
+  sqlite.prepare(`
+    DELETE FROM manual_resource_state
+    WHERE bangumi_id = ? AND source = ?
+  `).run(animeId, source);
 }
 
 function markWaitAiring(animeId, source, note) {
@@ -447,6 +497,15 @@ function markWaitAiring(animeId, source, note) {
       set: { status: "wait_airing", note, updatedAt: now() },
     })
     .run();
+  ensureSubjectFromAnime(animeId);
+  sqlite.prepare(`
+    INSERT INTO manual_resource_state (bangumi_id, source, status, note, updated_at)
+    VALUES (?, ?, 'wait_airing', ?, datetime('now'))
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      status = excluded.status,
+      note = excluded.note,
+      updated_at = excluded.updated_at
+  `).run(animeId, source, note);
   clearRetryState(animeId, source);
   clearEpisodeFetchRetryState(animeId, source);
 }
@@ -459,6 +518,15 @@ function markNoResource(animeId, source, note) {
       set: { status: "no_resource", note, updatedAt: now() },
     })
     .run();
+  ensureSubjectFromAnime(animeId);
+  sqlite.prepare(`
+    INSERT INTO manual_resource_state (bangumi_id, source, status, note, updated_at)
+    VALUES (?, ?, 'no_resource', ?, datetime('now'))
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      status = excluded.status,
+      note = excluded.note,
+      updated_at = excluded.updated_at
+  `).run(animeId, source, note);
   blockAutoRetry(animeId, source);
   clearEpisodeFetchRetryState(animeId, source);
 }

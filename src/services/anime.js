@@ -110,6 +110,15 @@ function scheduleRetry(animeId, source, count) {
       set: { retryCount: count, retryAt, updatedAt: now() },
     })
     .run();
+  ensureSubjectFromAnime(animeId);
+  sqlite.prepare(`
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    VALUES (?, ?, 'mapping', ?, ?, datetime('now'))
+    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+      retry_count = excluded.retry_count,
+      retry_at = excluded.retry_at,
+      updated_at = excluded.updated_at
+  `).run(animeId, source, count, retryAt);
 }
 
 function blockMappingRetry(animeId, source) {
@@ -120,6 +129,15 @@ function blockMappingRetry(animeId, source) {
       set: { retryCount: MAX_RETRIES, retryAt: null, updatedAt: now() },
     })
     .run();
+  ensureSubjectFromAnime(animeId);
+  sqlite.prepare(`
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    VALUES (?, ?, 'mapping', ?, null, datetime('now'))
+    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+      retry_count = excluded.retry_count,
+      retry_at = excluded.retry_at,
+      updated_at = excluded.updated_at
+  `).run(animeId, source, MAX_RETRIES);
 }
 
 function scheduleEpisodeFetchRetry(animeId, source, count) {
@@ -133,6 +151,15 @@ function scheduleEpisodeFetchRetry(animeId, source, count) {
       set: { retryCount: count, retryAt, updatedAt: now() },
     })
     .run();
+  ensureSubjectFromAnime(animeId);
+  sqlite.prepare(`
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    VALUES (?, ?, 'episode_fetch', ?, ?, datetime('now'))
+    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+      retry_count = excluded.retry_count,
+      retry_at = excluded.retry_at,
+      updated_at = excluded.updated_at
+  `).run(animeId, source, count, retryAt);
 }
 
 function clearRetry(animeId, source) {
@@ -143,12 +170,25 @@ function clearRetry(animeId, source) {
       set: { retryCount: 0, retryAt: null, updatedAt: now() },
     })
     .run();
+  ensureSubjectFromAnime(animeId);
+  sqlite.prepare(`
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    VALUES (?, ?, 'mapping', 0, null, datetime('now'))
+    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+      retry_count = excluded.retry_count,
+      retry_at = excluded.retry_at,
+      updated_at = excluded.updated_at
+  `).run(animeId, source);
 }
 
 function clearEpisodeFetchRetry(animeId, source) {
   db.delete(episodeFetchRetryState)
     .where(and(eq(episodeFetchRetryState.animeId, animeId), eq(episodeFetchRetryState.source, source)))
     .run();
+  sqlite.prepare(`
+    DELETE FROM retry_state
+    WHERE bangumi_id = ? AND source = ? AND kind = 'episode_fetch'
+  `).run(animeId, source);
 }
 
 function getRetryState(animeId, source) {
@@ -184,6 +224,15 @@ function setManualMatchState(animeId, source, status, note = null) {
       set: { status, note, updatedAt: now() },
     })
     .run();
+  ensureSubjectFromAnime(animeId);
+  sqlite.prepare(`
+    INSERT INTO manual_resource_state (bangumi_id, source, status, note, updated_at)
+    VALUES (?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      status = excluded.status,
+      note = excluded.note,
+      updated_at = excluded.updated_at
+  `).run(animeId, source, status, note);
 }
 
 function clearManualStateByStatus(animeId, source, status) {
@@ -194,6 +243,10 @@ function clearManualStateByStatus(animeId, source, status) {
       eq(manualMatchState.status, status)
     ))
     .run();
+  sqlite.prepare(`
+    DELETE FROM manual_resource_state
+    WHERE bangumi_id = ? AND source = ? AND status = ?
+  `).run(animeId, source, status);
 }
 
 function markSourceAlreadyMapped(animeId, source, ownerAnimeId, cstationId) {
@@ -273,7 +326,7 @@ function totalEpisodesFromItem(item) {
 
 function weekdayFromDate(date) {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return undefined;
-  const day = new Date(`${date}T00:00:00+09:00`).getDay();
+  const day = new Date(`${date}T00:00:00Z`).getUTCDay();
   return day === 0 ? 7 : day;
 }
 
@@ -287,6 +340,39 @@ function aliasesFromItem(item, detailFetched) {
   const titles = collectBangumiTitles(item).filter((title) => title !== item.name && title !== item.name_cn);
   if (titles.length > 0) return JSON.stringify(titles);
   return detailFetched ? "[]" : undefined;
+}
+
+function ratingDistributionFromItem(item) {
+  const count = item.rating?.count;
+  if (!count || typeof count !== "object") return [];
+  return Array.from({ length: 10 }, (_, index) => Number(count[String(index + 1)] ?? count[index + 1] ?? 0));
+}
+
+function ratingTotalFromItem(item) {
+  const total = item.rating?.total ?? item.rating?.votes ?? item.votes;
+  const parsed = intFromItem(total);
+  return parsed === undefined ? undefined : parsed;
+}
+
+function normalizedTagsFromItem(item, detailFetched) {
+  if (!Array.isArray(item.tags)) return detailFetched ? [] : undefined;
+  return item.tags
+    .map((tag) => {
+      if (typeof tag === "string") return { name: tag, count: 0, totalCount: 0 };
+      return {
+        name: tag.name,
+        count: intFromItem(tag.count) ?? 0,
+        totalCount: intFromItem(tag.total_count ?? tag.totalCount) ?? intFromItem(tag.count) ?? 0,
+      };
+    })
+    .filter((tag) => tag.name)
+    .slice(0, 24);
+}
+
+function normalizedAliasesFromItem(item, detailFetched) {
+  const aliases = collectBangumiTitles(item).filter((title) => title !== item.name && title !== item.name_cn);
+  if (aliases.length > 0) return aliases;
+  return detailFetched ? [] : undefined;
 }
 
 function bangumiItemToAnime(item, weekday, { detailFetched = false } = {}) {
@@ -313,6 +399,82 @@ function bangumiItemToAnime(item, weekday, { detailFetched = false } = {}) {
   };
 }
 
+function bangumiItemToSubject(item, weekday, { detailFetched = false } = {}) {
+  const airDate = dateFromItem(item);
+  const coverUrl = coverFromItem(item);
+  const ratingDistribution = ratingDistributionFromItem(item);
+  return {
+    bangumi_id: item.id,
+    type: intFromItem(item.type) ?? 2,
+    name: item.name || item.name_cn || `#${item.id}`,
+    name_cn: knownOrSkip(item.name_cn, detailFetched),
+    summary: knownOrSkip(item.summary, detailFetched),
+    air_date: knownOrSkip(airDate, detailFetched),
+    air_weekday: knownOrSkip(item.air_weekday ?? weekdayFromDate(airDate), detailFetched),
+    calendar_weekday: weekday,
+    eps: knownOrSkip(epsFromItem(item), detailFetched),
+    total_episodes: knownOrSkip(totalEpisodesFromItem(item), detailFetched),
+    platform: knownOrSkip(item.platform, detailFetched),
+    cover_url: knownOrSkip(coverUrl, detailFetched),
+    rating_score: knownOrSkip(item.rating?.score, detailFetched),
+    rating_rank: knownOrSkip(rankFromItem(item), detailFetched),
+    rating_total: knownOrSkip(ratingTotalFromItem(item), detailFetched),
+    rating_distribution_json: ratingDistribution.length > 0
+      ? JSON.stringify(ratingDistribution)
+      : (detailFetched ? "[]" : undefined),
+    metadata_fetched_at: detailFetched ? now() : undefined,
+    rating_fetched_at: item.rating ? now() : undefined,
+    updated_at: now(),
+  };
+}
+
+function upsertSubjectMetadata(item, weekday, options = {}) {
+  const detailFetched = !!options.detailFetched;
+  const row = compactRow(bangumiItemToSubject(item, weekday, options));
+  const columns = Object.keys(row);
+  const placeholders = columns.map((column) => `@${column}`).join(", ");
+  const updateColumns = columns.filter((column) => column !== "bangumi_id");
+  sqlite.prepare(`
+    INSERT INTO subjects (${columns.join(", ")})
+    VALUES (${placeholders})
+    ON CONFLICT(bangumi_id) DO UPDATE SET
+      ${updateColumns.map((column) => `${column} = excluded.${column}`).join(", ")}
+  `).run(row);
+
+  const aliases = normalizedAliasesFromItem(item, detailFetched);
+  if (aliases) {
+    sqlite.prepare("DELETE FROM subject_aliases WHERE bangumi_id = ?").run(item.id);
+    const insertAlias = sqlite.prepare(`
+      INSERT OR IGNORE INTO subject_aliases (bangumi_id, alias, source)
+      VALUES (?, ?, 'bangumi')
+    `);
+    for (const alias of aliases) insertAlias.run(item.id, alias);
+  }
+
+  const subjectTags = normalizedTagsFromItem(item, detailFetched);
+  if (subjectTags) {
+    sqlite.prepare("DELETE FROM subject_tags WHERE bangumi_id = ?").run(item.id);
+    const upsertTag = sqlite.prepare(`
+      INSERT INTO tags (name, updated_at)
+      VALUES (?, datetime('now'))
+      ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
+      RETURNING tag_id
+    `);
+    const insertSubjectTag = sqlite.prepare(`
+      INSERT INTO subject_tags (bangumi_id, tag_id, count, total_count, source, updated_at)
+      VALUES (?, ?, ?, ?, 'bangumi', datetime('now'))
+      ON CONFLICT(bangumi_id, tag_id) DO UPDATE SET
+        count = excluded.count,
+        total_count = excluded.total_count,
+        updated_at = excluded.updated_at
+    `);
+    for (const tag of subjectTags) {
+      const tagRow = upsertTag.get(tag.name);
+      insertSubjectTag.run(item.id, tagRow.tag_id, tag.count, tag.totalCount);
+    }
+  }
+}
+
 function animeRowToBangumiLike(a) {
   return {
     id: a.id,
@@ -333,6 +495,35 @@ function deleteAnimeDependencies(animeId) {
   db.delete(matchRetryState).where(eq(matchRetryState.animeId, animeId)).run();
   db.delete(episodeFetchRetryState).where(eq(episodeFetchRetryState.animeId, animeId)).run();
   db.delete(manualMatchState).where(eq(manualMatchState.animeId, animeId)).run();
+  sqlite.prepare("DELETE FROM episodes WHERE bangumi_id = ?").run(animeId);
+  sqlite.prepare("DELETE FROM resource_mappings WHERE bangumi_id = ?").run(animeId);
+  sqlite.prepare("DELETE FROM retry_state WHERE bangumi_id = ?").run(animeId);
+  sqlite.prepare("DELETE FROM manual_resource_state WHERE bangumi_id = ?").run(animeId);
+  sqlite.prepare("DELETE FROM subjects WHERE bangumi_id = ?").run(animeId);
+}
+
+function ensureSubjectFromAnime(animeId) {
+  const existing = sqlite.prepare("SELECT bangumi_id FROM subjects WHERE bangumi_id = ?").get(animeId);
+  if (existing) return true;
+  const a = db.select().from(anime).where(eq(anime.id, animeId)).get();
+  if (!a) return false;
+  sqlite.prepare(`
+    INSERT INTO subjects (
+      bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
+      calendar_weekday, eps, total_episodes, cover_url, has_cover,
+      rating_score, rating_rank, metadata_fetched_at, created_at, updated_at
+    )
+    VALUES (
+      @id, @name, @nameCn, @summary, @platform, @airDate, @airWeekday,
+      @calendarWeekday, @eps, @totalEpisodes, @coverUrl, COALESCE(@hasCover, 0),
+      @ratingScore, @rank, @detailFetchedAt, COALESCE(@createdAt, datetime('now')), COALESCE(@updatedAt, datetime('now'))
+    )
+    ON CONFLICT(bangumi_id) DO NOTHING
+  `).run({
+    ...a,
+    name: a.name || a.nameCn || `#${animeId}`,
+  });
+  return true;
 }
 
 export async function upsertAnime(item, weekday = undefined, options = {}) {
@@ -359,6 +550,7 @@ export async function upsertAnime(item, weekday = undefined, options = {}) {
   }
 
   const row = compactRow(bangumiItemToAnime(item, weekday, options));
+  upsertSubjectMetadata(item, weekday, options);
   const existing = db.select().from(anime).where(eq(anime.id, item.id)).get();
   if (existing) {
     delete row.id;
@@ -373,7 +565,10 @@ export async function upsertAnime(item, weekday = undefined, options = {}) {
   const coverUrl = row.coverUrl;
   if (coverUrl) {
     downloadCover(item.id, coverUrl).then((ok) => {
-      if (ok) db.update(anime).set({ hasCover: 1 }).where(eq(anime.id, item.id)).run();
+      if (ok) {
+        db.update(anime).set({ hasCover: 1 }).where(eq(anime.id, item.id)).run();
+        sqlite.prepare("UPDATE subjects SET has_cover = 1 WHERE bangumi_id = ?").run(item.id);
+      }
     }).catch(() => {});
   }
 
@@ -407,6 +602,7 @@ function applyEpisodeRange(episodesList, mapping) {
 }
 
 async function upsertEpisodes(animeId, source, cstationId, episodesList) {
+  ensureSubjectFromAnime(animeId);
   for (const ep of episodesList) {
     const sourceEpIndex = ep.sourceEpIndex ?? ep.epIndex;
     const existing = db.select()
@@ -423,7 +619,9 @@ async function upsertEpisodes(animeId, source, cstationId, episodesList) {
       db.insert(episodes)
         .values({
           animeId,
+          bangumiId: animeId,
           sourceName: source,
+          source,
           sourceAid: cstationId,
           epIndex: ep.epIndex,
           sourceEpIndex,
@@ -441,7 +639,14 @@ async function upsertEpisodes(animeId, source, cstationId, episodesList) {
       existing.sourceEpIndex !== sourceEpIndex
     ) {
       db.update(episodes)
-        .set({ videoUrl: ep.videoUrl, epName: ep.epName, sourceEpIndex, updatedAt: now() })
+        .set({
+          bangumiId: animeId,
+          source,
+          videoUrl: ep.videoUrl,
+          epName: ep.epName,
+          sourceEpIndex,
+          updatedAt: now(),
+        })
         .where(eq(episodes.id, existing.id))
         .run();
     }
@@ -458,6 +663,16 @@ function pruneEpisodesForRefresh(animeId, source, cstationId, episodesList) {
   for (const ep of existing) {
     if (ep.sourceAid !== cstationId || !validIndexes.has(ep.epIndex)) {
       db.delete(episodes).where(eq(episodes.id, ep.id)).run();
+    }
+  }
+  const normalizedExisting = sqlite.prepare(`
+    SELECT id, source_aid, ep_index
+    FROM episodes
+    WHERE bangumi_id = ? AND source = ?
+  `).all(animeId, source);
+  for (const ep of normalizedExisting) {
+    if (ep.source_aid !== cstationId || !validIndexes.has(ep.ep_index)) {
+      sqlite.prepare("DELETE FROM episodes WHERE id = ?").run(ep.id);
     }
   }
 }
@@ -490,6 +705,41 @@ async function upsertMap(animeId, source, cstationId, score, matchedBgName, matc
       },
     })
     .run();
+  ensureSubjectFromAnime(animeId);
+  sqlite.prepare(`
+    INSERT INTO resource_sources (source, name, enabled)
+    VALUES (?, ?, 1)
+    ON CONFLICT(source) DO UPDATE SET updated_at = datetime('now')
+  `).run(source, source);
+  sqlite.prepare(`
+    INSERT INTO resource_mappings (
+      bangumi_id, source, source_aid, source_ep_start, source_ep_end,
+      display_ep_offset, score, matched_bg_name, matched_resource_name, matched_at
+    )
+    VALUES (
+      @bangumiId, @source, @sourceAid, @sourceEpStart, @sourceEpEnd,
+      @displayEpOffset, @score, @matchedBgName, @matchedResourceName, datetime('now')
+    )
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      source_aid = excluded.source_aid,
+      source_ep_start = excluded.source_ep_start,
+      source_ep_end = excluded.source_ep_end,
+      display_ep_offset = excluded.display_ep_offset,
+      score = excluded.score,
+      matched_bg_name = excluded.matched_bg_name,
+      matched_resource_name = excluded.matched_resource_name,
+      matched_at = excluded.matched_at
+  `).run({
+    bangumiId: animeId,
+    source,
+    sourceAid: cstationId,
+    sourceEpStart: range.sourceEpStart ?? null,
+    sourceEpEnd: range.sourceEpEnd ?? null,
+    displayEpOffset: range.displayEpOffset ?? 0,
+    score,
+    matchedBgName,
+    matchedResourceName: matchedCsName,
+  });
 }
 
 function getMap(animeId, source) {
@@ -644,6 +894,11 @@ export async function refreshEpisodesForAnime(animeId, { source } = {}) {
     if (!mapping.matched) return { animeId, refreshed: false, reason: mapping.reason };
     mapped = getMap(animeId, source);
   }
+  await upsertMap(animeId, source, mapped.cstationId, mapped.score, mapped.matchedBgName, mapped.matchedCsName, {
+    sourceEpStart: mapped.sourceEpStart,
+    sourceEpEnd: mapped.sourceEpEnd,
+    displayEpOffset: mapped.displayEpOffset,
+  });
 
   const detail = await cstation.fetchById(mapped.cstationId, { source });
   if (!detail) {

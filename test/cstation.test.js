@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseEpisodes } from "../src/services/cstation.js";
+import { initDb, sqlite } from "../src/db/index.js";
+import { saveCatalog } from "../src/services/catalog.js";
 
 test("parseEpisodes keeps explicit source episode indexes", () => {
   const episodes = parseEpisodes({
@@ -61,4 +63,36 @@ test("parseEpisodes keeps movie labels as episode names and avoids explicit inde
       videoUrl: "https://example.invalid/1.m3u8",
     },
   ]);
+});
+
+test("saveCatalog persists resource items in normalized storage", async () => {
+  initDb();
+  sqlite.exec(`
+    DELETE FROM resource_items WHERE source = 'test_cstation';
+    INSERT INTO resource_sources (source, name, enabled)
+    VALUES ('test_cstation', '测试资源', 1)
+    ON CONFLICT(source) DO UPDATE SET name = excluded.name, enabled = excluded.enabled;
+  `);
+
+  const saved = await saveCatalog([{
+    id: 1001,
+    name: "资源标题",
+    subname: "别名 A / Alias A",
+    year: "2026",
+    last: "2026-06-03 01:00:00",
+    category: "anime",
+    detailFetchedAt: "2026-06-03 01:01:00",
+  }], { source: "test_cstation" });
+
+  assert.equal(saved, 1);
+  const row = sqlite.prepare(`
+    SELECT * FROM resource_items
+    WHERE source = 'test_cstation' AND source_aid = 1001
+  `).get();
+  assert.equal(row.title, "资源标题");
+  assert.equal(row.subtitle, "别名 A / Alias A");
+  assert.equal(row.year, "2026");
+  assert.equal(row.latest_text, "2026-06-03 01:00:00");
+  assert.equal(row.category, "anime");
+  assert.equal(row.detail_fetched_at, "2026-06-03 01:01:00");
 });
