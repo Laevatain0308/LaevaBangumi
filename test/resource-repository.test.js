@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { initDb, sqlite } from "../src/db/index.js";
 import {
   deleteManualResourceState,
+  deleteResourceEpisodesForSubjectSource,
   deleteResourceMapping,
+  deleteResourceRowsForSubject,
+  deleteStaleResourceEpisodes,
   deleteManualResourceStateByStatus,
   deleteRetryState,
   findEpisodeVideoUrl,
@@ -12,6 +15,7 @@ import {
   listResourceMappingsWithEpisodePresenceForSubject,
   listRetryStateForSubject,
   upsertManualResourceState,
+  upsertResourceEpisode,
   upsertResourceItem,
   upsertResourceMapping,
   upsertRetryState,
@@ -293,4 +297,143 @@ test("resource repository upserts resource items without erasing existing option
   const sourceRow = sqlite.prepare("SELECT * FROM resource_sources WHERE source = ?").get(source);
   assert.equal(sourceRow.name, source);
   assert.equal(sourceRow.enabled, 1);
+});
+
+test("resource repository upserts and prunes resource episodes", () => {
+  initDb();
+  const id = RESOURCE_STATE_SUBJECT_ID + 4;
+  const source = `${RESOURCE_SOURCE}_episodes`;
+  const sourceAid = RESOURCE_AID + 4;
+  sqlite.exec(`
+    DELETE FROM episodes WHERE bangumi_id = ${id} OR anime_id = ${id};
+    DELETE FROM resource_mappings WHERE bangumi_id = ${id};
+    DELETE FROM resource_items WHERE source = '${source}';
+    DELETE FROM resource_sources WHERE source = '${source}';
+    DELETE FROM subjects WHERE bangumi_id = ${id};
+    DELETE FROM anime WHERE id = ${id};
+    INSERT INTO anime (id, name) VALUES (${id}, 'Resource episode raw')
+      ON CONFLICT(id) DO UPDATE SET name = excluded.name;
+    INSERT INTO subjects (bangumi_id, name, rating_distribution_json)
+      VALUES (${id}, 'Resource episode raw', '[]')
+      ON CONFLICT(bangumi_id) DO UPDATE SET name = excluded.name;
+  `);
+  upsertResourceItem({ source, sourceAid, title: "资源站条目" });
+  upsertResourceMapping({ bangumiId: id, source, sourceAid });
+
+  sqlite.prepare(`
+    INSERT INTO episodes (anime_id, source_name, source_aid, ep_index, video_url)
+    VALUES (?, ?, ?, 1, ?)
+  `).run(id, source, sourceAid, "https://example.invalid/legacy.m3u8");
+
+  upsertResourceEpisode({
+    bangumiId: id,
+    source,
+    sourceAid,
+    epIndex: 1,
+    sourceEpIndex: 2,
+    epName: "第01集",
+    videoUrl: "https://example.invalid/1.m3u8",
+  });
+  upsertResourceEpisode({
+    bangumiId: id,
+    source,
+    sourceAid,
+    epIndex: 2,
+    sourceEpIndex: 3,
+    epName: "第02集",
+    videoUrl: "https://example.invalid/2.m3u8",
+  });
+  upsertResourceEpisode({
+    bangumiId: id,
+    source,
+    sourceAid: sourceAid + 1,
+    epIndex: 3,
+    sourceEpIndex: 3,
+    epName: "旧线路",
+    videoUrl: "https://example.invalid/stale.m3u8",
+  });
+
+  let rows = sqlite.prepare(`
+    SELECT bangumi_id, anime_id, source, source_name, source_aid, ep_index, source_ep_index, ep_name, video_url
+    FROM episodes
+    WHERE bangumi_id = ? OR anime_id = ?
+    ORDER BY ep_index
+  `).all(id, id);
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0].bangumi_id, id);
+  assert.equal(rows[0].anime_id, id);
+  assert.equal(rows[0].source, source);
+  assert.equal(rows[0].source_name, source);
+  assert.equal(rows[0].source_ep_index, 2);
+  assert.equal(rows[0].video_url, "https://example.invalid/1.m3u8");
+
+  upsertResourceEpisode({
+    bangumiId: id,
+    source,
+    sourceAid,
+    epIndex: 1,
+    sourceEpIndex: 4,
+    epName: "第01集 修正",
+    videoUrl: "https://example.invalid/1-fixed.m3u8",
+  });
+  deleteStaleResourceEpisodes({
+    bangumiId: id,
+    source,
+    sourceAid,
+    validEpIndexes: [1],
+  });
+
+  rows = sqlite.prepare(`
+    SELECT source_aid, ep_index, source_ep_index, ep_name, video_url
+    FROM episodes
+    WHERE bangumi_id = ? OR anime_id = ?
+    ORDER BY ep_index
+  `).all(id, id);
+  assert.deepEqual(rows, [{
+    source_aid: sourceAid,
+    ep_index: 1,
+    source_ep_index: 4,
+    ep_name: "第01集 修正",
+    video_url: "https://example.invalid/1-fixed.m3u8",
+  }]);
+
+  deleteResourceEpisodesForSubjectSource({ bangumiId: id, source });
+  assert.deepEqual(sqlite.prepare("SELECT id FROM episodes WHERE bangumi_id = ? OR anime_id = ?").all(id, id), []);
+});
+
+test("resource repository deletes normalized resource rows for a subject", () => {
+  initDb();
+  const id = RESOURCE_STATE_SUBJECT_ID + 5;
+  const source = `${RESOURCE_SOURCE}_cleanup`;
+  const sourceAid = RESOURCE_AID + 5;
+  sqlite.exec(`
+    DELETE FROM episodes WHERE bangumi_id = ${id} OR anime_id = ${id};
+    DELETE FROM resource_mappings WHERE bangumi_id = ${id};
+    DELETE FROM retry_state WHERE bangumi_id = ${id};
+    DELETE FROM manual_resource_state WHERE bangumi_id = ${id};
+    DELETE FROM resource_items WHERE source = '${source}';
+    DELETE FROM resource_sources WHERE source = '${source}';
+    INSERT INTO subjects (bangumi_id, name, rating_distribution_json)
+      VALUES (${id}, 'Resource cleanup raw', '[]')
+      ON CONFLICT(bangumi_id) DO UPDATE SET name = excluded.name;
+  `);
+
+  upsertResourceItem({ source, sourceAid, title: "待清理资源站条目" });
+  upsertResourceMapping({ bangumiId: id, source, sourceAid });
+  upsertResourceEpisode({
+    bangumiId: id,
+    source,
+    sourceAid,
+    epIndex: 1,
+    videoUrl: "https://example.invalid/cleanup.m3u8",
+  });
+  upsertRetryState({ bangumiId: id, source, kind: "mapping", retryCount: 1 });
+  upsertManualResourceState({ bangumiId: id, source, status: "no_resource", note: "cleanup" });
+
+  deleteResourceRowsForSubject({ bangumiId: id });
+
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM episodes WHERE bangumi_id = ? OR anime_id = ?").get(id, id).count, 0);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM resource_mappings WHERE bangumi_id = ?").get(id).count, 0);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM retry_state WHERE bangumi_id = ?").get(id).count, 0);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM manual_resource_state WHERE bangumi_id = ?").get(id).count, 0);
 });

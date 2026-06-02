@@ -42,12 +42,15 @@ import {
 } from "../repositories/subjectRepository.js";
 import {
   deleteManualResourceStateByStatus,
+  deleteResourceRowsForSubject,
   deleteRetryState,
+  deleteStaleResourceEpisodes,
   findEpisodeVideoUrl,
   listEpisodeChannelRowsForSubject,
   listManualResourceStatesForSubject,
   listResourceMappingsWithEpisodePresenceForSubject,
   listRetryStateForSubject,
+  upsertResourceEpisode,
   upsertResourceMapping,
   upsertManualResourceState,
   upsertRetryState,
@@ -302,15 +305,11 @@ function animeRowToBangumiLike(a) {
 }
 
 function deleteAnimeDependencies(animeId) {
-  db.delete(episodes).where(eq(episodes.animeId, animeId)).run();
+  deleteResourceRowsForSubject({ bangumiId: animeId });
   db.delete(bangumiCstationMap).where(eq(bangumiCstationMap.animeId, animeId)).run();
   db.delete(matchRetryState).where(eq(matchRetryState.animeId, animeId)).run();
   db.delete(episodeFetchRetryState).where(eq(episodeFetchRetryState.animeId, animeId)).run();
   db.delete(manualMatchState).where(eq(manualMatchState.animeId, animeId)).run();
-  sqlite.prepare("DELETE FROM episodes WHERE bangumi_id = ?").run(animeId);
-  sqlite.prepare("DELETE FROM resource_mappings WHERE bangumi_id = ?").run(animeId);
-  sqlite.prepare("DELETE FROM retry_state WHERE bangumi_id = ?").run(animeId);
-  sqlite.prepare("DELETE FROM manual_resource_state WHERE bangumi_id = ?").run(animeId);
   sqlite.prepare("DELETE FROM subjects WHERE bangumi_id = ?").run(animeId);
 }
 
@@ -418,88 +417,25 @@ async function upsertEpisodes(animeId, source, cstationId, episodesList) {
   ensureSubjectFromAnime(animeId);
   for (const ep of episodesList) {
     const sourceEpIndex = ep.sourceEpIndex ?? ep.epIndex;
-    const normalizedExisting = db.select()
-      .from(episodes)
-      .where(and(
-        eq(episodes.bangumiId, animeId),
-        eq(episodes.source, source),
-        eq(episodes.sourceAid, cstationId),
-        eq(episodes.epIndex, ep.epIndex)
-      ))
-      .get();
-    const existing = normalizedExisting ?? db.select()
-      .from(episodes)
-      .where(and(
-        eq(episodes.animeId, animeId),
-        eq(episodes.sourceName, source),
-        eq(episodes.sourceAid, cstationId),
-        eq(episodes.epIndex, ep.epIndex)
-      ))
-      .get();
-
-    if (!existing) {
-      db.insert(episodes)
-        .values({
-          animeId,
-          bangumiId: animeId,
-          sourceName: source,
-          source,
-          sourceAid: cstationId,
-          epIndex: ep.epIndex,
-          sourceEpIndex,
-          epName: ep.epName,
-          videoUrl: ep.videoUrl,
-          updatedAt: now(),
-        })
-        .run();
-      continue;
-    }
-
-    if (
-      existing.videoUrl !== ep.videoUrl ||
-      existing.epName !== ep.epName ||
-      existing.sourceEpIndex !== sourceEpIndex
-    ) {
-      db.update(episodes)
-        .set({
-          animeId,
-          bangumiId: animeId,
-          sourceName: source,
-          source,
-          sourceAid: cstationId,
-          videoUrl: ep.videoUrl,
-          epName: ep.epName,
-          sourceEpIndex,
-          updatedAt: now(),
-        })
-        .where(eq(episodes.id, existing.id))
-        .run();
-    }
+    upsertResourceEpisode({
+      bangumiId: animeId,
+      source,
+      sourceAid: cstationId,
+      epIndex: ep.epIndex,
+      sourceEpIndex,
+      epName: ep.epName,
+      videoUrl: ep.videoUrl,
+    });
   }
 }
 
 function pruneEpisodesForRefresh(animeId, source, cstationId, episodesList) {
-  const validIndexes = new Set(episodesList.map((ep) => ep.epIndex));
-  const existing = db.select()
-    .from(episodes)
-    .where(and(eq(episodes.animeId, animeId), eq(episodes.sourceName, source)))
-    .all();
-
-  for (const ep of existing) {
-    if (ep.sourceAid !== cstationId || !validIndexes.has(ep.epIndex)) {
-      db.delete(episodes).where(eq(episodes.id, ep.id)).run();
-    }
-  }
-  const normalizedExisting = sqlite.prepare(`
-    SELECT id, source_aid, ep_index
-    FROM episodes
-    WHERE bangumi_id = ? AND source = ?
-  `).all(animeId, source);
-  for (const ep of normalizedExisting) {
-    if (ep.source_aid !== cstationId || !validIndexes.has(ep.ep_index)) {
-      sqlite.prepare("DELETE FROM episodes WHERE id = ?").run(ep.id);
-    }
-  }
+  deleteStaleResourceEpisodes({
+    bangumiId: animeId,
+    source,
+    sourceAid: cstationId,
+    validEpIndexes: episodesList.map((ep) => ep.epIndex),
+  });
 }
 
 async function upsertMap(animeId, source, cstationId, score, matchedBgName, matchedCsName, range = {}) {

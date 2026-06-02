@@ -9,6 +9,7 @@ import { collectBangumiTitles } from "../lib/matcher.js";
 import { log } from "../lib/logger.js";
 import {
   deleteManualResourceState,
+  deleteResourceEpisodesForSubjectSource,
   deleteResourceMapping,
   deleteRetryState,
   upsertManualResourceState,
@@ -653,13 +654,7 @@ function markNoResource(animeId, source, note) {
 }
 
 function deleteMappingArtifacts(animeId, source) {
-  db.delete(episodes)
-    .where(and(eq(episodes.animeId, animeId), eq(episodes.sourceName, source)))
-    .run();
-  sqlite.prepare(`
-    DELETE FROM episodes
-    WHERE bangumi_id = ? AND source = ?
-  `).run(animeId, source);
+  deleteResourceEpisodesForSubjectSource({ bangumiId: animeId, source });
   db.delete(bangumiCstationMap)
     .where(and(eq(bangumiCstationMap.animeId, animeId), eq(bangumiCstationMap.source, source)))
     .run();
