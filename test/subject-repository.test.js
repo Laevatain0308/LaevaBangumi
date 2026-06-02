@@ -7,6 +7,7 @@ import {
   listSubjectTags,
   searchSubjectsByKeyword,
   searchSubjectsByTag,
+  upsertSubjectMetadata,
 } from "../src/repositories/subjectRepository.js";
 
 const REPOSITORY_SUBJECT_ID = 990547890;
@@ -63,4 +64,59 @@ test("subject repository searches by keyword alias and tag", () => {
   assert.equal(searchSubjectsByTag("仓库Tag")[0].bangumi_id, REPOSITORY_SUBJECT_ID);
   assert.equal(searchSubjectsByKeyword("").length, 0);
   assert.equal(searchSubjectsByTag("").length, 0);
+});
+
+test("subject repository upserts normalized subject aliases and tags", () => {
+  const id = REPOSITORY_SUBJECT_ID + 1;
+  sqlite.prepare("DELETE FROM episodes WHERE bangumi_id = ?").run(id);
+  sqlite.prepare("DELETE FROM resource_mappings WHERE bangumi_id = ?").run(id);
+  sqlite.prepare("DELETE FROM retry_state WHERE bangumi_id = ?").run(id);
+  sqlite.prepare("DELETE FROM manual_resource_state WHERE bangumi_id = ?").run(id);
+  sqlite.prepare("DELETE FROM subject_tags WHERE bangumi_id = ?").run(id);
+  sqlite.prepare("DELETE FROM subject_aliases WHERE bangumi_id = ?").run(id);
+  sqlite.prepare("DELETE FROM subjects WHERE bangumi_id = ?").run(id);
+
+  upsertSubjectMetadata({
+    subject: {
+      bangumi_id: id,
+      type: 2,
+      name: "Write Repo Title",
+      name_cn: "写入标题",
+      rating_score: 8.1,
+      rating_rank: 222,
+      rating_total: 321,
+      rating_distribution_json: "[0,1,2,3,4,5,6,7,8,9]",
+      metadata_fetched_at: "2026-06-03 01:02:03",
+      rating_fetched_at: "2026-06-03 01:02:03",
+      updated_at: "2026-06-03 01:02:03",
+    },
+    aliases: ["Write Alias A", "Write Alias B"],
+    tags: [{ name: "写入Tag", count: 12, totalCount: 34 }],
+  });
+
+  const subject = findSubjectById(id);
+  assert.equal(subject.bangumi_id, id);
+  assert.equal(subject.name, "Write Repo Title");
+  assert.equal(subject.name_cn, "写入标题");
+  assert.equal(subject.rating_score, 8.1);
+  assert.equal(subject.rating_rank, 222);
+  assert.equal(subject.rating_total, 321);
+  assert.deepEqual(JSON.parse(subject.rating_distribution_json), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+  assert.deepEqual(listSubjectAliases(id), ["Write Alias A", "Write Alias B"]);
+  assert.deepEqual(listSubjectTags(id), [{ name: "写入Tag", count: 12, totalCount: 34 }]);
+
+  upsertSubjectMetadata({
+    subject: {
+      bangumi_id: id,
+      name: "Updated Write Repo Title",
+      updated_at: "2026-06-03 02:02:03",
+    },
+    aliases: [],
+    tags: [],
+  });
+
+  assert.equal(findSubjectById(id).name, "Updated Write Repo Title");
+  assert.deepEqual(listSubjectAliases(id), []);
+  assert.deepEqual(listSubjectTags(id), []);
 });

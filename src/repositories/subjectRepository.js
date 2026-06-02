@@ -6,6 +6,10 @@ function boundedLimit(value, fallback = 60) {
   return Math.min(parsed, 120);
 }
 
+function compactRow(row) {
+  return Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined));
+}
+
 export function findSubjectById(id) {
   return sqlite.prepare("SELECT * FROM subjects WHERE bangumi_id = ?").get(id);
 }
@@ -55,4 +59,57 @@ export function listSubjectAliases(id) {
     WHERE bangumi_id = ?
     ORDER BY alias ASC
   `).all(id).map((row) => row.alias);
+}
+
+export function upsertSubjectMetadata({ subject, aliases, tags }) {
+  const row = compactRow(subject);
+  const columns = Object.keys(row);
+  if (!row.bangumi_id) throw new Error("upsertSubjectMetadata requires subject.bangumi_id");
+
+  const placeholders = columns.map((column) => `@${column}`).join(", ");
+  const updateColumns = columns.filter((column) => column !== "bangumi_id");
+
+  sqlite.transaction(() => {
+    sqlite.prepare(`
+      INSERT INTO subjects (${columns.join(", ")})
+      VALUES (${placeholders})
+      ON CONFLICT(bangumi_id) DO UPDATE SET
+        ${updateColumns.map((column) => `${column} = excluded.${column}`).join(", ")}
+    `).run(row);
+
+    if (aliases !== undefined) {
+      sqlite.prepare("DELETE FROM subject_aliases WHERE bangumi_id = ?").run(row.bangumi_id);
+      const insertAlias = sqlite.prepare(`
+        INSERT OR IGNORE INTO subject_aliases (bangumi_id, alias, source)
+        VALUES (?, ?, 'bangumi')
+      `);
+      for (const alias of aliases) {
+        if (alias) insertAlias.run(row.bangumi_id, alias);
+      }
+    }
+
+    if (tags !== undefined) {
+      sqlite.prepare("DELETE FROM subject_tags WHERE bangumi_id = ?").run(row.bangumi_id);
+      const upsertTag = sqlite.prepare(`
+        INSERT INTO tags (name, updated_at)
+        VALUES (?, datetime('now'))
+        ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
+        RETURNING tag_id
+      `);
+      const insertSubjectTag = sqlite.prepare(`
+        INSERT INTO subject_tags (bangumi_id, tag_id, count, total_count, source, updated_at)
+        VALUES (?, ?, ?, ?, 'bangumi', datetime('now'))
+        ON CONFLICT(bangumi_id, tag_id) DO UPDATE SET
+          count = excluded.count,
+          total_count = excluded.total_count,
+          updated_at = excluded.updated_at
+      `);
+
+      for (const tag of tags) {
+        if (!tag.name) continue;
+        const tagRow = upsertTag.get(tag.name);
+        insertSubjectTag.run(row.bangumi_id, tagRow.tag_id, tag.count, tag.totalCount);
+      }
+    }
+  })();
 }
