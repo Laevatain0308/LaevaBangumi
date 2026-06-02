@@ -8,6 +8,7 @@ import { coverPath, downloadCover } from "./lib/cover.js";
 import { db } from "./db/index.js";
 import { anime } from "./db/schema.js";
 import { log, error } from "./lib/logger.js";
+import { envelope } from "./dto/apiEnvelope.js";
 
 function ts() {
   return new Date().toISOString();
@@ -21,10 +22,10 @@ export function createServer() {
     try {
       log("api", "calendar requested");
       const result = await animeService.getCalendarView();
-      res.json({ data: result.data, updatedAt: ts(), meta: { freshness: result.freshness } });
+      res.json(envelope(result.data, { updatedAt: ts(), meta: { freshness: result.freshness } }));
     } catch (err) {
       error("api", "/api/calendar error", err);
-      res.status(500).json({ data: [], updatedAt: ts(), meta: { error: err.message } });
+      res.status(500).json(envelope([], { updatedAt: ts(), meta: { error: err.message } }));
     }
   });
 
@@ -35,14 +36,13 @@ export function createServer() {
     try {
       log("api", "updates requested", { days, limit });
       const result = await animeService.getUpdates({ days, limit });
-      res.json({
-        data: result.data,
+      res.json(envelope(result.data, {
         updatedAt: ts(),
         meta: { freshness: result.freshness, total: result.data.length, days },
-      });
+      }));
     } catch (err) {
       error("api", "/api/updates error", err);
-      res.status(500).json({ data: [], updatedAt: ts(), meta: { error: err.message } });
+      res.status(500).json(envelope([], { updatedAt: ts(), meta: { error: err.message } }));
     }
   });
 
@@ -51,42 +51,41 @@ export function createServer() {
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     const tag = typeof req.query.tag === "string" ? req.query.tag.trim() : "";
     if (q && tag) {
-      return res.status(400).json({ data: [], updatedAt: ts(), meta: { total: 0, warnings: ["q 和 tag 不能同时使用"] } });
+      return res.status(400).json(envelope([], { updatedAt: ts(), meta: { total: 0, warnings: ["q 和 tag 不能同时使用"] } }));
     }
     if (!tag && (!q || q.length < 2)) {
-      return res.status(400).json({ data: [], updatedAt: ts(), meta: { total: 0, warnings: ["关键词至少需要 2 个字符"] } });
+      return res.status(400).json(envelope([], { updatedAt: ts(), meta: { total: 0, warnings: ["关键词至少需要 2 个字符"] } }));
     }
     try {
       log("api", "search requested", tag ? { tag } : { q });
       const result = tag ? await animeService.searchAnimeByTag(tag) : await animeService.searchAnime(q);
       if (q) enqueueSearch(q);
-      res.json({ data: result.data, updatedAt: ts(), meta: { freshness: result.freshness, total: result.data.length } });
+      res.json(envelope(result.data, { updatedAt: ts(), meta: { freshness: result.freshness, total: result.data.length } }));
     } catch (err) {
       error("api", "/api/search error", err);
-      res.status(500).json({ data: [], updatedAt: ts(), meta: { error: err.message } });
+      res.status(500).json(envelope([], { updatedAt: ts(), meta: { error: err.message } }));
     }
   });
 
   // ── /api/detail ────────────────────────────────────────
   app.get("/api/detail", async (req, res) => {
     const id = parseInt(req.query.id, 10);
-    if (!id) return res.status(400).json({ data: null, updatedAt: ts(), meta: { warnings: ["缺少 id 参数"] } });
+    if (!id) return res.status(400).json(envelope(null, { updatedAt: ts(), meta: { warnings: ["缺少 id 参数"] } }));
     try {
       log("api", "detail requested", { id });
       const result = await animeService.getAnimeDetail(id);
-      if (!result) return res.status(404).json({ data: null, updatedAt: ts(), meta: { warnings: ["番剧不存在"] } });
-      res.json({
-        data: result.data,
+      if (!result) return res.status(404).json(envelope(null, { updatedAt: ts(), meta: { warnings: ["番剧不存在"] } }));
+      res.json(envelope(result.data, {
         updatedAt: ts(),
         meta: {
           freshness: result.freshness,
           resourceStatus: result.resourceStatus,
           resourceSources: result.resourceSources,
         },
-      });
+      }));
     } catch (err) {
       error("api", "/api/detail error", err);
-      res.status(500).json({ data: null, updatedAt: ts(), meta: { error: err.message } });
+      res.status(500).json(envelope(null, { updatedAt: ts(), meta: { error: err.message } }));
     }
   });
 
@@ -96,16 +95,16 @@ export function createServer() {
     const ch = parseInt(req.query.ch, 10);
     const ep = parseInt(req.query.ep, 10);
     if (!id || !ch || !ep || ep < 1 || ch < 1) {
-      return res.status(400).json({ data: null, updatedAt: ts(), meta: { warnings: ["缺少 id / ch / ep 参数"] } });
+      return res.status(400).json(envelope(null, { updatedAt: ts(), meta: { warnings: ["缺少 id / ch / ep 参数"] } }));
     }
     try {
       log("api", "play requested", { id, ch, ep });
       const result = await animeService.getPlayUrl(id, ch, ep);
-      if (!result) return res.status(404).json({ data: null, updatedAt: ts(), meta: { warnings: ["剧集不存在或无播放地址"] } });
-      res.json({ data: result, updatedAt: ts(), meta: { freshness: "cached" } });
+      if (!result) return res.status(404).json(envelope(null, { updatedAt: ts(), meta: { warnings: ["剧集不存在或无播放地址"] } }));
+      res.json(envelope(result, { updatedAt: ts(), meta: { freshness: "cached" } }));
     } catch (err) {
       error("api", "/api/play error", err);
-      res.status(500).json({ data: null, updatedAt: ts(), meta: { error: err.message } });
+      res.status(500).json(envelope(null, { updatedAt: ts(), meta: { error: err.message } }));
     }
   });
 

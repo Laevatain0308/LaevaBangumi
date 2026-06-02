@@ -19,6 +19,15 @@ import { getEnabledSources } from "../lib/cstationConfig.js";
 import { collectBangumiTitles, matchOne, rankMatches } from "../lib/matcher.js";
 import { downloadCover } from "../lib/cover.js";
 import { buildCoverProxyUrl } from "../lib/coverProxyUrl.js";
+import {
+  formatLegacyAnimeDetailDto,
+  formatSubjectDetailDto,
+  formatSubjectSearchDto,
+} from "../dto/subjectDto.js";
+import {
+  formatDetailEpisodeDto,
+  formatPlayDto,
+} from "../dto/resourceDto.js";
 import { debug, log, warn, error } from "../lib/logger.js";
 
 const DETAIL_FRESH_MS = 12 * 60 * 60 * 1000;
@@ -1599,11 +1608,9 @@ function clearStaleCalendarEntries(activeAnimeIds) {
 }
 
 function formatSubjectSearchRow(row) {
-  return {
-    id: row.bangumi_id,
-    title: row.name_cn || row.name,
+  return formatSubjectSearchDto(row, {
     coverUrl: proxyCover(row.bangumi_id, row.cover_url, row.has_cover),
-  };
+  });
 }
 
 function searchSubjectsByKeyword(keyword) {
@@ -1651,11 +1658,6 @@ function subjectAliasesFor(id) {
     WHERE bangumi_id = ?
     ORDER BY alias ASC
   `).all(id).map((row) => row.alias);
-}
-
-function parseVotesCount(value) {
-  const parsed = safeJson(value, []);
-  return Array.isArray(parsed) ? parsed : [];
 }
 
 function normalizedSourceStatuses(id) {
@@ -1759,11 +1761,11 @@ function collectNormalizedEpisodeChannels(id) {
       });
     }
     channels.get(key).episodes.push({
-      index: row.ep_index,
-      sourceIndex: row.source_ep_index,
-      name: row.ep_name,
-      playUrl: `/anime/api/play?id=${id}&ch=${channels.size}&ep=${row.ep_index}`,
-      updatedAt: row.updated_at,
+      ...formatDetailEpisodeDto({
+        subjectId: id,
+        channelIndex: channels.size,
+        episode: row,
+      }),
     });
   }
 
@@ -1776,26 +1778,13 @@ function getNormalizedAnimeDetail(id) {
   const channels = collectNormalizedEpisodeChannels(id);
   const sourceStatuses = normalizedSourceStatuses(id);
   return {
-    data: {
-      id: subject.bangumi_id,
-      title: subject.name_cn || subject.name,
-      name: subject.name,
-      nameCn: subject.name_cn,
-      summary: displaySummary(subject.summary),
+    data: formatSubjectDetailDto({
+      subject,
       coverUrl: proxyCover(subject.bangumi_id, subject.cover_url, subject.has_cover),
-      airDate: subject.air_date,
-      airWeekday: subject.air_weekday,
-      platform: subject.platform,
-      eps: subject.eps,
-      totalEpisodes: subject.total_episodes,
-      ratingScore: subject.rating_score,
-      rank: subject.rating_rank,
-      votes: subject.rating_total,
-      votesCount: parseVotesCount(subject.rating_distribution_json),
       tags: subjectTagsFor(id),
       aliases: subjectAliasesFor(id),
       channels,
-    },
+    }),
     freshness: isFresh(subject.metadata_fetched_at, DETAIL_FRESH_MS) ? "cache" : "stale",
     resourceStatus: aggregateResourceStatus(sourceStatuses),
     resourceSources: sourceStatuses,
@@ -1813,7 +1802,7 @@ function getNormalizedPlayUrl(id, ch, ep) {
     WHERE bangumi_id = @id AND source = @source AND source_aid = @sourceAid AND ep_index = @ep
   `).get({ id, source: channel.source, sourceAid: channel.sourceAid, ep });
   if (!row) return null;
-  return { videoUrl: row.video_url, directPlay: false, headers: {}, expiresAt: null };
+  return formatPlayDto(row.video_url);
 }
 
 export async function searchAnime(keyword) {
@@ -2036,29 +2025,17 @@ function formatAnimeDetail(a, fresh, mappedRows = null) {
     episodes: channel.episodes
       .sort((aEp, bEp) => aEp.epIndex - bEp.epIndex)
       .map((ep) => ({
-        index: ep.epIndex,
-        name: ep.epName,
-        playUrl: `/anime/api/play?id=${a.id}&ch=${chIdx + 1}&ep=${ep.epIndex}`,
+        ...formatDetailEpisodeDto({ subjectId: a.id, channelIndex: chIdx + 1, episode: ep }),
       })),
   }));
 
-  return {
-    data: {
-      id: a.id,
-      title: a.nameCn || a.name,
-      summary: displaySummary(a.summary),
-      coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover),
-      eps: a.eps,
-      totalEpisodes: a.totalEpisodes,
-      airDate: a.airDate,
-      platform: a.platform,
-      ratingScore: a.ratingScore,
-      rank: a.rank,
-      tags: safeJson(a.tags, null),
-      channels,
-    },
-    freshness: fresh ? "cache" : "stale",
-  };
+  return formatLegacyAnimeDetailDto({
+    anime: a,
+    fresh,
+    coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover),
+    tags: safeJson(a.tags, null),
+    channels,
+  });
 }
 
 export async function getPlayUrl(id, ch, ep) {
@@ -2082,7 +2059,7 @@ export async function getPlayUrl(id, ch, ep) {
   const epList = channels[chIdx].episodes.filter((e) => e.epIndex === ep);
   if (epList.length === 0) return null;
 
-  return { videoUrl: epList[0].videoUrl, directPlay: false, headers: {}, expiresAt: null };
+  return formatPlayDto(epList[0].videoUrl);
 }
 
 export async function getCalendarView() {
