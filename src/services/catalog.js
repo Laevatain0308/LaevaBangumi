@@ -1,9 +1,9 @@
 import { eq, and } from "drizzle-orm";
-import { db, sqlite } from "../db/index.js";
+import { db } from "../db/index.js";
 import { cstationCatalog, sourceSyncState } from "../db/schema.js";
 import * as cstation from "./cstation.js";
 import { log, error } from "../lib/logger.js";
-import { upsertResourceItem } from "../repositories/resourceRepository.js";
+import { upsertResourceItem, upsertResourceSyncState } from "../repositories/resourceRepository.js";
 
 function now() {
   return new Date().toISOString().replace("T", " ").slice(0, 19);
@@ -137,21 +137,15 @@ export async function hydrateCatalogDetails(ids, { source } = {}) {
 }
 
 function upsertSyncState(source, category, lastSeenAt) {
+  const lastSuccessAt = now();
   db.insert(sourceSyncState)
-    .values({ source, category, lastSeenAt, lastSuccessAt: now(), updatedAt: now() })
+    .values({ source, category, lastSeenAt, lastSuccessAt, updatedAt: lastSuccessAt })
     .onConflictDoUpdate({
       target: [sourceSyncState.source, sourceSyncState.category],
-      set: { lastSeenAt, lastSuccessAt: now(), updatedAt: now() },
+      set: { lastSeenAt, lastSuccessAt, updatedAt: lastSuccessAt },
     })
     .run();
-  sqlite.prepare(`
-    INSERT INTO sync_state (source, scope, last_seen_at, last_success_at, updated_at)
-    VALUES (?, ?, ?, datetime('now'), datetime('now'))
-    ON CONFLICT(source, scope) DO UPDATE SET
-      last_seen_at = excluded.last_seen_at,
-      last_success_at = excluded.last_success_at,
-      updated_at = excluded.updated_at
-  `).run(source, category, lastSeenAt);
+  upsertResourceSyncState({ source, scope: category, lastSeenAt, lastSuccessAt });
 }
 
 function maxLastFromCatalog(catalog) {

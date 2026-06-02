@@ -18,6 +18,7 @@ import {
   upsertResourceEpisode,
   upsertResourceItem,
   upsertResourceMapping,
+  upsertResourceSyncState,
   upsertRetryState,
 } from "../src/repositories/resourceRepository.js";
 
@@ -297,6 +298,37 @@ test("resource repository upserts resource items without erasing existing option
   const sourceRow = sqlite.prepare("SELECT * FROM resource_sources WHERE source = ?").get(source);
   assert.equal(sourceRow.name, source);
   assert.equal(sourceRow.enabled, 1);
+});
+
+test("resource repository upserts normalized sync state rows", () => {
+  initDb();
+  const source = `${RESOURCE_SOURCE}_sync`;
+  const scope = "2";
+  sqlite.prepare("DELETE FROM sync_state WHERE source = ? AND scope = ?").run(source, scope);
+
+  upsertResourceSyncState({
+    source,
+    scope,
+    lastSeenAt: "2026-06-03 01:00:00",
+    lastSuccessAt: "2026-06-03 01:10:00",
+  });
+  upsertResourceSyncState({
+    source,
+    scope,
+    lastSeenAt: "2026-06-03 02:00:00",
+    lastSuccessAt: "2026-06-03 02:10:00",
+  });
+
+  assert.deepEqual(sqlite.prepare(`
+    SELECT source, scope, last_seen_at, last_success_at
+    FROM sync_state
+    WHERE source = ? AND scope = ?
+  `).get(source, scope), {
+    source,
+    scope,
+    last_seen_at: "2026-06-03 02:00:00",
+    last_success_at: "2026-06-03 02:10:00",
+  });
 });
 
 test("resource repository upserts and prunes resource episodes", () => {

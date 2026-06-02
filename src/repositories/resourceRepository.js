@@ -141,6 +141,26 @@ export function upsertResourceItem({
   })();
 }
 
+export function upsertResourceSyncState({
+  source,
+  scope,
+  lastSeenAt,
+  lastSuccessAt = null,
+}) {
+  if (!source) throw new Error("resource sync state write requires source");
+  if (!scope) throw new Error("resource sync state write requires scope");
+  if (!lastSeenAt) throw new Error("resource sync state write requires lastSeenAt");
+
+  sqlite.prepare(`
+    INSERT INTO sync_state (source, scope, last_seen_at, last_success_at, updated_at)
+    VALUES (@source, @scope, @lastSeenAt, COALESCE(@lastSuccessAt, datetime('now')), datetime('now'))
+    ON CONFLICT(source, scope) DO UPDATE SET
+      last_seen_at = excluded.last_seen_at,
+      last_success_at = excluded.last_success_at,
+      updated_at = excluded.updated_at
+  `).run({ source, scope, lastSeenAt, lastSuccessAt });
+}
+
 export function upsertResourceEpisode({
   bangumiId,
   source,
