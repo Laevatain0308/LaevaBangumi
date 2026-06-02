@@ -35,6 +35,13 @@ import {
   searchSubjectsByKeyword,
   searchSubjectsByTag,
 } from "../repositories/subjectRepository.js";
+import {
+  findEpisodeVideoUrl,
+  listEpisodeChannelRowsForSubject,
+  listManualResourceStatesForSubject,
+  listResourceMappingsWithEpisodePresenceForSubject,
+  listRetryStateForSubject,
+} from "../repositories/resourceRepository.js";
 import { debug, log, warn, error } from "../lib/logger.js";
 
 const DETAIL_FRESH_MS = 12 * 60 * 60 * 1000;
@@ -1621,29 +1628,9 @@ function formatSubjectSearchRow(row) {
 }
 
 function normalizedSourceStatuses(id) {
-  const mappings = sqlite.prepare(`
-    SELECT
-      rm.source,
-      rm.source_aid,
-      EXISTS (
-        SELECT 1 FROM episodes e
-        WHERE e.bangumi_id = rm.bangumi_id
-          AND e.source = rm.source
-          AND e.source_aid = rm.source_aid
-      ) AS has_episodes
-    FROM resource_mappings rm
-    WHERE rm.bangumi_id = ?
-  `).all(id);
-  const retries = sqlite.prepare(`
-    SELECT source, retry_count, retry_at
-    FROM retry_state
-    WHERE bangumi_id = ? AND kind = 'mapping'
-  `).all(id);
-  const manualRows = sqlite.prepare(`
-    SELECT source, status, note
-    FROM manual_resource_state
-    WHERE bangumi_id = ?
-  `).all(id);
+  const mappings = listResourceMappingsWithEpisodePresenceForSubject(id);
+  const retries = listRetryStateForSubject(id, "mapping");
+  const manualRows = listManualResourceStatesForSubject(id);
 
   const mappedBySource = new Map(mappings.map((row) => [row.source, row]));
   const retryBySource = new Map(retries.map((row) => [row.source, row]));
@@ -1686,26 +1673,8 @@ function normalizedSourceStatuses(id) {
 
 function collectNormalizedEpisodeChannels(id) {
   const enabledSources = enabledSourceSet();
-  const rows = sqlite.prepare(`
-    SELECT
-      e.source,
-      e.source_aid,
-      e.ep_index,
-      e.source_ep_index,
-      e.ep_name,
-      e.updated_at,
-      rs.name AS source_name,
-      ri.title AS resource_title
-    FROM episodes e
-    JOIN resource_mappings rm
-      ON rm.bangumi_id = e.bangumi_id
-      AND rm.source = e.source
-      AND rm.source_aid = e.source_aid
-    LEFT JOIN resource_sources rs ON rs.source = e.source
-    LEFT JOIN resource_items ri ON ri.source = e.source AND ri.source_aid = e.source_aid
-    WHERE e.bangumi_id = ?
-    ORDER BY e.source ASC, e.source_aid ASC, e.ep_index ASC
-  `).all(id).filter((row) => enabledSources.has(row.source));
+  const rows = listEpisodeChannelRowsForSubject(id)
+    .filter((row) => enabledSources.has(row.source));
 
   const channels = new Map();
   for (const row of rows) {
@@ -1757,10 +1726,12 @@ function getNormalizedPlayUrl(id, ch, ep) {
   if (!channel) return null;
   const episode = channel.episodes.find((row) => row.index === ep);
   if (!episode) return null;
-  const row = sqlite.prepare(`
-    SELECT video_url FROM episodes
-    WHERE bangumi_id = @id AND source = @source AND source_aid = @sourceAid AND ep_index = @ep
-  `).get({ id, source: channel.source, sourceAid: channel.sourceAid, ep });
+  const row = findEpisodeVideoUrl({
+    bangumiId: id,
+    source: channel.source,
+    sourceAid: channel.sourceAid,
+    epIndex: ep,
+  });
   if (!row) return null;
   return formatPlayDto(row.video_url);
 }
