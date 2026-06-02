@@ -192,6 +192,13 @@ function clearEpisodeFetchRetry(animeId, source) {
 }
 
 function getRetryState(animeId, source) {
+  const normalized = sqlite.prepare(`
+    SELECT bangumi_id, source, retry_count, retry_at, updated_at
+    FROM retry_state
+    WHERE bangumi_id = ? AND source = ? AND kind = 'mapping'
+  `).get(animeId, source);
+  if (normalized) return retryStateRowToLegacy(normalized);
+
   return db.select()
     .from(matchRetryState)
     .where(and(eq(matchRetryState.animeId, animeId), eq(matchRetryState.source, source)))
@@ -199,6 +206,13 @@ function getRetryState(animeId, source) {
 }
 
 function getEpisodeFetchRetryState(animeId, source) {
+  const normalized = sqlite.prepare(`
+    SELECT bangumi_id, source, retry_count, retry_at, updated_at
+    FROM retry_state
+    WHERE bangumi_id = ? AND source = ? AND kind = 'episode_fetch'
+  `).get(animeId, source);
+  if (normalized) return retryStateRowToLegacy(normalized);
+
   return db.select()
     .from(episodeFetchRetryState)
     .where(and(eq(episodeFetchRetryState.animeId, animeId), eq(episodeFetchRetryState.source, source)))
@@ -206,6 +220,21 @@ function getEpisodeFetchRetryState(animeId, source) {
 }
 
 function getManualBlockingState(animeId, source) {
+  const normalized = sqlite.prepare(`
+    SELECT bangumi_id, source, status, note, updated_at
+    FROM manual_resource_state
+    WHERE bangumi_id = ? AND source = ?
+  `).get(animeId, source);
+  if (normalized) {
+    return MANUAL_MATCH_BLOCKING_STATUSES.has(normalized.status) ? {
+      animeId: normalized.bangumi_id,
+      source: normalized.source,
+      status: normalized.status,
+      note: normalized.note,
+      updatedAt: normalized.updated_at,
+    } : undefined;
+  }
+
   return db.select()
     .from(manualMatchState)
     .where(and(
@@ -255,6 +284,16 @@ function markSourceAlreadyMapped(animeId, source, ownerAnimeId, cstationId) {
 
 function clearSourceAlreadyMapped(animeId, source) {
   clearManualStateByStatus(animeId, source, "source_already_mapped");
+}
+
+function retryStateRowToLegacy(row) {
+  return {
+    animeId: row.bangumi_id,
+    source: row.source,
+    retryCount: row.retry_count,
+    retryAt: row.retry_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 function proxyCover(id, coverUrl, hasCover) {
@@ -605,7 +644,16 @@ async function upsertEpisodes(animeId, source, cstationId, episodesList) {
   ensureSubjectFromAnime(animeId);
   for (const ep of episodesList) {
     const sourceEpIndex = ep.sourceEpIndex ?? ep.epIndex;
-    const existing = db.select()
+    const normalizedExisting = db.select()
+      .from(episodes)
+      .where(and(
+        eq(episodes.bangumiId, animeId),
+        eq(episodes.source, source),
+        eq(episodes.sourceAid, cstationId),
+        eq(episodes.epIndex, ep.epIndex)
+      ))
+      .get();
+    const existing = normalizedExisting ?? db.select()
       .from(episodes)
       .where(and(
         eq(episodes.animeId, animeId),
@@ -640,8 +688,11 @@ async function upsertEpisodes(animeId, source, cstationId, episodesList) {
     ) {
       db.update(episodes)
         .set({
+          animeId,
           bangumiId: animeId,
+          sourceName: source,
           source,
+          sourceAid: cstationId,
           videoUrl: ep.videoUrl,
           epName: ep.epName,
           sourceEpIndex,
@@ -802,10 +853,35 @@ function getAutoExclusiveSourceOwner(source, cstationId, animeId) {
 
 function getCandidatesForAnime(a, source) {
   const year = bangumi.extractYear(a.airDate);
-  return db.select()
+  const candidatesById = new Map();
+  for (const row of db.select()
     .from(cstationCatalog)
     .where(eq(cstationCatalog.source, source))
-    .all()
+    .all()) {
+    candidatesById.set(row.id, row);
+  }
+
+  const normalizedRows = sqlite.prepare(`
+    SELECT source, source_aid, title, subtitle, category, year, latest_text, detail_fetched_at
+    FROM resource_items
+    WHERE source = ?
+  `).all(source);
+  for (const row of normalizedRows) {
+    const existing = candidatesById.get(row.source_aid);
+    candidatesById.set(row.source_aid, {
+      ...existing,
+      source: row.source,
+      id: row.source_aid,
+      category: row.category ?? existing?.category ?? null,
+      name: row.title ?? existing?.name,
+      subname: row.subtitle ?? existing?.subname ?? null,
+      year: row.year ?? existing?.year ?? null,
+      last: row.latest_text ?? existing?.last ?? null,
+      detailFetchedAt: row.detail_fetched_at ?? existing?.detailFetchedAt ?? null,
+    });
+  }
+
+  return [...candidatesById.values()]
     .filter((c) => {
       if (!year || !c.year) return true;
       const cy = parseInt(c.year, 10);
@@ -836,10 +912,7 @@ async function findBestSourceMatch(a, source, ranked = null) {
 
   if (needDetailIds.length > 0) {
     await hydrateCatalogDetails(needDetailIds, { source });
-    const detailed = db.select()
-      .from(cstationCatalog)
-      .where(eq(cstationCatalog.source, source))
-      .all()
+    const detailed = getCandidatesForAnime(a, source)
       .filter((c) => needDetailIds.includes(c.id));
     const detailedBest = matchOne(names, year, detailed);
     if (detailedBest && (!best || detailedBest.score > best.score)) best = detailedBest;
@@ -1062,6 +1135,23 @@ function applyBatchLimit(rows, limit) {
   };
 }
 
+function retryRowsForKind(kind) {
+  const legacyRows = kind === "episode_fetch"
+    ? db.select().from(episodeFetchRetryState).all()
+    : db.select().from(matchRetryState).all();
+  const rowsByKey = new Map(legacyRows.map((row) => [`${row.animeId}:${row.source}`, row]));
+  const normalizedRows = sqlite.prepare(`
+    SELECT bangumi_id, source, retry_count, retry_at, updated_at
+    FROM retry_state
+    WHERE kind = ?
+  `).all(kind);
+  for (const row of normalizedRows) {
+    const legacyRow = retryStateRowToLegacy(row);
+    rowsByKey.set(`${legacyRow.animeId}:${legacyRow.source}`, legacyRow);
+  }
+  return [...rowsByKey.values()];
+}
+
 export async function retryPending({
   mappingLimit = DEFAULT_MAPPING_RETRY_BATCH_LIMIT,
   episodeFetchLimit = DEFAULT_EPISODE_FETCH_RETRY_BATCH_LIMIT,
@@ -1072,8 +1162,8 @@ export async function retryPending({
   const sourceKeys = getEnabledSourceKeys(explicitSourceKeys);
   const mapped = mappedAnimeSourceKeys(sourceKeys);
   const episodeSourceKeys = episodeAnimeSourceKeys(sourceKeys);
-  const retryRows = db.select().from(matchRetryState).all();
-  const episodeRetryRows = db.select().from(episodeFetchRetryState).all();
+  const retryRows = retryRowsForKind("mapping");
+  const episodeRetryRows = retryRowsForKind("episode_fetch");
   const manualBlockedKeys = manualBlockingKeys(sourceKeys);
   const animeById = new Map(list.map((a) => [a.id, a]));
   const pending = retryRows.filter((row) => {
@@ -1211,12 +1301,24 @@ export function enqueueEpisodeRefreshesBySourceIds(sourceIds, { source } = {}) {
   let queued = 0;
 
   for (const sourceId of ids) {
+    const animeIds = new Set();
     const rows = db.select({ animeId: bangumiCstationMap.animeId })
       .from(bangumiCstationMap)
       .where(and(eq(bangumiCstationMap.source, source), eq(bangumiCstationMap.cstationId, sourceId)))
       .all();
     for (const row of rows) {
-      if (enqueueEpisodeRefresh(row.animeId, { source })) queued++;
+      animeIds.add(row.animeId);
+    }
+    const normalizedRows = sqlite.prepare(`
+      SELECT bangumi_id
+      FROM resource_mappings
+      WHERE source = ? AND source_aid = ?
+    `).all(source, sourceId);
+    for (const row of normalizedRows) {
+      animeIds.add(row.bangumi_id);
+    }
+    for (const animeId of animeIds) {
+      if (enqueueEpisodeRefresh(animeId, { source })) queued++;
     }
   }
 
@@ -1419,40 +1521,67 @@ export async function prewarmAnime({
 }
 
 function mappedAnimeSourceKeys(sourceKeys) {
-  return new Set(
-    db.select({ animeId: bangumiCstationMap.animeId, source: bangumiCstationMap.source })
-      .from(bangumiCstationMap)
-      .all()
-      .filter((r) => sourceKeys.includes(r.source))
-      .map((r) => `${r.animeId}:${r.source}`)
-  );
+  const keys = new Set();
+  for (const row of db.select({ animeId: bangumiCstationMap.animeId, source: bangumiCstationMap.source })
+    .from(bangumiCstationMap)
+    .all()) {
+    if (sourceKeys.includes(row.source)) keys.add(`${row.animeId}:${row.source}`);
+  }
+  for (const row of sqlite.prepare(`
+    SELECT bangumi_id, source
+    FROM resource_mappings
+  `).all()) {
+    if (sourceKeys.includes(row.source)) keys.add(`${row.bangumi_id}:${row.source}`);
+  }
+  return keys;
 }
 
 function episodeAnimeSourceKeys(sourceKeys) {
-  return new Set(
-    db.select({ animeId: episodes.animeId, sourceName: episodes.sourceName })
-      .from(episodes)
-      .all()
-      .filter((r) => sourceKeys.includes(r.sourceName))
-      .map((r) => `${r.animeId}:${r.sourceName}`)
-  );
+  const keys = new Set();
+  for (const row of db.select({ animeId: episodes.animeId, sourceName: episodes.sourceName })
+    .from(episodes)
+    .all()) {
+    if (sourceKeys.includes(row.sourceName)) keys.add(`${row.animeId}:${row.sourceName}`);
+  }
+  for (const row of sqlite.prepare(`
+    SELECT bangumi_id, source
+    FROM episodes
+    WHERE bangumi_id IS NOT NULL AND source IS NOT NULL
+  `).all()) {
+    if (sourceKeys.includes(row.source)) keys.add(`${row.bangumi_id}:${row.source}`);
+  }
+  return keys;
 }
 
 function retryStateByAnimeSource(sourceKeys) {
   return new Map(
-    db.select().from(matchRetryState).all()
+    retryRowsForKind("mapping")
       .filter((r) => sourceKeys.includes(r.source))
       .map((r) => [`${r.animeId}:${r.source}`, r])
   );
 }
 
 function manualBlockingKeys(sourceKeys) {
+  const stateByKey = new Map();
+  for (const row of db.select({ animeId: manualMatchState.animeId, source: manualMatchState.source, status: manualMatchState.status })
+    .from(manualMatchState)
+    .all()) {
+    if (sourceKeys.includes(row.source)) {
+      stateByKey.set(`${row.animeId}:${row.source}`, row.status);
+    }
+  }
+  for (const row of sqlite.prepare(`
+    SELECT bangumi_id, source, status
+    FROM manual_resource_state
+  `).all()) {
+    if (sourceKeys.includes(row.source)) {
+      stateByKey.set(`${row.bangumi_id}:${row.source}`, row.status);
+    }
+  }
   return new Set(
-    db.select({ animeId: manualMatchState.animeId, source: manualMatchState.source, status: manualMatchState.status })
-      .from(manualMatchState)
-      .all()
-      .filter((r) => sourceKeys.includes(r.source) && MANUAL_MATCH_BLOCKING_STATUSES.has(r.status))
-      .map((r) => `${r.animeId}:${r.source}`)
+    [...stateByKey.entries()]
+      .filter(([, status]) => MANUAL_MATCH_BLOCKING_STATUSES.has(status))
+      .map(([key]) => key)
   );
 }
 

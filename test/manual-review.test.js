@@ -944,6 +944,78 @@ test("ensureMappingForAnime skips source ids occupied by normalized mappings", a
   assert.equal(retry.retry_at, null);
 });
 
+test("ensureMappingForAnime reads candidates from normalized resource items", async () => {
+  db.delete(cstationCatalog)
+    .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
+    .run();
+  sqlite.exec(`
+    INSERT INTO resource_sources (source, name, enabled)
+    VALUES ('${SOURCE}', '测试资源', 1)
+    ON CONFLICT(source) DO UPDATE SET name = excluded.name, enabled = excluded.enabled;
+    INSERT INTO resource_items (source, source_aid, title, subtitle, year, detail_fetched_at, updated_at)
+    VALUES ('${SOURCE}', ${SOURCE_AID}, '测试番剧', 'Manual Review Test', '2026', '2026-05-30 00:00:00', datetime('now'))
+    ON CONFLICT(source, source_aid) DO UPDATE SET
+      title = excluded.title,
+      subtitle = excluded.subtitle,
+      year = excluded.year,
+      detail_fetched_at = excluded.detail_fetched_at,
+      updated_at = excluded.updated_at;
+  `);
+
+  const result = await ensureMappingForAnime(ANIME_ID, { source: SOURCE });
+  const normalizedMapping = sqlite.prepare(`
+    SELECT * FROM resource_mappings
+    WHERE bangumi_id = ? AND source = ?
+  `).get(ANIME_ID, SOURCE);
+
+  assert.equal(result.matched, true);
+  assert.equal(result.cstationId, SOURCE_AID);
+  assert.equal(normalizedMapping.source_aid, SOURCE_AID);
+  assert.equal(normalizedMapping.matched_resource_name, "测试番剧");
+});
+
+test("ensureMappingForAnime honors normalized manual no_resource state", async () => {
+  sqlite.exec(`
+    INSERT INTO manual_resource_state (bangumi_id, source, status, note, updated_at)
+    VALUES (${ANIME_ID}, '${SOURCE}', 'no_resource', 'normalized block', datetime('now'))
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      status = excluded.status,
+      note = excluded.note,
+      updated_at = excluded.updated_at;
+  `);
+
+  const result = await ensureMappingForAnime(ANIME_ID, { source: SOURCE });
+  const mapping = sqlite.prepare(`
+    SELECT * FROM resource_mappings
+    WHERE bangumi_id = ? AND source = ?
+  `).get(ANIME_ID, SOURCE);
+
+  assert.equal(result.matched, false);
+  assert.equal(result.reason, "no-resource");
+  assert.equal(mapping, undefined);
+});
+
+test("ensureMappingForAnime honors normalized max mapping retry state", async () => {
+  sqlite.exec(`
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    VALUES (${ANIME_ID}, '${SOURCE}', 'mapping', 5, null, datetime('now'))
+    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+      retry_count = excluded.retry_count,
+      retry_at = excluded.retry_at,
+      updated_at = excluded.updated_at;
+  `);
+
+  const result = await ensureMappingForAnime(ANIME_ID, { source: SOURCE });
+  const mapping = sqlite.prepare(`
+    SELECT * FROM resource_mappings
+    WHERE bangumi_id = ? AND source = ?
+  `).get(ANIME_ID, SOURCE);
+
+  assert.equal(result.matched, false);
+  assert.equal(result.reason, "max-retries");
+  assert.equal(mapping, undefined);
+});
+
 test("ensureMappingForAnime skips source ids occupied by ranged manual mappings", async () => {
   seedRangeAnime();
   db.insert(bangumiCstationMap)
@@ -1133,6 +1205,58 @@ test("retryPending limits mapping retries per run", async () => {
       .run();
     db.delete(anime).where(eq(anime.id, EXTRA_ANIME_ID)).run();
   }
+});
+
+test("retryPending reads normalized mapping retry rows", async () => {
+  sqlite.exec(`
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    VALUES (${ANIME_ID}, '${SOURCE}', 'mapping', 1, '2000-01-01 00:00:00', datetime('now'))
+    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+      retry_count = excluded.retry_count,
+      retry_at = excluded.retry_at,
+      updated_at = excluded.updated_at;
+  `);
+
+  const stats = await retryPending({ mappingLimit: 10, episodeFetchLimit: 0, refreshEpisodes: false, sourceKeys: [SOURCE] });
+  const mapping = sqlite.prepare(`
+    SELECT * FROM resource_mappings
+    WHERE bangumi_id = ? AND source = ?
+  `).get(ANIME_ID, SOURCE);
+
+  assert.equal(stats.retried, 1);
+  assert.equal(stats.matched, 1);
+  assert.equal(stats.errors, 0);
+  assert.equal(mapping.source_aid, SOURCE_AID);
+});
+
+test("retryPending lets normalized manual state override stale legacy blocks", async () => {
+  db.insert(manualMatchState)
+    .values({ animeId: ANIME_ID, source: SOURCE, status: "no_resource", note: "legacy stale", updatedAt: "2026-05-30 00:00:00" })
+    .run();
+  sqlite.exec(`
+    INSERT INTO manual_resource_state (bangumi_id, source, status, note, updated_at)
+    VALUES (${ANIME_ID}, '${SOURCE}', 'ready', 'normalized current', datetime('now'))
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      status = excluded.status,
+      note = excluded.note,
+      updated_at = excluded.updated_at;
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    VALUES (${ANIME_ID}, '${SOURCE}', 'mapping', 1, '2000-01-01 00:00:00', datetime('now'))
+    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+      retry_count = excluded.retry_count,
+      retry_at = excluded.retry_at,
+      updated_at = excluded.updated_at;
+  `);
+
+  const stats = await retryPending({ mappingLimit: 10, episodeFetchLimit: 0, refreshEpisodes: false, sourceKeys: [SOURCE] });
+  const mapping = sqlite.prepare(`
+    SELECT * FROM resource_mappings
+    WHERE bangumi_id = ? AND source = ?
+  `).get(ANIME_ID, SOURCE);
+
+  assert.equal(stats.retried, 1);
+  assert.equal(stats.matched, 1);
+  assert.equal(mapping.source_aid, SOURCE_AID);
 });
 
 test("ensureMappingForAnime checks occupied source id before hydrating candidate details", async () => {
@@ -1610,6 +1734,61 @@ test("refreshEpisodesForAnime reads normalized resource mappings without legacy 
   assert.equal(normalizedRows[0].video_url, "https://example.invalid/1156.m3u8");
 });
 
+test("refreshEpisodesForAnime updates normalized-only episode rows", async () => {
+  seedRangeAnime();
+  sqlite.exec(`
+    INSERT INTO resource_sources (source, name, enabled)
+    VALUES ('ffzy', '非凡资源', 1)
+    ON CONFLICT(source) DO UPDATE SET name = excluded.name, enabled = excluded.enabled;
+    INSERT INTO resource_mappings (
+      bangumi_id, source, source_aid, source_ep_start, display_ep_offset,
+      score, matched_bg_name, matched_resource_name, matched_at
+    )
+    VALUES (${RANGE_ANIME_ID}, 'ffzy', ${RANGE_SOURCE_AID}, 1156, 1155, 0.91, '航海王 埃鲁巴夫篇', '航海王', '2026-05-30 00:00:00')
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      source_aid = excluded.source_aid,
+      source_ep_start = excluded.source_ep_start,
+      display_ep_offset = excluded.display_ep_offset,
+      score = excluded.score,
+      matched_bg_name = excluded.matched_bg_name,
+      matched_resource_name = excluded.matched_resource_name,
+      matched_at = excluded.matched_at;
+    INSERT INTO episodes (
+      bangumi_id, source, source_aid, ep_index, source_ep_index, ep_name, video_url, updated_at
+    )
+    VALUES (
+      ${RANGE_ANIME_ID}, 'ffzy', ${RANGE_SOURCE_AID}, 1, 1156, '旧标题', 'https://example.invalid/old.m3u8', '2026-05-30 00:00:00'
+    );
+  `);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(`
+    <rss><list><video>
+      <id>${RANGE_SOURCE_AID}</id>
+      <name>航海王</name>
+      <dl><dd flag="ffm3u8">第1156集$https://example.invalid/new.m3u8</dd></dl>
+    </video></list></rss>
+  `, { status: 200, headers: { "content-type": "application/xml" } });
+  try {
+    const result = await refreshEpisodesForAnime(RANGE_ANIME_ID, { source: "ffzy" });
+    assert.equal(result.refreshed, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const normalizedRows = sqlite.prepare(`
+    SELECT ep_index, source_ep_index, ep_name, video_url
+    FROM episodes
+    WHERE bangumi_id = ? AND source = 'ffzy'
+    ORDER BY ep_index
+  `).all(RANGE_ANIME_ID);
+
+  assert.equal(normalizedRows.length, 1);
+  assert.equal(normalizedRows[0].ep_index, 1);
+  assert.equal(normalizedRows[0].source_ep_index, 1156);
+  assert.equal(normalizedRows[0].video_url, "https://example.invalid/new.m3u8");
+});
+
 test("refreshEpisodesForAnime filters source episodes and stores display indexes", async () => {
   seedRangeAnime();
   db.insert(cstationCatalog)
@@ -1892,6 +2071,46 @@ test("episode fetch failures do not exhaust mapping retry state for existing map
   assert.equal(mappingRetry, undefined);
   assert.equal(fetchRetry.retryCount, 5);
   assert.equal(sourceStatus.status, "fetching");
+});
+
+test("episode fetch failures continue from normalized episode retry state", async () => {
+  sqlite.exec(`
+    INSERT INTO resource_sources (source, name, enabled)
+    VALUES ('ffzy', '非凡资源', 1)
+    ON CONFLICT(source) DO UPDATE SET name = excluded.name, enabled = excluded.enabled;
+    INSERT INTO resource_mappings (
+      bangumi_id, source, source_aid, matched_bg_name, matched_resource_name, matched_at
+    )
+    VALUES (${ANIME_ID}, 'ffzy', ${SOURCE_AID}, '测试番剧', '测试番剧', '2026-05-30 00:00:00')
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      source_aid = excluded.source_aid,
+      matched_bg_name = excluded.matched_bg_name,
+      matched_resource_name = excluded.matched_resource_name,
+      matched_at = excluded.matched_at;
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    VALUES (${ANIME_ID}, 'ffzy', 'episode_fetch', 2, '2000-01-01 00:00:00', datetime('now'))
+    ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
+      retry_count = excluded.retry_count,
+      retry_at = excluded.retry_at,
+      updated_at = excluded.updated_at;
+  `);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("", { status: 500 });
+  try {
+    const result = await refreshEpisodesForAnime(ANIME_ID, { source: "ffzy" });
+    assert.equal(result.refreshed, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const normalizedRetry = sqlite.prepare(`
+    SELECT * FROM retry_state
+    WHERE bangumi_id = ? AND source = 'ffzy' AND kind = 'episode_fetch'
+  `).get(ANIME_ID);
+
+  assert.equal(normalizedRetry.retry_count, 3);
+  assert.ok(normalizedRetry.retry_at);
 });
 
 test("getAnimeDetail ignores mappings and episodes from disabled sources", async () => {
