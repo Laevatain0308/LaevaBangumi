@@ -1183,7 +1183,12 @@ export async function searchAnime(keyword) {
     .all();
 
   return {
-    data: local.map((a) => ({ id: a.id, title: a.nameCn || a.name, coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover) })),
+    data: local.map((a) => ({
+      id: a.id,
+      bangumiId: a.id,
+      title: a.nameCn || a.name,
+      coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover),
+    })),
     freshness: "cache",
   };
 }
