@@ -3,42 +3,16 @@ import { dirname } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { db, sqlite } from "../db/index.js";
 import { anime, bangumiCstationMap, cstationCatalog, episodeFetchRetryState, episodes, manualMatchState, matchRetryState } from "../db/schema.js";
-import * as bangumi from "./bangumi.js";
 import { refreshEpisodesForAnime } from "./anime.js";
 import { getEnabledSources } from "../lib/cstationConfig.js";
-import { collectBangumiTitles, rankMatches } from "../lib/matcher.js";
+import { collectBangumiTitles } from "../lib/matcher.js";
 import { log } from "../lib/logger.js";
 
-export const DEFAULT_ANALYSIS_PATH = "data/manual/unmatched_report.csv";
 export const DEFAULT_REVIEW_PATH = "data/manual/manual_review.csv";
 export const DEFAULT_MAPPED_REVIEW_PATH = "data/manual/mapped_review.csv";
 
 const MAX_RETRIES = 5;
 const MANUAL_BLOCKED_STATUSES = new Set(["wait_airing", "no_resource", "source_already_mapped"]);
-
-const ANALYSIS_COLUMNS = [
-  "source",
-  "anime_id",
-  "bg_title",
-  "bg_aliases",
-  "air_date",
-  "classification",
-  "top_score",
-  "candidate_scope",
-  "candidate_rank",
-  "candidate_source_aid",
-  "source_aid",
-  "candidate_score",
-  "source_title",
-  "source_subname",
-  "source_year",
-  "matched_bg_name",
-  "matched_source_name",
-  "confidence",
-  "reason",
-  "status",
-  "reviewer_note",
-];
 
 const REVIEW_BASE_COLUMNS = [
   "anime_id",
@@ -146,14 +120,6 @@ function manualBlockedAutoMatchStateByAnimeIdForSource(source) {
       .filter((row) => MANUAL_BLOCKED_STATUSES.has(row.status))
       .map((row) => [row.animeId, row])
   );
-}
-
-function filterCatalogByYear(catalog, year) {
-  return catalog.filter((item) => {
-    if (!year || !item.year) return true;
-    const catalogYear = parseInt(item.year, 10);
-    return Number.isNaN(catalogYear) || Math.abs(year - catalogYear) <= 1;
-  });
 }
 
 function normalizedRowLimit(limit) {
@@ -375,111 +341,6 @@ export async function exportMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, 
   await writeFile(filePath, toCsv(result.rows, MAPPED_REVIEW_COLUMNS), "utf8");
   const stats = { filePath, ...result.stats };
   log("manual-match", "mapped review exported", stats);
-  return stats;
-}
-
-export function analyzeUnmatched({
-  source = null,
-  limit = 5,
-  minScore = 0.25,
-  reviewScore = 0.45,
-  autoScore = 0.8,
-  relaxedYearFallback = true,
-} = {}) {
-  const sources = sourcesForReview(source);
-  const rows = [];
-  const stats = {
-    animeSources: 0,
-    autoCandidate: 0,
-    review: 0,
-    weak: 0,
-    noCandidate: 0,
-  };
-
-  for (const sourceKey of sources) {
-    const mapped = mappedAnimeIdsForSource(sourceKey);
-    const catalog = db.select().from(cstationCatalog).where(eq(cstationCatalog.source, sourceKey)).all();
-    const unmatched = allAnimeRows().filter((a) => !mapped.has(a.id));
-
-    for (const a of unmatched) {
-      stats.animeSources++;
-      const analysis = analyzeAnimeSource(a, sourceKey, catalog, { limit, minScore, reviewScore, autoScore, relaxedYearFallback });
-      stats[analysis.classification]++;
-      rows.push(...analysis.rows);
-    }
-  }
-
-  return { rows, stats };
-}
-
-function analyzeAnimeSource(a, source, catalog, { limit, minScore, reviewScore, autoScore, relaxedYearFallback }) {
-  const names = animeTitles(a);
-  const year = bangumi.extractYear(a.airDate);
-  const filteredCatalog = filterCatalogByYear(catalog, year);
-  let ranked = rankMatches(names, year, filteredCatalog, { limit, minScore });
-  let candidateScope = year ? "year-filtered" : "all-years";
-
-  if (ranked.length === 0 && relaxedYearFallback && year) {
-    ranked = rankMatches(names, null, catalog, { limit, minScore });
-    candidateScope = "relaxed-year";
-  }
-
-  const top = ranked[0] || null;
-  const classification = classifyCandidate(top?.score, { minScore, reviewScore, autoScore });
-  const base = {
-    source,
-    anime_id: a.id,
-    bg_title: a.nameCn || a.name,
-    bg_aliases: JSON.stringify(names),
-    air_date: a.airDate,
-    classification,
-    top_score: top ? Number(top.score).toFixed(4) : "",
-    candidate_scope: top ? candidateScope : "none",
-    reason: reasonForClassification(classification, top, { minScore, reviewScore, autoScore }),
-    status: "",
-    reviewer_note: "",
-  };
-
-  if (ranked.length === 0) return { classification, rows: [base] };
-
-  return {
-    classification,
-    rows: ranked.map((candidate, index) => ({
-      ...base,
-      candidate_rank: index + 1,
-      candidate_source_aid: candidate.video.id,
-      source_aid: candidate.video.id,
-      candidate_score: Number(candidate.score).toFixed(4),
-      source_title: candidate.video.name,
-      source_subname: candidate.video.subname || "",
-      source_year: candidate.video.year || "",
-      matched_bg_name: candidate.matchedName,
-      matched_source_name: candidate.matchedSourceName,
-      confidence: candidate.confidence,
-    })),
-  };
-}
-
-function classifyCandidate(score, { reviewScore, autoScore }) {
-  if (score == null) return "noCandidate";
-  if (score >= autoScore) return "autoCandidate";
-  if (score >= reviewScore) return "review";
-  return "weak";
-}
-
-function reasonForClassification(classification, top, { minScore, reviewScore, autoScore }) {
-  if (classification === "autoCandidate") return `top score >= ${autoScore}; inspect why it was not mapped`;
-  if (classification === "review") return `top score >= ${reviewScore}; manual review recommended`;
-  if (classification === "weak") return `top score >= ${minScore} but < ${reviewScore}; weak local candidate`;
-  return `no local catalog candidate >= ${minScore}`;
-}
-
-export async function exportUnmatchedReport(filePath = DEFAULT_ANALYSIS_PATH, options = {}) {
-  const result = analyzeUnmatched(options);
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(filePath, toCsv(result.rows, ANALYSIS_COLUMNS), "utf8");
-  const stats = { filePath, rows: result.rows.length, ...result.stats };
-  log("manual-match", "unmatched report exported", stats);
   return stats;
 }
 

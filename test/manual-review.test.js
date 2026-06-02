@@ -23,7 +23,7 @@ import {
   importMappedReview,
   importManualReview,
 } from "../src/services/manualMatches.js";
-import { batchMatch, ensureMappingForAnime, getAnimeDetail, getPlayUrl, getUpdates, refreshEpisodesForAnime, retryPending, syncCalendar, upsertAnime } from "../src/services/anime.js";
+import { batchMatch, ensureMappingForAnime, getAnimeDetail, getPlayUrl, getUpdates, prewarmAnime, refreshEpisodesForAnime, retryPending, syncCalendar, upsertAnime } from "../src/services/anime.js";
 import { saveCatalog } from "../src/services/catalog.js";
 
 const SOURCE = "test_manual";
@@ -194,6 +194,134 @@ test("analyzeUnmappedMappings exports unmapped rows from retry state", () => {
   assert.equal(row.decision, "");
   assert.equal(row.source_aid, "");
   assert.equal("suggestion_1_source_aid" in row, false);
+});
+
+test("prewarmAnime maps requested local IDs and refreshes episodes immediately", async () => {
+  let metadataCalls = 0;
+  let refreshCalls = 0;
+
+  const result = await prewarmAnime({
+    ids: [ANIME_ID],
+    sourceKeys: [SOURCE],
+  }, {
+    enrichSubject: async (id) => {
+      metadataCalls++;
+      return db.select().from(anime).where(eq(anime.id, id)).get();
+    },
+    refreshEpisodes: async (id, { source }) => {
+      refreshCalls++;
+      return { animeId: id, source, refreshed: true, cstationId: SOURCE_AID, epCount: 1 };
+    },
+  });
+
+  const mapping = db.select().from(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
+    .get();
+
+  assert.equal(result.requested, 1);
+  assert.equal(result.processed, 1);
+  assert.equal(result.matched, 1);
+  assert.equal(result.refreshed, 1);
+  assert.equal(result.errors, 0);
+  assert.equal(metadataCalls, 1);
+  assert.equal(refreshCalls, 1);
+  assert.equal(mapping.cstationId, SOURCE_AID);
+  assert.equal(result.items[0].sources[0].mapping, "matched");
+  assert.equal(result.items[0].sources[0].episodes, "refreshed");
+});
+
+test("prewarmAnime mappedOnly skips unmapped sources without creating retry state", async () => {
+  let refreshCalls = 0;
+
+  const result = await prewarmAnime({
+    ids: [ANIME_ID],
+    sourceKeys: [SOURCE],
+    mappedOnly: true,
+  }, {
+    enrichSubject: async (id) => db.select().from(anime).where(eq(anime.id, id)).get(),
+    refreshEpisodes: async () => {
+      refreshCalls++;
+      return { refreshed: true };
+    },
+  });
+
+  const mapping = db.select().from(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
+    .get();
+  const retry = db.select().from(matchRetryState)
+    .where(and(eq(matchRetryState.animeId, ANIME_ID), eq(matchRetryState.source, SOURCE)))
+    .get();
+
+  assert.equal(result.requested, 1);
+  assert.equal(result.processed, 1);
+  assert.equal(result.matched, 0);
+  assert.equal(result.refreshed, 0);
+  assert.equal(result.skipped, 1);
+  assert.equal(refreshCalls, 0);
+  assert.equal(mapping, undefined);
+  assert.equal(retry, undefined);
+  assert.equal(result.items[0].sources[0].mapping, "skipped");
+  assert.equal(result.items[0].sources[0].reason, "not-mapped");
+});
+
+test("prewarmAnime continues with cached local metadata when subject detail is missing", async () => {
+  const result = await prewarmAnime({
+    ids: [ANIME_ID],
+    sourceKeys: [SOURCE],
+    refreshEpisodes: false,
+  }, {
+    enrichSubject: async () => null,
+  });
+
+  const mapping = db.select().from(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
+    .get();
+
+  assert.equal(result.processed, 1);
+  assert.equal(result.matched, 1);
+  assert.equal(result.items[0].metadata, "cached");
+  assert.equal(mapping.cstationId, SOURCE_AID);
+});
+
+test("prewarmAnime query upserts search results before matching", async () => {
+  cleanup();
+  seedCatalog();
+  let searchCalls = 0;
+
+  const result = await prewarmAnime({
+    query: "测试番剧",
+    sourceKeys: [SOURCE],
+    refreshEpisodes: false,
+  }, {
+    searchSubjects: async (keyword) => {
+      searchCalls++;
+      assert.equal(keyword, "测试番剧");
+      return {
+        data: [{
+          id: ANIME_ID,
+          type: 2,
+          name: "テスト番組",
+          name_cn: "测试番剧",
+          platform: "TV",
+          date: "2026-04-01",
+        }],
+      };
+    },
+    enrichSubject: async (id) => db.select().from(anime).where(eq(anime.id, id)).get(),
+  });
+
+  const animeRow = db.select().from(anime).where(eq(anime.id, ANIME_ID)).get();
+  const mapping = db.select().from(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
+    .get();
+
+  assert.equal(searchCalls, 1);
+  assert.equal(result.requested, 1);
+  assert.equal(result.upserted, 1);
+  assert.equal(result.matched, 1);
+  assert.equal(result.refreshed, 0);
+  assert.equal(animeRow.nameCn, "测试番剧");
+  assert.equal(mapping.cstationId, SOURCE_AID);
 });
 
 test("analyzeUnmappedMappings does not export rows that already have a mapping", () => {

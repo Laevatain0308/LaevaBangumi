@@ -1,10 +1,12 @@
 import { initDb } from "../db/index.js";
+import { getBoolArg, getStringArg, parseCliArgs } from "../lib/cliArgs.js";
 import { DEFAULT_MAPPED_REVIEW_PATH, importMappedReview } from "../services/manualMatches.js";
 
 initDb();
 
-const input = process.argv[2] || DEFAULT_MAPPED_REVIEW_PATH;
-const refreshEpisodes = process.env.REFRESH_EPISODES !== "0";
+const args = parseCliArgs();
+const input = getStringArg(args, "input", args.positionals[0] || DEFAULT_MAPPED_REVIEW_PATH);
+const refreshEpisodes = getBoolArg(args, "refresh-episodes", true);
 
 importMappedReview(input, { refreshEpisodes })
   .then((stats) => {

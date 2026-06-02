@@ -1,29 +1,18 @@
 import { initDb } from "../db/index.js";
+import { getBoolArg, getIntArg, getStringArg, parseCliArgs } from "../lib/cliArgs.js";
 import { DEFAULT_MAPPED_REVIEW_PATH, exportMappedReview } from "../services/manualMatches.js";
-
-function intEnv(name, fallback = null) {
-  const raw = process.env[name];
-  if (raw == null || raw === "") return fallback;
-  const value = parseInt(raw, 10);
-  return Number.isNaN(value) ? fallback : value;
-}
-
-function boolEnv(name, fallback = false) {
-  const raw = process.env[name];
-  if (raw == null || raw === "") return fallback;
-  return ["1", "true", "yes", "y", "on"].includes(String(raw).trim().toLowerCase());
-}
 
 initDb();
 
-const output = process.argv[2] || DEFAULT_MAPPED_REVIEW_PATH;
-const source = process.env.MAPPED_REVIEW_SOURCE || null;
-const animeId = intEnv("MAPPED_REVIEW_ANIME_ID");
-const sourceAid = intEnv("MAPPED_REVIEW_SOURCE_AID");
-const query = process.env.MAPPED_REVIEW_QUERY || "";
-const rangedOnly = boolEnv("MAPPED_REVIEW_RANGED_ONLY");
-const multiMappedOnly = boolEnv("MAPPED_REVIEW_MULTI_MAPPED_ONLY");
-const limit = intEnv("MAPPED_REVIEW_LIMIT");
+const args = parseCliArgs();
+const output = getStringArg(args, "output", args.positionals[0] || DEFAULT_MAPPED_REVIEW_PATH);
+const source = getStringArg(args, "source", null);
+const animeId = getIntArg(args, "anime-id");
+const sourceAid = getIntArg(args, "source-aid");
+const query = getStringArg(args, "query", "");
+const rangedOnly = getBoolArg(args, "ranged-only", false);
+const multiMappedOnly = getBoolArg(args, "multi-mapped-only", false);
+const limit = getIntArg(args, "limit");
 
 exportMappedReview(output, { source, animeId, sourceAid, query, rangedOnly, multiMappedOnly, limit })
   .then((stats) => {
