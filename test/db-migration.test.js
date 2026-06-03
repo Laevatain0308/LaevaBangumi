@@ -221,6 +221,9 @@ test("initDb creates the normalized schema tables", () => {
   const sourceColumns = new Set(sqlite.prepare("PRAGMA table_info(resource_sources)").all().map((row) => row.name));
   assert.equal(sourceColumns.has("priority"), true, "resource_sources.priority column should exist");
   assert.equal(sqlite.prepare("SELECT priority FROM resource_sources WHERE source = 'ffzy'").get().priority, 100);
+
+  const retryColumns = new Set(sqlite.prepare("PRAGMA table_info(retry_state)").all().map((row) => row.name));
+  assert.equal(retryColumns.has("last_error"), true, "retry_state.last_error column should exist");
 });
 
 test("initDb migrates legacy rows into normalized tables idempotently", () => {

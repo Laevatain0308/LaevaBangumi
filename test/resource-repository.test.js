@@ -117,6 +117,7 @@ test("resource repository reads normalized retry and manual state rows", () => {
     source: RESOURCE_SOURCE,
     retry_count: 2,
     retry_at: "2026-06-03 01:00:00",
+    last_error: null,
   }]);
   assert.deepEqual(listManualResourceStatesForSubject(RESOURCE_SUBJECT_ID), [{
     source: RESOURCE_SOURCE,
@@ -141,6 +142,7 @@ test("resource repository writes retry and manual state rows", () => {
     kind: "mapping",
     retryCount: 3,
     retryAt: "2026-06-03 01:00:00",
+    lastError: "mapping failed",
   });
   upsertRetryState({
     bangumiId: RESOURCE_STATE_SUBJECT_ID,
@@ -148,17 +150,20 @@ test("resource repository writes retry and manual state rows", () => {
     kind: "episode_fetch",
     retryCount: 2,
     retryAt: "2026-06-03 02:00:00",
+    lastError: "episode fetch failed",
   });
 
   assert.deepEqual(listRetryStateForSubject(RESOURCE_STATE_SUBJECT_ID, "mapping"), [{
     source: RESOURCE_SOURCE,
     retry_count: 3,
     retry_at: "2026-06-03 01:00:00",
+    last_error: "mapping failed",
   }]);
   assert.deepEqual(listRetryStateForSubject(RESOURCE_STATE_SUBJECT_ID, "episode_fetch"), [{
     source: RESOURCE_SOURCE,
     retry_count: 2,
     retry_at: "2026-06-03 02:00:00",
+    last_error: "episode fetch failed",
   }]);
 
   upsertRetryState({
@@ -167,9 +172,11 @@ test("resource repository writes retry and manual state rows", () => {
     kind: "mapping",
     retryCount: 0,
     retryAt: null,
+    lastError: null,
   });
   assert.equal(listRetryStateForSubject(RESOURCE_STATE_SUBJECT_ID, "mapping")[0].retry_count, 0);
   assert.equal(listRetryStateForSubject(RESOURCE_STATE_SUBJECT_ID, "mapping")[0].retry_at, null);
+  assert.equal(listRetryStateForSubject(RESOURCE_STATE_SUBJECT_ID, "mapping")[0].last_error, null);
 
   deleteRetryState({
     bangumiId: RESOURCE_STATE_SUBJECT_ID,

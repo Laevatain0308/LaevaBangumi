@@ -229,6 +229,7 @@ export const retryState = sqliteTable("retry_state", {
   kind: text("kind").notNull(),
   retryCount: integer("retry_count").notNull().default(0),
   retryAt: text("retry_at"),
+  lastError: text("last_error"),
   updatedAt: text("updated_at").default("(datetime('now'))").notNull(),
 }, (table) => ({
   pk: uniqueIndex("idx_retry_state_unique").on(table.bangumiId, table.source, table.kind),

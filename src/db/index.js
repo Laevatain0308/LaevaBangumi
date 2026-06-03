@@ -396,6 +396,7 @@ export function initDb() {
       kind TEXT NOT NULL,
       retry_count INTEGER NOT NULL DEFAULT 0,
       retry_at TEXT,
+      last_error TEXT,
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (bangumi_id, source, kind)
     );
@@ -418,6 +419,7 @@ export function initDb() {
 
   migrateEpisodesTableIfNeeded();
   addColumnIfMissing("resource_sources", "priority", "INTEGER NOT NULL DEFAULT 100");
+  addColumnIfMissing("retry_state", "last_error", "TEXT");
   addColumnIfMissing("resource_mappings", "updated_at", "TEXT");
   sqlite.exec(`
     UPDATE resource_mappings

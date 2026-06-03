@@ -48,7 +48,7 @@ export function listResourceMappingsWithEpisodePresenceForSubject(bangumiId) {
 
 export function listRetryStateForSubject(bangumiId, kind = "mapping") {
   return sqlite.prepare(`
-    SELECT source, retry_count, retry_at
+    SELECT source, retry_count, retry_at, last_error
     FROM retry_state
     WHERE bangumi_id = ? AND kind = ?
   `).all(bangumiId, kind);
@@ -330,18 +330,19 @@ export function deleteResourceMapping({ bangumiId, source }) {
   `).run({ bangumiId, source });
 }
 
-export function upsertRetryState({ bangumiId, source, kind, retryCount, retryAt = null }) {
+export function upsertRetryState({ bangumiId, source, kind, retryCount, retryAt = null, lastError = null }) {
   assertResourceStateKey({ bangumiId, source });
   if (!kind) throw new Error("retry state write requires kind");
 
   sqlite.prepare(`
-    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
-    VALUES (@bangumiId, @source, @kind, @retryCount, @retryAt, datetime('now'))
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, last_error, updated_at)
+    VALUES (@bangumiId, @source, @kind, @retryCount, @retryAt, @lastError, datetime('now'))
     ON CONFLICT(bangumi_id, source, kind) DO UPDATE SET
       retry_count = excluded.retry_count,
       retry_at = excluded.retry_at,
+      last_error = excluded.last_error,
       updated_at = excluded.updated_at
-  `).run({ bangumiId, source, kind, retryCount, retryAt });
+  `).run({ bangumiId, source, kind, retryCount, retryAt, lastError });
 }
 
 export function deleteRetryState({ bangumiId, source, kind }) {
