@@ -20,7 +20,7 @@ test("normalizeCoverUrl upgrades Bangumi cover URLs to canonical HTTPS URLs", ()
   );
 });
 
-test("normalizeBangumiSubject returns normalized subject metadata and legacy anime row", () => {
+test("normalizeBangumiSubject returns normalized subject metadata", () => {
   const normalized = normalizeBangumiSubject({
     id: 547888,
     type: 2,
@@ -82,11 +82,5 @@ test("normalizeBangumiSubject returns normalized subject metadata and legacy ani
   });
   assert.deepEqual(normalized.aliases, ["Alias A", "Alias B"]);
   assert.deepEqual(normalized.tags, [{ name: "原创", count: 10, totalCount: 20 }]);
-  assert.equal(normalized.legacyAnime.id, 547888);
-  assert.equal(normalized.legacyAnime.airDate, "2026-04-01");
-  assert.equal(normalized.legacyAnime.ratingScore, 7.6);
-  assert.equal(normalized.legacyAnime.rank, 1234);
-  assert.equal(normalized.legacyAnime.tags, JSON.stringify(["原创"]));
-  assert.equal(normalized.legacyAnime.aliases, JSON.stringify(["Alias A", "Alias B"]));
-  assert.equal(normalized.legacyAnime.detailFetchedAt, "2026-06-03 01:02:03");
+  assert.equal(Object.hasOwn(normalized, "legacyAnime"), false);
 });

@@ -1,14 +1,7 @@
-import { eq, and, like, or, sql, isNotNull, notInArray } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { db, sqlite } from "../db/index.js";
 import {
-  anime,
-  episodes,
-  bangumiCstationMap,
-  cstationCatalog,
   animeOther,
-  matchRetryState,
-  episodeFetchRetryState,
-  manualMatchState,
   ANIME_PLATFORMS,
 } from "../db/schema.js";
 import * as bangumi from "./bangumi.js";
@@ -25,7 +18,6 @@ import {
 } from "../normalizers/bangumiSubjectNormalizer.js";
 import { normalizeResourceEpisodes, normalizeResourceItem } from "../normalizers/resourceItemNormalizer.js";
 import {
-  formatLegacyAnimeDetailDto,
   formatSubjectDetailDto,
   formatSubjectSearchDto,
 } from "../dto/subjectDto.js";
@@ -46,7 +38,7 @@ import {
   deleteResourceRowsForSubject,
   deleteRetryState,
   deleteStaleResourceEpisodes,
-  findEpisodeVideoUrl,
+  findEpisodeRawVideoUrl,
   listEpisodeChannelRowsForSubject,
   listManualResourceStatesForSubject,
   listResourceMappingsWithEpisodePresenceForSubject,
@@ -126,31 +118,59 @@ function compactRow(row) {
   return Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined));
 }
 
+function subjectRowToAnimeFacade(row) {
+  if (!row) return null;
+  return {
+    id: row.bangumi_id,
+    name: row.name,
+    nameCn: row.name_cn,
+    aliases: JSON.stringify(listSubjectAliases(row.bangumi_id)),
+    platform: row.platform,
+    airDate: row.air_date,
+    airWeekday: row.air_weekday,
+    calendarWeekday: row.calendar_weekday,
+    eps: row.eps,
+    totalEpisodes: row.total_episodes,
+    summary: row.summary,
+    coverUrl: row.cover_url,
+    hasCover: row.has_cover,
+    ratingScore: row.rating_score,
+    rank: row.rating_rank,
+    detailFetchedAt: row.metadata_fetched_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function findAnimeFacadeById(id) {
+  return subjectRowToAnimeFacade(findSubjectById(id));
+}
+
+function listAnimeFacades({ ids = null } = {}) {
+  const params = [];
+  let where = "";
+  if (ids) {
+    const normalizedIds = [...ids].map((id) => parseInt(id, 10)).filter(Boolean);
+    if (normalizedIds.length === 0) return [];
+    where = `WHERE bangumi_id IN (${normalizedIds.map(() => "?").join(", ")})`;
+    params.push(...normalizedIds);
+  }
+  return sqlite.prepare(`
+    SELECT * FROM subjects
+    ${where}
+    ORDER BY bangumi_id
+  `).all(...params).map(subjectRowToAnimeFacade);
+}
+
 function scheduleRetry(animeId, source, count) {
   if (!source) throw new Error("scheduleRetry requires source");
   if (count > MAX_RETRIES) return;
   const idx = Math.min(count - 1, RETRY_DELAYS.length - 1);
   const retryAt = fromNow(RETRY_DELAYS[idx]);
-  db.insert(matchRetryState)
-    .values({ animeId, source, retryCount: count, retryAt, updatedAt: now() })
-    .onConflictDoUpdate({
-      target: [matchRetryState.animeId, matchRetryState.source],
-      set: { retryCount: count, retryAt, updatedAt: now() },
-    })
-    .run();
-  ensureSubjectFromAnime(animeId);
   upsertRetryState({ bangumiId: animeId, source, kind: "mapping", retryCount: count, retryAt });
 }
 
 function blockMappingRetry(animeId, source) {
-  db.insert(matchRetryState)
-    .values({ animeId, source, retryCount: MAX_RETRIES, retryAt: null, updatedAt: now() })
-    .onConflictDoUpdate({
-      target: [matchRetryState.animeId, matchRetryState.source],
-      set: { retryCount: MAX_RETRIES, retryAt: null, updatedAt: now() },
-    })
-    .run();
-  ensureSubjectFromAnime(animeId);
   upsertRetryState({ bangumiId: animeId, source, kind: "mapping", retryCount: MAX_RETRIES, retryAt: null });
 }
 
@@ -158,33 +178,14 @@ function scheduleEpisodeFetchRetry(animeId, source, count) {
   if (!source) throw new Error("scheduleEpisodeFetchRetry requires source");
   const idx = Math.min(Math.max(count, 1) - 1, RETRY_DELAYS.length - 1);
   const retryAt = fromNow(RETRY_DELAYS[idx]);
-  db.insert(episodeFetchRetryState)
-    .values({ animeId, source, retryCount: count, retryAt, updatedAt: now() })
-    .onConflictDoUpdate({
-      target: [episodeFetchRetryState.animeId, episodeFetchRetryState.source],
-      set: { retryCount: count, retryAt, updatedAt: now() },
-    })
-    .run();
-  ensureSubjectFromAnime(animeId);
   upsertRetryState({ bangumiId: animeId, source, kind: "episode_fetch", retryCount: count, retryAt });
 }
 
 function clearRetry(animeId, source) {
-  db.insert(matchRetryState)
-    .values({ animeId, source, retryCount: 0, retryAt: null, updatedAt: now() })
-    .onConflictDoUpdate({
-      target: [matchRetryState.animeId, matchRetryState.source],
-      set: { retryCount: 0, retryAt: null, updatedAt: now() },
-    })
-    .run();
-  ensureSubjectFromAnime(animeId);
   upsertRetryState({ bangumiId: animeId, source, kind: "mapping", retryCount: 0, retryAt: null });
 }
 
 function clearEpisodeFetchRetry(animeId, source) {
-  db.delete(episodeFetchRetryState)
-    .where(and(eq(episodeFetchRetryState.animeId, animeId), eq(episodeFetchRetryState.source, source)))
-    .run();
   deleteRetryState({ bangumiId: animeId, source, kind: "episode_fetch" });
 }
 
@@ -194,12 +195,7 @@ function getRetryState(animeId, source) {
     FROM retry_state
     WHERE bangumi_id = ? AND source = ? AND kind = 'mapping'
   `).get(animeId, source);
-  if (normalized) return retryStateRowToLegacy(normalized);
-
-  return db.select()
-    .from(matchRetryState)
-    .where(and(eq(matchRetryState.animeId, animeId), eq(matchRetryState.source, source)))
-    .get();
+  return normalized ? retryStateRowToLegacy(normalized) : undefined;
 }
 
 function getEpisodeFetchRetryState(animeId, source) {
@@ -208,12 +204,7 @@ function getEpisodeFetchRetryState(animeId, source) {
     FROM retry_state
     WHERE bangumi_id = ? AND source = ? AND kind = 'episode_fetch'
   `).get(animeId, source);
-  if (normalized) return retryStateRowToLegacy(normalized);
-
-  return db.select()
-    .from(episodeFetchRetryState)
-    .where(and(eq(episodeFetchRetryState.animeId, animeId), eq(episodeFetchRetryState.source, source)))
-    .get();
+  return normalized ? retryStateRowToLegacy(normalized) : undefined;
 }
 
 function getManualBlockingState(animeId, source) {
@@ -231,37 +222,14 @@ function getManualBlockingState(animeId, source) {
       updatedAt: normalized.updated_at,
     } : undefined;
   }
-
-  return db.select()
-    .from(manualMatchState)
-    .where(and(
-      eq(manualMatchState.animeId, animeId),
-      eq(manualMatchState.source, source)
-    ))
-    .all()
-    .find((row) => MANUAL_MATCH_BLOCKING_STATUSES.has(row.status));
+  return undefined;
 }
 
 function setManualMatchState(animeId, source, status, note = null) {
-  db.insert(manualMatchState)
-    .values({ animeId, source, status, note, updatedAt: now() })
-    .onConflictDoUpdate({
-      target: [manualMatchState.animeId, manualMatchState.source],
-      set: { status, note, updatedAt: now() },
-    })
-    .run();
-  ensureSubjectFromAnime(animeId);
   upsertManualResourceState({ bangumiId: animeId, source, status, note });
 }
 
 function clearManualStateByStatus(animeId, source, status) {
-  db.delete(manualMatchState)
-    .where(and(
-      eq(manualMatchState.animeId, animeId),
-      eq(manualMatchState.source, source),
-      eq(manualMatchState.status, status)
-    ))
-    .run();
   deleteManualResourceStateByStatus({ bangumiId: animeId, source, status });
 }
 
@@ -307,35 +275,11 @@ function animeRowToBangumiLike(a) {
 
 function deleteAnimeDependencies(animeId) {
   deleteResourceRowsForSubject({ bangumiId: animeId });
-  db.delete(bangumiCstationMap).where(eq(bangumiCstationMap.animeId, animeId)).run();
-  db.delete(matchRetryState).where(eq(matchRetryState.animeId, animeId)).run();
-  db.delete(episodeFetchRetryState).where(eq(episodeFetchRetryState.animeId, animeId)).run();
-  db.delete(manualMatchState).where(eq(manualMatchState.animeId, animeId)).run();
   sqlite.prepare("DELETE FROM subjects WHERE bangumi_id = ?").run(animeId);
 }
 
 function ensureSubjectFromAnime(animeId) {
-  const existing = sqlite.prepare("SELECT bangumi_id FROM subjects WHERE bangumi_id = ?").get(animeId);
-  if (existing) return true;
-  const a = db.select().from(anime).where(eq(anime.id, animeId)).get();
-  if (!a) return false;
-  sqlite.prepare(`
-    INSERT INTO subjects (
-      bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
-      calendar_weekday, eps, total_episodes, cover_url, has_cover,
-      rating_score, rating_rank, metadata_fetched_at, created_at, updated_at
-    )
-    VALUES (
-      @id, @name, @nameCn, @summary, @platform, @airDate, @airWeekday,
-      @calendarWeekday, @eps, @totalEpisodes, @coverUrl, COALESCE(@hasCover, 0),
-      @ratingScore, @rank, @detailFetchedAt, COALESCE(@createdAt, datetime('now')), COALESCE(@updatedAt, datetime('now'))
-    )
-    ON CONFLICT(bangumi_id) DO NOTHING
-  `).run({
-    ...a,
-    name: a.name || a.nameCn || `#${animeId}`,
-  });
-  return true;
+  return !!findSubjectById(animeId);
 }
 
 export async function upsertAnime(item, weekday = undefined, options = {}) {
@@ -345,47 +289,35 @@ export async function upsertAnime(item, weekday = undefined, options = {}) {
   if (platform && !ANIME_PLATFORMS.has(platform)) {
     log("anime", "skip non-anime subject", { id: item.id, name: item.name, platform });
     deleteAnimeDependencies(item.id);
-    db.delete(anime).where(eq(anime.id, item.id)).run();
     db.insert(animeOther)
       .values(compactRow({
         id: item.id,
         name: item.name,
-        nameCn: normalized.legacyAnime.nameCn,
-        summary: normalized.legacyAnime.summary,
+        nameCn: normalized.subject.name_cn,
+        summary: normalized.subject.summary,
         platform,
-        coverUrl: normalized.legacyAnime.coverUrl,
-        tags: normalized.legacyAnime.tags,
-        aliases: normalized.legacyAnime.aliases,
+        coverUrl: normalized.subject.cover_url,
+        tags: normalized.tags === undefined ? undefined : JSON.stringify(normalized.tags.map((tag) => tag.name)),
+        aliases: normalized.aliases === undefined ? undefined : JSON.stringify(normalized.aliases),
       }))
       .onConflictDoNothing()
       .run();
     return null;
   }
 
-  const row = compactRow(normalized.legacyAnime);
   writeSubjectMetadata(normalized);
-  const existing = db.select().from(anime).where(eq(anime.id, item.id)).get();
-  if (existing) {
-    delete row.id;
-    delete row.createdAt;
-    db.update(anime).set(row).where(eq(anime.id, item.id)).run();
-    debug("anime", "updated subject", { id: item.id, title: item.name_cn || item.name, detailFetched: !!options.detailFetched });
-  } else {
-    db.insert(anime).values(row).run();
-    debug("anime", "inserted subject", { id: item.id, title: item.name_cn || item.name, detailFetched: !!options.detailFetched });
-  }
+  debug("anime", "upserted subject", { id: item.id, title: item.name_cn || item.name, detailFetched: !!options.detailFetched });
 
-  const coverUrl = row.coverUrl;
+  const coverUrl = normalized.subject.cover_url;
   if (coverUrl) {
     downloadCover(item.id, coverUrl).then((ok) => {
       if (ok) {
-        db.update(anime).set({ hasCover: 1 }).where(eq(anime.id, item.id)).run();
         sqlite.prepare("UPDATE subjects SET has_cover = 1 WHERE bangumi_id = ?").run(item.id);
       }
     }).catch(() => {});
   }
 
-  return db.select().from(anime).where(eq(anime.id, item.id)).get();
+  return findAnimeFacadeById(item.id);
 }
 
 export async function enrichFromSubject(itemOrId, weekday = undefined, options = {}) {
@@ -415,7 +347,7 @@ function applyEpisodeRange(episodesList, mapping) {
 }
 
 async function upsertEpisodes(animeId, source, cstationId, episodesList) {
-  ensureSubjectFromAnime(animeId);
+  if (!ensureSubjectFromAnime(animeId)) throw new Error(`subject ${animeId} does not exist`);
   for (const episode of normalizeResourceEpisodes(episodesList, { bangumiId: animeId, source, sourceAid: cstationId })) {
     upsertResourceEpisode(episode);
   }
@@ -431,34 +363,6 @@ function pruneEpisodesForRefresh(animeId, source, cstationId, episodesList) {
 }
 
 async function upsertMap(animeId, source, cstationId, score, matchedBgName, matchedCsName, range = {}) {
-  db.insert(bangumiCstationMap)
-    .values({
-      animeId,
-      source,
-      cstationId,
-      sourceEpStart: range.sourceEpStart ?? null,
-      sourceEpEnd: range.sourceEpEnd ?? null,
-      displayEpOffset: range.displayEpOffset ?? 0,
-      score,
-      matchedBgName,
-      matchedCsName,
-      matchedAt: now(),
-    })
-    .onConflictDoUpdate({
-      target: [bangumiCstationMap.animeId, bangumiCstationMap.source],
-      set: {
-        cstationId,
-        sourceEpStart: range.sourceEpStart ?? null,
-        sourceEpEnd: range.sourceEpEnd ?? null,
-        displayEpOffset: range.displayEpOffset ?? 0,
-        score,
-        matchedBgName,
-        matchedCsName,
-        matchedAt: now(),
-      },
-    })
-    .run();
-  ensureSubjectFromAnime(animeId);
   upsertResourceMapping({
     bangumiId: animeId,
     source,
@@ -502,11 +406,7 @@ function getMap(animeId, source) {
       matchedAt: normalized.matched_at,
     };
   }
-
-  return db.select()
-    .from(bangumiCstationMap)
-    .where(and(eq(bangumiCstationMap.animeId, animeId), eq(bangumiCstationMap.source, source)))
-    .get();
+  return undefined;
 }
 
 function getAutoExclusiveSourceOwner(source, cstationId, animeId) {
@@ -522,24 +422,12 @@ function getAutoExclusiveSourceOwner(source, cstationId, animeId) {
       cstationId: normalizedOwner.source_aid,
     };
   }
-
-  return db.select()
-    .from(bangumiCstationMap)
-    .where(and(eq(bangumiCstationMap.source, source), eq(bangumiCstationMap.cstationId, cstationId)))
-    .all()
-    .find((mapping) => mapping.animeId !== animeId);
+  return undefined;
 }
 
 function getCandidatesForAnime(a, source) {
   const year = bangumi.extractYear(a.airDate);
   const candidatesById = new Map();
-  for (const row of db.select()
-    .from(cstationCatalog)
-    .where(eq(cstationCatalog.source, source))
-    .all()) {
-    candidatesById.set(row.id, row);
-  }
-
   const normalizedRows = sqlite.prepare(`
     SELECT source, source_aid, title, subtitle, category, year, latest_text, detail_fetched_at
     FROM resource_items
@@ -602,7 +490,7 @@ async function findBestSourceMatch(a, source, ranked = null) {
 
 export async function ensureMappingForAnime(animeId, { source, refresh = false } = {}) {
   if (!source) throw new Error("ensureMappingForAnime requires source");
-  const a = db.select().from(anime).where(eq(anime.id, animeId)).get();
+  const a = findAnimeFacadeById(animeId);
   if (!a) return { animeId, matched: false, reason: "missing-anime" };
 
   const existing = getMap(animeId, source);
@@ -814,20 +702,12 @@ function applyBatchLimit(rows, limit) {
 }
 
 function retryRowsForKind(kind) {
-  const legacyRows = kind === "episode_fetch"
-    ? db.select().from(episodeFetchRetryState).all()
-    : db.select().from(matchRetryState).all();
-  const rowsByKey = new Map(legacyRows.map((row) => [`${row.animeId}:${row.source}`, row]));
   const normalizedRows = sqlite.prepare(`
     SELECT bangumi_id, source, retry_count, retry_at, updated_at
     FROM retry_state
     WHERE kind = ?
   `).all(kind);
-  for (const row of normalizedRows) {
-    const legacyRow = retryStateRowToLegacy(row);
-    rowsByKey.set(`${legacyRow.animeId}:${legacyRow.source}`, legacyRow);
-  }
-  return [...rowsByKey.values()];
+  return normalizedRows.map(retryStateRowToLegacy);
 }
 
 export async function retryPending({
@@ -836,7 +716,7 @@ export async function retryPending({
   refreshEpisodes = true,
   sourceKeys: explicitSourceKeys = null,
 } = {}) {
-  const list = db.select().from(anime).all();
+  const list = listAnimeFacades();
   const sourceKeys = getEnabledSourceKeys(explicitSourceKeys);
   const mapped = mappedAnimeSourceKeys(sourceKeys);
   const episodeSourceKeys = episodeAnimeSourceKeys(sourceKeys);
@@ -939,7 +819,7 @@ export async function batchMatch({ refreshEpisodes = true, includeCoolingDown = 
   const manualBlockedKeys = manualBlockingKeys(sourceKeys);
 
   const animeIdSet = animeIds ? new Set(animeIds.map((id) => parseInt(id, 10)).filter(Boolean)) : null;
-  const unmatched = db.select().from(anime).all().filter((a) => {
+  const unmatched = listAnimeFacades({ ids: animeIdSet }).filter((a) => {
     if (animeIdSet && !animeIdSet.has(a.id)) return false;
     if (sourceKeys.every((source) => mapped.has(`${a.id}:${source}`))) return false;
     return true;
@@ -980,13 +860,6 @@ export function enqueueEpisodeRefreshesBySourceIds(sourceIds, { source } = {}) {
 
   for (const sourceId of ids) {
     const animeIds = new Set();
-    const rows = db.select({ animeId: bangumiCstationMap.animeId })
-      .from(bangumiCstationMap)
-      .where(and(eq(bangumiCstationMap.source, source), eq(bangumiCstationMap.cstationId, sourceId)))
-      .all();
-    for (const row of rows) {
-      animeIds.add(row.animeId);
-    }
     const normalizedRows = sqlite.prepare(`
       SELECT bangumi_id
       FROM resource_mappings
@@ -1106,11 +979,11 @@ export async function prewarmAnime({
       } else if (animeRow) {
         item.metadata = "cached";
       } else {
-        animeRow = db.select().from(anime).where(eq(anime.id, target.id)).get();
+        animeRow = findAnimeFacadeById(target.id);
         item.metadata = animeRow ? "cached" : "missing";
       }
     } catch (err) {
-      animeRow = animeRow ?? db.select().from(anime).where(eq(anime.id, target.id)).get();
+      animeRow = animeRow ?? findAnimeFacadeById(target.id);
       item.metadata = animeRow ? "cached" : "failed";
       item.error = err.message;
       if (!animeRow) {
@@ -1200,11 +1073,6 @@ export async function prewarmAnime({
 
 function mappedAnimeSourceKeys(sourceKeys) {
   const keys = new Set();
-  for (const row of db.select({ animeId: bangumiCstationMap.animeId, source: bangumiCstationMap.source })
-    .from(bangumiCstationMap)
-    .all()) {
-    if (sourceKeys.includes(row.source)) keys.add(`${row.animeId}:${row.source}`);
-  }
   for (const row of sqlite.prepare(`
     SELECT bangumi_id, source
     FROM resource_mappings
@@ -1216,11 +1084,6 @@ function mappedAnimeSourceKeys(sourceKeys) {
 
 function episodeAnimeSourceKeys(sourceKeys) {
   const keys = new Set();
-  for (const row of db.select({ animeId: episodes.animeId, sourceName: episodes.sourceName })
-    .from(episodes)
-    .all()) {
-    if (sourceKeys.includes(row.sourceName)) keys.add(`${row.animeId}:${row.sourceName}`);
-  }
   for (const row of sqlite.prepare(`
     SELECT bangumi_id, source
     FROM episodes
@@ -1241,13 +1104,6 @@ function retryStateByAnimeSource(sourceKeys) {
 
 function manualBlockingKeys(sourceKeys) {
   const stateByKey = new Map();
-  for (const row of db.select({ animeId: manualMatchState.animeId, source: manualMatchState.source, status: manualMatchState.status })
-    .from(manualMatchState)
-    .all()) {
-    if (sourceKeys.includes(row.source)) {
-      stateByKey.set(`${row.animeId}:${row.source}`, row.status);
-    }
-  }
   for (const row of sqlite.prepare(`
     SELECT bangumi_id, source, status
     FROM manual_resource_state
@@ -1269,10 +1125,7 @@ function clearStaleCalendarEntries(activeAnimeIds) {
     return 0;
   }
 
-  const result = db.update(anime)
-    .set({ calendarWeekday: null, updatedAt: now() })
-    .where(and(isNotNull(anime.calendarWeekday), notInArray(anime.id, [...activeAnimeIds])))
-    .run();
+  const before = sqlite.prepare("SELECT changes() AS changes").get().changes;
   sqlite.prepare(`
     UPDATE subjects
     SET calendar_weekday = NULL,
@@ -1281,7 +1134,8 @@ function clearStaleCalendarEntries(activeAnimeIds) {
     WHERE calendar_weekday IS NOT NULL
       AND bangumi_id NOT IN (${[...activeAnimeIds].map(() => "?").join(", ")})
   `).run(...activeAnimeIds);
-  return result.changes ?? 0;
+  const after = sqlite.prepare("SELECT changes() AS changes").get().changes;
+  return after ?? before ?? 0;
 }
 
 function formatSubjectSearchRow(row) {
@@ -1346,7 +1200,7 @@ function collectNormalizedEpisodeChannels(id) {
     if (!channels.has(key)) {
       channels.set(key, {
         id: key,
-        name: row.source_name || row.source,
+        name: row.source_label || row.source,
         source: row.source,
         sourceAid: row.source_aid,
         resourceTitle: row.resource_title,
@@ -1390,14 +1244,14 @@ function getNormalizedPlayUrl(id, ch, ep) {
   if (!channel) return null;
   const episode = channel.episodes.find((row) => row.index === ep);
   if (!episode) return null;
-  const row = findEpisodeVideoUrl({
+  const row = findEpisodeRawVideoUrl({
     bangumiId: id,
     source: channel.source,
     sourceAid: channel.sourceAid,
     epIndex: ep,
   });
   if (!row) return null;
-  return formatPlayDto(row.video_url);
+  return formatPlayDto(row.raw_video_url);
 }
 
 export async function searchAnime(keyword) {
@@ -1406,26 +1260,8 @@ export async function searchAnime(keyword) {
     keyword = keyword.q || "";
   }
   const normalized = searchSubjectsByKeyword(keyword);
-  if (normalized.length > 0) {
-    return { data: normalized.map(formatSubjectSearchRow), freshness: "cache" };
-  }
-
-  const q = `%${keyword}%`;
-  const local = db.select()
-    .from(anime)
-    .where(or(
-      like(anime.name, q),
-      like(anime.nameCn, q),
-      like(anime.aliases, q)
-    ))
-    .all();
-
   return {
-    data: local.map((a) => ({
-      id: a.id,
-      title: a.nameCn || a.name,
-      coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover),
-    })),
+    data: normalized.map(formatSubjectSearchRow),
     freshness: "cache",
   };
 }
@@ -1486,97 +1322,14 @@ export async function getAnimeDetail(id) {
   const normalized = getNormalizedAnimeDetail(id);
   if (normalized) return normalized;
 
-  let a = db.select().from(anime).where(eq(anime.id, id)).get();
-
-  if (!a) {
-    try {
-      a = await enrichFromSubject(id, undefined, { timeoutMs: DETAIL_SHORT_TIMEOUT_MS });
-    } catch (err) {
-      error("detail", `initial subject fetch failed for ${id}`, err);
-      return null;
-    }
-    if (!a) return null;
-  } else if (!isFresh(a.detailFetchedAt, DETAIL_FRESH_MS)) {
-    try {
-      const enriched = await enrichFromSubject(id, a.calendarWeekday, { timeoutMs: DETAIL_SHORT_TIMEOUT_MS });
-      if (enriched) a = enriched;
-    } catch (err) {
-      warn("detail", "short subject enrich failed, returning cached data", { id, message: err.message });
-    }
+  try {
+    await enrichFromSubject(id, undefined, { timeoutMs: DETAIL_SHORT_TIMEOUT_MS });
+  } catch (err) {
+    error("detail", `initial subject fetch failed for ${id}`, err);
+    return null;
   }
 
-  const enabledSources = enabledSourceSet();
-  const mappedRows = db.select()
-    .from(bangumiCstationMap)
-    .where(eq(bangumiCstationMap.animeId, id))
-    .all()
-    .filter((row) => enabledSources.has(row.source));
-  const episodeRows = db.select({ sourceName: episodes.sourceName, sourceAid: episodes.sourceAid }).from(episodes).where(eq(episodes.animeId, id)).all();
-  const retryRows = db.select().from(matchRetryState).where(eq(matchRetryState.animeId, id)).all();
-  const manualRows = db.select().from(manualMatchState).where(eq(manualMatchState.animeId, id)).all();
-  const sourceStatuses = getResourceSourceStatuses(mappedRows, episodeRows, retryRows, manualRows);
-  const resourceStatus = aggregateResourceStatus(sourceStatuses);
-  const matchingSources = sourceStatuses.filter((row) => row.status === "matching").map((row) => row.source);
-  if (matchingSources.length > 0) {
-    log("detail", "enqueue mapping from detail page", { id, sources: matchingSources });
-    for (const source of matchingSources) {
-      enqueueMapping(id, { source });
-    }
-  }
-
-  for (const row of sourceStatuses) {
-    if (row.status === "fetching") {
-      log("detail", "enqueue episode refresh from detail page", { id, source: row.source, sourceAid: row.sourceAid });
-      enqueueEpisodeRefresh(id, { source: row.source });
-    }
-  }
-
-  return {
-    ...formatAnimeDetail(a, isFresh(a.detailFetchedAt, DETAIL_FRESH_MS), mappedRows),
-    resourceStatus,
-    resourceSources: sourceStatuses,
-  };
-}
-
-function getResourceSourceStatuses(mappedRows, episodeRows, retryRows, manualRows = []) {
-  const mappedBySource = new Map(mappedRows.map((row) => [row.source, row]));
-  const episodeSources = new Set(episodeRows.map((row) => `${row.sourceName}:${row.sourceAid}`));
-  const retryBySource = new Map(retryRows.map((row) => [row.source, row]));
-  const manualBySource = new Map(
-    manualRows
-      .filter((row) => MANUAL_MATCH_BLOCKING_STATUSES.has(row.status))
-      .map((row) => [row.source, row])
-  );
-  const nowTs = now();
-
-  return getEnabledSources().map((source) => {
-    const mapped = mappedBySource.get(source.key);
-    const retry = retryBySource.get(source.key);
-    const manual = manualBySource.get(source.key);
-    const retryCount = retry?.retryCount ?? 0;
-    const retrying = retry?.retryAt && retry.retryAt > nowTs;
-    let status = "matching";
-    if (mapped && episodeSources.has(`${source.key}:${mapped.cstationId}`)) status = "ready";
-    else if (!mapped && manual?.status === "wait_airing") status = "wait_airing";
-    else if (!mapped && manual && MANUAL_NO_DATA_STATUSES.has(manual.status)) status = "no_data";
-    else if (retryCount >= MAX_RETRIES) status = "no_data";
-    else if (retrying) status = "retrying";
-    else if (mapped) status = "fetching";
-
-    const note = manual?.status === "wait_airing"
-      ? manual.note
-      : (manual && MANUAL_NO_DATA_STATUSES.has(manual.status)) || retryCount >= MAX_RETRIES
-        ? "no mapping after retries"
-        : null;
-
-    return {
-      source: source.key,
-      name: source.name,
-      status,
-      sourceAid: mapped?.cstationId ?? null,
-      note,
-    };
-  });
+  return getNormalizedAnimeDetail(id);
 }
 
 function aggregateResourceStatus(sourceStatuses) {
@@ -1589,72 +1342,8 @@ function aggregateResourceStatus(sourceStatuses) {
   return "no_data";
 }
 
-function channelKey(ep) {
-  return `${ep.sourceName}:${ep.sourceAid}`;
-}
-
-function collectEpisodeChannels(rows) {
-  const chMap = {};
-  for (const ep of rows) {
-    const key = channelKey(ep);
-    if (!chMap[key]) chMap[key] = { sourceName: ep.sourceName, sourceAid: ep.sourceAid, episodes: [] };
-    chMap[key].episodes.push(ep);
-  }
-  return Object.values(chMap).sort((a, b) => {
-    const sourceCmp = a.sourceName.localeCompare(b.sourceName);
-    if (sourceCmp !== 0) return sourceCmp;
-    return a.sourceAid - b.sourceAid;
-  });
-}
-
-function formatAnimeDetail(a, fresh, mappedRows = null) {
-  const mappedKeys = mappedRows
-    ? new Set(mappedRows.map((row) => `${row.source}:${row.cstationId}`))
-    : null;
-  const eps = db.select().from(episodes).where(eq(episodes.animeId, a.id)).all()
-    .filter((ep) => !mappedKeys || mappedKeys.has(`${ep.sourceName}:${ep.sourceAid}`));
-
-  const channels = collectEpisodeChannels(eps).map((channel, chIdx) => ({
-    name: channel.sourceName,
-    sourceAid: channel.sourceAid,
-    episodes: channel.episodes
-      .sort((aEp, bEp) => aEp.epIndex - bEp.epIndex)
-      .map((ep) => ({
-        ...formatDetailEpisodeDto({ subjectId: a.id, channelIndex: chIdx + 1, episode: ep }),
-      })),
-  }));
-
-  return formatLegacyAnimeDetailDto({
-    anime: a,
-    fresh,
-    coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover),
-    tags: safeJson(a.tags, null),
-    channels,
-  });
-}
-
 export async function getPlayUrl(id, ch, ep) {
-  const normalized = getNormalizedPlayUrl(id, ch, ep);
-  if (normalized) return normalized;
-
-  const enabledSources = enabledSourceSet();
-  const mappedRows = db.select()
-    .from(bangumiCstationMap)
-    .where(eq(bangumiCstationMap.animeId, id))
-    .all()
-    .filter((row) => enabledSources.has(row.source));
-  if (mappedRows.length === 0) return null;
-  const mappedKeys = new Set(mappedRows.map((row) => `${row.source}:${row.cstationId}`));
-  const eps = db.select().from(episodes).where(eq(episodes.animeId, id)).all()
-    .filter((row) => mappedKeys.has(`${row.sourceName}:${row.sourceAid}`));
-  const channels = collectEpisodeChannels(eps);
-  const chIdx = ch - 1;
-  if (chIdx < 0 || chIdx >= channels.length) return null;
-
-  const epList = channels[chIdx].episodes.filter((e) => e.epIndex === ep);
-  if (epList.length === 0) return null;
-
-  return formatPlayDto(epList[0].videoUrl);
+  return getNormalizedPlayUrl(id, ch, ep);
 }
 
 export async function getCalendarView() {

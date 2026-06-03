@@ -71,29 +71,3 @@ export function formatSubjectDetailDto({
     channels,
   };
 }
-
-export function formatLegacyAnimeDetailDto({
-  anime,
-  fresh,
-  coverUrl,
-  tags = null,
-  channels = [],
-}) {
-  return {
-    data: {
-      id: anime.id,
-      title: anime.nameCn || anime.name,
-      summary: displaySummary(anime.summary),
-      coverUrl,
-      eps: anime.eps,
-      totalEpisodes: anime.totalEpisodes,
-      airDate: anime.airDate,
-      platform: anime.platform,
-      ratingScore: anime.ratingScore,
-      rank: anime.rank,
-      tags,
-      channels,
-    },
-    freshness: fresh ? "cache" : "stale",
-  };
-}

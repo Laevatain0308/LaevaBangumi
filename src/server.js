@@ -6,7 +6,7 @@ import * as animeService from "./services/anime.js";
 import { enqueueSearch } from "./services/queue.js";
 import { coverPath, downloadCover } from "./lib/cover.js";
 import { db } from "./db/index.js";
-import { anime, subjects } from "./db/schema.js";
+import { subjects } from "./db/schema.js";
 import { log, error } from "./lib/logger.js";
 import { envelope } from "./dto/apiEnvelope.js";
 
@@ -121,27 +121,24 @@ export function createServer() {
     const id = parseInt(req.query.id, 10);
     if (!id) return res.status(400).json({ error: "缺少 id 参数" });
     const subject = db.select({ coverUrl: subjects.coverUrl, hasCover: subjects.hasCover }).from(subjects).where(eq(subjects.bangumiId, id)).get();
-    const a = subject ?? db.select({ coverUrl: anime.coverUrl, hasCover: anime.hasCover }).from(anime).where(eq(anime.id, id)).get();
 
-    if (a?.hasCover) {
+    if (subject?.hasCover) {
       const path = coverPath(id);
       if (existsSync(path)) {
         res.setHeader("Content-Type", "image/jpeg");
         res.setHeader("Cache-Control", "public, max-age=86400");
         return createReadStream(path).pipe(res);
       }
-      db.update(anime).set({ hasCover: 0 }).where(eq(anime.id, id)).run();
       db.update(subjects).set({ hasCover: 0 }).where(eq(subjects.bangumiId, id)).run();
     }
 
-    if (a?.coverUrl) {
-      downloadCover(id, a.coverUrl).then((ok) => {
+    if (subject?.coverUrl) {
+      downloadCover(id, subject.coverUrl).then((ok) => {
         if (ok) {
-          db.update(anime).set({ hasCover: 1 }).where(eq(anime.id, id)).run();
           db.update(subjects).set({ hasCover: 1 }).where(eq(subjects.bangumiId, id)).run();
         }
       }).catch(() => {});
-      return res.redirect(302, a.coverUrl);
+      return res.redirect(302, subject.coverUrl);
     }
 
     res.status(404).json({ error: "封面不存在" });

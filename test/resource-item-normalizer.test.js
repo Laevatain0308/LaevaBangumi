@@ -68,8 +68,8 @@ test("normalizeResourceEpisodes maps parsed source episodes into repository inpu
       sourceAid: 1001,
       epIndex: 1,
       sourceEpIndex: 3,
-      epName: "第03集",
-      videoUrl: "https://example.invalid/3.m3u8",
+      title: "第03集",
+      rawVideoUrl: "https://example.invalid/3.m3u8",
     },
     {
       bangumiId: 547888,
@@ -77,8 +77,8 @@ test("normalizeResourceEpisodes maps parsed source episodes into repository inpu
       sourceAid: 1001,
       epIndex: 2,
       sourceEpIndex: 2,
-      epName: "第04集",
-      videoUrl: "https://example.invalid/4.m3u8",
+      title: "第04集",
+      rawVideoUrl: "https://example.invalid/4.m3u8",
     },
   ]);
 });

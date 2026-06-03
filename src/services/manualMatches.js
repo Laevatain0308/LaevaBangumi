@@ -1,8 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { and, eq } from "drizzle-orm";
-import { db, sqlite } from "../db/index.js";
-import { anime, bangumiCstationMap, cstationCatalog, episodeFetchRetryState, episodes, manualMatchState, matchRetryState } from "../db/schema.js";
+import { sqlite } from "../db/index.js";
 import { refreshEpisodesForAnime } from "./anime.js";
 import { getEnabledSources } from "../lib/cstationConfig.js";
 import { collectBangumiTitles } from "../lib/matcher.js";
@@ -158,17 +156,10 @@ function normalizedManualStateRow(row) {
 }
 
 function allAnimeRows() {
-  const rowsById = new Map(
-    db.select().from(anime).all().map((row) => [row.id, row])
-  );
-  const normalized = sqlite.prepare(`
+  return sqlite.prepare(`
     SELECT * FROM subjects
     ORDER BY bangumi_id
   `).all().map(normalizedSubjectRow);
-  for (const row of normalized) {
-    rowsById.set(row.id, row);
-  }
-  return [...rowsById.values()];
 }
 
 function sourcesForReview(source) {
@@ -176,13 +167,7 @@ function sourcesForReview(source) {
 }
 
 function mappedAnimeIdsForSource(source) {
-  const ids = new Set(
-    db.select({ animeId: bangumiCstationMap.animeId })
-      .from(bangumiCstationMap)
-      .where(eq(bangumiCstationMap.source, source))
-      .all()
-      .map((row) => row.animeId)
-  );
+  const ids = new Set();
   for (const row of sqlite.prepare(`
     SELECT bangumi_id FROM resource_mappings
     WHERE source = ?
@@ -193,13 +178,7 @@ function mappedAnimeIdsForSource(source) {
 }
 
 function retryStateByAnimeIdForSource(source) {
-  const rowsById = new Map(
-    db.select()
-      .from(matchRetryState)
-      .where(eq(matchRetryState.source, source))
-      .all()
-      .map((row) => [row.animeId, row])
-  );
+  const rowsById = new Map();
   for (const row of sqlite.prepare(`
     SELECT * FROM retry_state
     WHERE source = ? AND kind = 'mapping'
@@ -210,13 +189,7 @@ function retryStateByAnimeIdForSource(source) {
 }
 
 function manualStateByAnimeIdForSource(source) {
-  const rowsById = new Map(
-    db.select()
-      .from(manualMatchState)
-      .where(eq(manualMatchState.source, source))
-      .all()
-      .map((row) => [row.animeId, row])
-  );
+  const rowsById = new Map();
   for (const row of sqlite.prepare(`
     SELECT * FROM manual_resource_state
     WHERE source = ?
@@ -323,15 +296,11 @@ function enabled(value) {
 }
 
 function episodeStatsForMapping(mapping) {
-  const normalizedRows = sqlite.prepare(`
+  const rows = sqlite.prepare(`
     SELECT ep_index, source_ep_index
     FROM episodes
     WHERE bangumi_id = ? AND source = ? AND source_aid = ?
   `).all(mapping.animeId, mapping.source, mapping.cstationId);
-  const rows = normalizedRows.length > 0 ? normalizedRows : db.select()
-    .from(episodes)
-    .where(and(eq(episodes.animeId, mapping.animeId), eq(episodes.sourceName, mapping.source)))
-    .all();
   const sourceIndexes = rows
     .map((row) => row.sourceEpIndex ?? row.source_ep_index ?? row.epIndex ?? row.ep_index)
     .filter((value) => Number.isFinite(value));
@@ -347,16 +316,7 @@ function mappingKey(row) {
 }
 
 function allCatalogRows() {
-  const rowsByKey = new Map(
-    db.select()
-      .from(cstationCatalog)
-      .all()
-      .map((row) => [`${row.source}:${row.id}`, row])
-  );
-  for (const row of sqlite.prepare("SELECT * FROM resource_items").all().map(normalizedCatalogRow)) {
-    rowsByKey.set(`${row.source}:${row.id}`, row);
-  }
-  return [...rowsByKey.values()];
+  return sqlite.prepare("SELECT * FROM resource_items").all().map(normalizedCatalogRow);
 }
 
 function mappingMergeKey(row) {
@@ -364,16 +324,7 @@ function mappingMergeKey(row) {
 }
 
 function allMappingRows() {
-  const rowsByKey = new Map(
-    db.select()
-      .from(bangumiCstationMap)
-      .all()
-      .map((row) => [mappingMergeKey(row), row])
-  );
-  for (const row of sqlite.prepare("SELECT * FROM resource_mappings").all().map(normalizedMappingRow)) {
-    rowsByKey.set(mappingMergeKey(row), row);
-  }
-  return [...rowsByKey.values()];
+  return sqlite.prepare("SELECT * FROM resource_mappings").all().map(normalizedMappingRow);
 }
 
 function mappedRowForReview(mapping, animeRow, sourceItem, episodeStats) {
@@ -546,12 +497,7 @@ function findCatalogItem(source, sourceAid) {
     SELECT * FROM resource_items
     WHERE source = ? AND source_aid = ?
   `).get(source, sourceAid);
-  if (normalized) return normalizedCatalogRow(normalized);
-
-  return db.select()
-    .from(cstationCatalog)
-    .where(and(eq(cstationCatalog.source, source), eq(cstationCatalog.id, sourceAid)))
-    .get();
+  return normalized ? normalizedCatalogRow(normalized) : undefined;
 }
 
 function findAnimeRow(animeId) {
@@ -559,80 +505,30 @@ function findAnimeRow(animeId) {
     SELECT * FROM subjects
     WHERE bangumi_id = ?
   `).get(animeId);
-  if (normalized) return normalizedSubjectRow(normalized);
-  return db.select().from(anime).where(eq(anime.id, animeId)).get();
+  return normalized ? normalizedSubjectRow(normalized) : undefined;
 }
 
 function ensureSubjectFromAnime(animeId) {
-  const existing = sqlite.prepare("SELECT bangumi_id FROM subjects WHERE bangumi_id = ?").get(animeId);
-  if (existing) return true;
-  const a = db.select().from(anime).where(eq(anime.id, animeId)).get();
-  if (!a) return false;
-  sqlite.prepare(`
-    INSERT INTO subjects (
-      bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
-      calendar_weekday, eps, total_episodes, cover_url, has_cover,
-      rating_score, rating_rank, metadata_fetched_at, created_at, updated_at
-    )
-    VALUES (
-      @id, @name, @nameCn, @summary, @platform, @airDate, @airWeekday,
-      @calendarWeekday, @eps, @totalEpisodes, @coverUrl, COALESCE(@hasCover, 0),
-      @ratingScore, @rank, @detailFetchedAt, COALESCE(@createdAt, datetime('now')), COALESCE(@updatedAt, datetime('now'))
-    )
-    ON CONFLICT(bangumi_id) DO NOTHING
-  `).run({
-    ...a,
-    name: a.name || a.nameCn || `#${animeId}`,
-  });
-  return true;
+  return !!sqlite.prepare("SELECT bangumi_id FROM subjects WHERE bangumi_id = ?").get(animeId);
 }
 
 function clearRetryState(animeId, source) {
-  db.insert(matchRetryState)
-    .values({ animeId, source, retryCount: 0, retryAt: null, updatedAt: now() })
-    .onConflictDoUpdate({
-      target: [matchRetryState.animeId, matchRetryState.source],
-      set: { retryCount: 0, retryAt: null, updatedAt: now() },
-    })
-    .run();
-  ensureSubjectFromAnime(animeId);
   upsertRetryState({ bangumiId: animeId, source, kind: "mapping", retryCount: 0, retryAt: null });
 }
 
 function clearEpisodeFetchRetryState(animeId, source) {
-  db.delete(episodeFetchRetryState)
-    .where(and(eq(episodeFetchRetryState.animeId, animeId), eq(episodeFetchRetryState.source, source)))
-    .run();
   deleteRetryState({ bangumiId: animeId, source, kind: "episode_fetch" });
 }
 
 function blockAutoRetry(animeId, source) {
-  db.insert(matchRetryState)
-    .values({ animeId, source, retryCount: MAX_RETRIES, retryAt: null, updatedAt: now() })
-    .onConflictDoUpdate({
-      target: [matchRetryState.animeId, matchRetryState.source],
-      set: { retryCount: MAX_RETRIES, retryAt: null, updatedAt: now() },
-    })
-    .run();
-  ensureSubjectFromAnime(animeId);
   upsertRetryState({ bangumiId: animeId, source, kind: "mapping", retryCount: MAX_RETRIES, retryAt: null });
 }
 
 function clearManualMatchState(animeId, source) {
-  db.delete(manualMatchState)
-    .where(and(eq(manualMatchState.animeId, animeId), eq(manualMatchState.source, source)))
-    .run();
   deleteManualResourceState({ bangumiId: animeId, source });
 }
 
 function markWaitAiring(animeId, source, note) {
-  db.insert(manualMatchState)
-    .values({ animeId, source, status: "wait_airing", note, updatedAt: now() })
-    .onConflictDoUpdate({
-      target: [manualMatchState.animeId, manualMatchState.source],
-      set: { status: "wait_airing", note, updatedAt: now() },
-    })
-    .run();
   ensureSubjectFromAnime(animeId);
   upsertManualResourceState({ bangumiId: animeId, source, status: "wait_airing", note });
   clearRetryState(animeId, source);
@@ -640,13 +536,6 @@ function markWaitAiring(animeId, source, note) {
 }
 
 function markNoResource(animeId, source, note) {
-  db.insert(manualMatchState)
-    .values({ animeId, source, status: "no_resource", note, updatedAt: now() })
-    .onConflictDoUpdate({
-      target: [manualMatchState.animeId, manualMatchState.source],
-      set: { status: "no_resource", note, updatedAt: now() },
-    })
-    .run();
   ensureSubjectFromAnime(animeId);
   upsertManualResourceState({ bangumiId: animeId, source, status: "no_resource", note });
   blockAutoRetry(animeId, source);
@@ -655,9 +544,6 @@ function markNoResource(animeId, source, note) {
 
 function deleteMappingArtifacts(animeId, source) {
   deleteResourceEpisodesForSubjectSource({ bangumiId: animeId, source });
-  db.delete(bangumiCstationMap)
-    .where(and(eq(bangumiCstationMap.animeId, animeId), eq(bangumiCstationMap.source, source)))
-    .run();
   deleteResourceMapping({ bangumiId: animeId, source });
   clearEpisodeFetchRetryState(animeId, source);
 }
@@ -667,33 +553,6 @@ function applyManualMapping({ animeRow, source, sourceItem, sourceAid, episodeRa
   const matchedBgName = animeRow.nameCn || animeRow.name;
   const matchedResourceName = sourceItem.name;
 
-  db.insert(bangumiCstationMap)
-    .values({
-      animeId: animeRow.id,
-      source,
-      cstationId: sourceAid,
-      sourceEpStart: episodeRange.sourceEpStart,
-      sourceEpEnd: episodeRange.sourceEpEnd,
-      displayEpOffset: episodeRange.displayEpOffset,
-      score: null,
-      matchedBgName,
-      matchedCsName: matchedResourceName,
-      matchedAt: now(),
-    })
-    .onConflictDoUpdate({
-      target: [bangumiCstationMap.animeId, bangumiCstationMap.source],
-      set: {
-        cstationId: sourceAid,
-        sourceEpStart: episodeRange.sourceEpStart,
-        sourceEpEnd: episodeRange.sourceEpEnd,
-        displayEpOffset: episodeRange.displayEpOffset,
-        score: null,
-        matchedBgName,
-        matchedCsName: matchedResourceName,
-        matchedAt: now(),
-      },
-    })
-    .run();
   ensureSubjectFromAnime(animeRow.id);
   upsertResourceMapping({
     bangumiId: animeRow.id,
@@ -717,12 +576,7 @@ function existingMapping(animeId, source) {
     SELECT * FROM resource_mappings
     WHERE bangumi_id = ? AND source = ?
   `).get(animeId, source);
-  if (normalized) return normalizedMappingRow(normalized);
-
-  return db.select()
-    .from(bangumiCstationMap)
-    .where(and(eq(bangumiCstationMap.animeId, animeId), eq(bangumiCstationMap.source, source)))
-    .get();
+  return normalized ? normalizedMappingRow(normalized) : undefined;
 }
 
 export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refreshEpisodes = true } = {}) {

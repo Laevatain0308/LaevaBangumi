@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { initDb } from "./db/index.js";
 import { db } from "./db/index.js";
-import { anime } from "./db/schema.js";
+import { subjects } from "./db/schema.js";
 import { createServer } from "./server.js";
 import { syncCalendar, retryPending, enrichFromBangumiSearch, registerAnimeJobs, batchMatch, enqueueEpisodeRefreshesBySourceIds } from "./services/anime.js";
 import { onSearchFlush } from "./services/queue.js";
@@ -82,7 +82,7 @@ if (process.argv.includes("--sync")) {
   log("init", "manual initial sync started");
   coordinator.runSyncOnce({ initial: true, trigger: "init" }).catch((err) => error("init", "manual initial sync failed", err));
 } else {
-  const hasAnime = db.select({ id: anime.id }).from(anime).limit(1).get();
+  const hasAnime = db.select({ id: subjects.bangumiId }).from(subjects).limit(1).get();
   if (!hasAnime) {
     log("init", "database empty, background initial sync started");
     coordinator.runSyncOnce({ initial: true, trigger: "init" }).catch((err) => error("init", "background initial sync failed", err));

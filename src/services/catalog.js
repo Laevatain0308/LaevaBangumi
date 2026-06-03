@@ -1,6 +1,4 @@
-import { eq, and } from "drizzle-orm";
-import { db } from "../db/index.js";
-import { cstationCatalog, sourceSyncState } from "../db/schema.js";
+import { sqlite } from "../db/index.js";
 import * as cstation from "./cstation.js";
 import { log, error } from "../lib/logger.js";
 import { upsertResourceItem, upsertResourceSyncState } from "../repositories/resourceRepository.js";
@@ -16,32 +14,6 @@ export async function saveCatalog(catalog, { source } = {}) {
   for (const item of catalog) {
     try {
       const normalized = normalizeResourceItem(item, { source });
-      const values = {
-        source,
-        id: normalized.sourceAid,
-        name: normalized.title,
-        subname: normalized.subtitle,
-        year: normalized.year,
-        last: normalized.latestText,
-        category: normalized.category,
-        detailFetchedAt: normalized.detailFetchedAt,
-      };
-      const set = {
-        name: normalized.title,
-        year: normalized.year,
-      };
-      if (normalized.latestText) set.last = normalized.latestText;
-      if (normalized.category) set.category = normalized.category;
-      if (normalized.subtitle) set.subname = normalized.subtitle;
-      if (normalized.detailFetchedAt) set.detailFetchedAt = normalized.detailFetchedAt;
-
-      db.insert(cstationCatalog)
-        .values(values)
-        .onConflictDoUpdate({
-          target: [cstationCatalog.source, cstationCatalog.id],
-          set,
-        })
-        .run();
       upsertResourceItem(normalized);
       count++;
     } catch (err) {
@@ -59,10 +31,11 @@ export async function syncCatalogCategory({ source, t, incremental = true, hydra
   if (!source) throw new Error("syncCatalogCategory requires source");
   if (!t) throw new Error("syncCatalogCategory requires t");
   log("catalog", "category sync started", { source, category: t, incremental, hydrateDetails });
-  const state = db.select()
-    .from(sourceSyncState)
-    .where(and(eq(sourceSyncState.source, source), eq(sourceSyncState.category, t)))
-    .get();
+  const state = sqlite.prepare(`
+    SELECT source, scope, last_seen_at AS lastSeenAt, last_success_at AS lastSuccessAt
+    FROM sync_state
+    WHERE source = ? AND scope = ?
+  `).get(source, t);
 
   const shouldIncremental = incremental && state?.lastSeenAt;
   const result = shouldIncremental
@@ -135,13 +108,6 @@ export async function hydrateCatalogDetails(ids, { source } = {}) {
 
 function upsertSyncState(source, category, lastSeenAt) {
   const lastSuccessAt = now();
-  db.insert(sourceSyncState)
-    .values({ source, category, lastSeenAt, lastSuccessAt, updatedAt: lastSuccessAt })
-    .onConflictDoUpdate({
-      target: [sourceSyncState.source, sourceSyncState.category],
-      set: { lastSeenAt, lastSuccessAt, updatedAt: lastSuccessAt },
-    })
-    .run();
   upsertResourceSyncState({ source, scope: category, lastSeenAt, lastSuccessAt });
 }
 

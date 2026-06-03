@@ -55,8 +55,8 @@ export function normalizeResourceEpisodes(episodes, { bangumiId, source, sourceA
         sourceAid: normalizedSourceAid,
         epIndex,
         sourceEpIndex,
-        epName: stringValue(episode.epName ?? episode.name),
-        videoUrl,
+        title: stringValue(episode.epName ?? episode.name),
+        rawVideoUrl: videoUrl,
       };
     })
     .filter(Boolean);

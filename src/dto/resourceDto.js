@@ -2,8 +2,8 @@ function compactDto(row) {
   return Object.fromEntries(Object.entries(row).filter(([, value]) => value !== undefined));
 }
 
-function field(row, snakeName, camelName) {
-  return row?.[snakeName] ?? row?.[camelName];
+function normalizedField(row, snakeName, camelName = null) {
+  return row?.[snakeName] ?? (camelName ? row?.[camelName] : undefined);
 }
 
 export function formatEpisodePlayUrl({
@@ -16,17 +16,17 @@ export function formatEpisodePlayUrl({
 }
 
 export function formatDetailEpisodeDto({ subjectId, channelIndex, episode }) {
-  const index = field(episode, "ep_index", "epIndex");
+  const index = normalizedField(episode, "ep_index", "epIndex");
   return compactDto({
     index,
-    sourceIndex: field(episode, "source_ep_index", "sourceEpIndex"),
-    name: field(episode, "ep_name", "epName"),
+    sourceIndex: normalizedField(episode, "source_ep_index", "sourceEpIndex"),
+    name: normalizedField(episode, "title"),
     playUrl: formatEpisodePlayUrl({
       subjectId,
       channelIndex,
       episodeIndex: index,
     }),
-    updatedAt: field(episode, "updated_at", "updatedAt"),
+    updatedAt: normalizedField(episode, "updated_at", "updatedAt"),
   });
 }
 

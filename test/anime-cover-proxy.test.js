@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { initDb, db } from "../src/db/index.js";
-import { anime } from "../src/db/schema.js";
+import { subjects } from "../src/db/schema.js";
 import { getAnimeDetail, searchAnime } from "../src/services/anime.js";
 
 const ANIME_ID = 999910001;
@@ -11,21 +11,22 @@ const COVER_URL = "https://lain.bgm.tv/pic/cover/l/13/c5/400602_ZI8Y9.jpg";
 initDb();
 
 function cleanup() {
-  db.delete(anime).where(eq(anime.id, ANIME_ID)).run();
+  db.delete(subjects).where(eq(subjects.bangumiId, ANIME_ID)).run();
 }
 
 test.beforeEach(() => {
   cleanup();
   process.env.COVER_PROXY_BASE = "https://img.example.test";
   process.env.COVER_PROXY_SECRET = "anime-cover-secret";
-  db.insert(anime)
+  db.insert(subjects)
     .values({
-      id: ANIME_ID,
+      bangumiId: ANIME_ID,
       name: "Proxy Cover Test",
       nameCn: "封面代理测试",
       coverUrl: COVER_URL,
       hasCover: 0,
-      detailFetchedAt: new Date().toISOString(),
+      ratingDistributionJson: "[]",
+      metadataFetchedAt: new Date().toISOString(),
       updatedAt: "2026-06-01 00:00:00",
     })
     .run();
@@ -62,10 +63,10 @@ test("getAnimeDetail returns signed external cover proxy URL when configured", a
   assert.ok(new URL(result.data.coverUrl).searchParams.get("u"));
 });
 
-test("external cover proxy URL is built from normalized HTTPS source even for legacy database rows", async () => {
-  db.update(anime)
+test("external cover proxy URL is built from normalized HTTPS source", async () => {
+  db.update(subjects)
     .set({ coverUrl: "http://lain.bgm.tv/r/400/pic/cover/l/13/c5/400602_ZI8Y9.jpg" })
-    .where(eq(anime.id, ANIME_ID))
+    .where(eq(subjects.bangumiId, ANIME_ID))
     .run();
 
   const result = await getAnimeDetail(ANIME_ID);

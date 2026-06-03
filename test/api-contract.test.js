@@ -95,12 +95,12 @@ function seedContractSubject() {
         score = excluded.score,
         matched_at = excluded.matched_at,
         updated_at = datetime('now');
-    INSERT INTO episodes (bangumi_id, source, source_aid, ep_index, source_ep_index, ep_name, video_url, updated_at)
+    INSERT INTO episodes (bangumi_id, source, source_aid, ep_index, source_ep_index, title, raw_video_url, updated_at)
       VALUES (${CONTRACT_SUBJECT_ID}, 'ffzy', 123, 1, 1, '第01集', 'https://example.invalid/1.m3u8', datetime('now'))
       ON CONFLICT(bangumi_id, source, source_aid, ep_index) DO UPDATE SET
         source_ep_index = excluded.source_ep_index,
-        ep_name = excluded.ep_name,
-        video_url = excluded.video_url,
+        title = excluded.title,
+        raw_video_url = excluded.raw_video_url,
         updated_at = excluded.updated_at;
   `);
 }
@@ -142,58 +142,6 @@ test("cover endpoint reads normalized subject cover URLs", async () => {
     const response = await getRaw(server, `/api/cover?id=${CONTRACT_SUBJECT_ID}`);
     assert.equal(response.status, 302);
     assert.equal(response.headers.location, "https://example.invalid/cover.jpg");
-  } finally {
-    server.close();
-  }
-});
-
-test("legacy fallback detail still exposes playUrl without episode url", async () => {
-  const legacySubjectId = 990547889;
-  initDb();
-  sqlite.exec(`
-    DELETE FROM subject_aliases WHERE bangumi_id = ${legacySubjectId};
-    DELETE FROM subject_tags WHERE bangumi_id = ${legacySubjectId};
-    DELETE FROM resource_mappings WHERE bangumi_id = ${legacySubjectId};
-    DELETE FROM episodes WHERE bangumi_id = ${legacySubjectId} OR anime_id = ${legacySubjectId};
-    DELETE FROM subjects WHERE bangumi_id = ${legacySubjectId};
-    DELETE FROM bangumi_cstation_map WHERE anime_id = ${legacySubjectId};
-    DELETE FROM anime WHERE id = ${legacySubjectId};
-
-    INSERT INTO anime (
-      id, name, name_cn, summary, platform, air_date, air_weekday,
-      eps, total_episodes, cover_url, has_cover, rating_score, rank,
-      tags, detail_fetched_at, created_at, updated_at
-    ) VALUES (
-      ${legacySubjectId}, 'Legacy raw title', '旧表中文标题', 'legacy summary',
-      'TV', '2026-04-02', 4, 12, 12, 'https://example.invalid/legacy-cover.jpg',
-      0, 7.1, 4321, '["旧表Tag"]', datetime('now'), datetime('now'), datetime('now')
-    );
-    INSERT INTO bangumi_cstation_map (
-      anime_id, source, cstation_id, score, matched_bg_name, matched_cs_name, matched_at
-    ) VALUES (
-      ${legacySubjectId}, 'ffzy', 456, 0.91, '旧表中文标题', '旧表资源标题', datetime('now')
-    );
-    INSERT INTO episodes (
-      anime_id, source_name, source_aid, ep_index, ep_name, video_url, updated_at
-    ) VALUES (
-      ${legacySubjectId}, 'ffzy', 456, 1, '第01集', 'https://example.invalid/legacy-1.m3u8', datetime('now')
-    );
-
-    UPDATE episodes SET bangumi_id = NULL WHERE anime_id = ${legacySubjectId};
-    DELETE FROM resource_mappings WHERE bangumi_id = ${legacySubjectId};
-    DELETE FROM subjects WHERE bangumi_id = ${legacySubjectId};
-  `);
-
-  const server = createServer().listen(0);
-  try {
-    const response = await getJson(server, `/api/detail?id=${legacySubjectId}`);
-    assert.equal(response.status, 200);
-    const episode = response.body.data.channels[0].episodes[0];
-    assert.equal(episode.playUrl, `/anime/api/play?id=${legacySubjectId}&ch=1&ep=1`);
-    assert.equal(Object.hasOwn(episode, "url"), false);
-    assert.equal(Object.hasOwn(response.body.data, "bangumiId"), false);
-    assert.equal(response.body.meta.resourceSources[0].sourceAid, 456);
-    assert.equal(Object.hasOwn(response.body.meta.resourceSources[0], "cstationId"), false);
   } finally {
     server.close();
   }

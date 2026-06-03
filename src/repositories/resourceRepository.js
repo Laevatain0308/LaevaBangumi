@@ -69,9 +69,9 @@ export function listEpisodeChannelRowsForSubject(bangumiId) {
       e.source_aid,
       e.ep_index,
       e.source_ep_index,
-      e.ep_name,
+      e.title,
       e.updated_at,
-      rs.name AS source_name,
+      rs.name AS source_label,
       COALESCE(rs.priority, 100) AS source_priority,
       ri.title AS resource_title
     FROM episodes e
@@ -86,9 +86,9 @@ export function listEpisodeChannelRowsForSubject(bangumiId) {
   `).all(bangumiId);
 }
 
-export function findEpisodeVideoUrl({ bangumiId, source, sourceAid, epIndex }) {
+export function findEpisodeRawVideoUrl({ bangumiId, source, sourceAid, epIndex }) {
   return sqlite.prepare(`
-    SELECT video_url FROM episodes
+    SELECT raw_video_url FROM episodes
     WHERE bangumi_id = @bangumiId
       AND source = @source
       AND source_aid = @sourceAid
@@ -179,23 +179,20 @@ export function upsertResourceEpisode({
   sourceAid,
   epIndex,
   sourceEpIndex = null,
-  epName = null,
-  videoUrl,
+  title = null,
+  rawVideoUrl,
 }) {
   assertResourceStateKey({ bangumiId, source });
   if (sourceAid == null) throw new Error("resource episode write requires sourceAid");
   if (epIndex == null) throw new Error("resource episode write requires epIndex");
-  if (!videoUrl) throw new Error("resource episode write requires videoUrl");
+  if (!rawVideoUrl) throw new Error("resource episode write requires rawVideoUrl");
 
   const existing = sqlite.prepare(`
-    SELECT id FROM episodes
-    WHERE source_aid = @sourceAid
+    SELECT episode_id FROM episodes
+    WHERE bangumi_id = @bangumiId
+      AND source = @source
+      AND source_aid = @sourceAid
       AND ep_index = @epIndex
-      AND (
-        (bangumi_id = @bangumiId AND source = @source)
-        OR (anime_id = @bangumiId AND source_name = @source)
-      )
-    ORDER BY CASE WHEN bangumi_id = @bangumiId AND source = @source THEN 0 ELSE 1 END
     LIMIT 1
   `).get({ bangumiId, source, sourceAid, epIndex });
 
@@ -205,19 +202,19 @@ export function upsertResourceEpisode({
     sourceAid,
     epIndex,
     sourceEpIndex,
-    epName,
-    videoUrl,
+    title,
+    rawVideoUrl,
   };
 
   if (!existing) {
     sqlite.prepare(`
       INSERT INTO episodes (
-        anime_id, bangumi_id, source_name, source, source_aid,
-        ep_index, source_ep_index, ep_name, video_url, updated_at
+        bangumi_id, source, source_aid,
+        ep_index, source_ep_index, title, raw_video_url, updated_at
       )
       VALUES (
-        (SELECT id FROM anime WHERE id = @bangumiId), @bangumiId, @source, @source, @sourceAid,
-        @epIndex, @sourceEpIndex, @epName, @videoUrl, datetime('now')
+        @bangumiId, @source, @sourceAid,
+        @epIndex, @sourceEpIndex, @title, @rawVideoUrl, datetime('now')
       )
     `).run(row);
     return;
@@ -225,18 +222,16 @@ export function upsertResourceEpisode({
 
   sqlite.prepare(`
     UPDATE episodes
-    SET anime_id = (SELECT id FROM anime WHERE id = @bangumiId),
-      bangumi_id = @bangumiId,
-      source_name = @source,
+    SET bangumi_id = @bangumiId,
       source = @source,
       source_aid = @sourceAid,
       ep_index = @epIndex,
       source_ep_index = @sourceEpIndex,
-      ep_name = @epName,
-      video_url = @videoUrl,
+      title = @title,
+      raw_video_url = @rawVideoUrl,
       updated_at = datetime('now')
-    WHERE id = @id
-  `).run({ ...row, id: existing.id });
+    WHERE episode_id = @episodeId
+  `).run({ ...row, episodeId: existing.episode_id });
 }
 
 export function deleteStaleResourceEpisodes({ bangumiId, source, sourceAid, validEpIndexes }) {
@@ -245,16 +240,15 @@ export function deleteStaleResourceEpisodes({ bangumiId, source, sourceAid, vali
   const validIndexes = new Set((validEpIndexes || []).map((value) => Number(value)));
 
   const existing = sqlite.prepare(`
-    SELECT id, source_aid, ep_index
+    SELECT episode_id, source_aid, ep_index
     FROM episodes
-    WHERE (bangumi_id = @bangumiId AND source = @source)
-      OR (anime_id = @bangumiId AND source_name = @source)
+    WHERE bangumi_id = @bangumiId AND source = @source
   `).all({ bangumiId, source });
 
-  const deleteById = sqlite.prepare("DELETE FROM episodes WHERE id = ?");
+  const deleteById = sqlite.prepare("DELETE FROM episodes WHERE episode_id = ?");
   for (const episode of existing) {
     if (episode.source_aid !== sourceAid || !validIndexes.has(episode.ep_index)) {
-      deleteById.run(episode.id);
+      deleteById.run(episode.episode_id);
     }
   }
 }
@@ -264,8 +258,7 @@ export function deleteResourceEpisodesForSubjectSource({ bangumiId, source }) {
 
   sqlite.prepare(`
     DELETE FROM episodes
-    WHERE (bangumi_id = @bangumiId AND source = @source)
-      OR (anime_id = @bangumiId AND source_name = @source)
+    WHERE bangumi_id = @bangumiId AND source = @source
   `).run({ bangumiId, source });
 }
 
@@ -273,7 +266,7 @@ export function deleteResourceRowsForSubject({ bangumiId }) {
   if (!bangumiId) throw new Error("resource subject cleanup requires bangumiId");
 
   sqlite.transaction(() => {
-    sqlite.prepare("DELETE FROM episodes WHERE bangumi_id = ? OR anime_id = ?").run(bangumiId, bangumiId);
+    sqlite.prepare("DELETE FROM episodes WHERE bangumi_id = ?").run(bangumiId);
     sqlite.prepare("DELETE FROM resource_mappings WHERE bangumi_id = ?").run(bangumiId);
     sqlite.prepare("DELETE FROM retry_state WHERE bangumi_id = ?").run(bangumiId);
     sqlite.prepare("DELETE FROM manual_resource_state WHERE bangumi_id = ?").run(bangumiId);

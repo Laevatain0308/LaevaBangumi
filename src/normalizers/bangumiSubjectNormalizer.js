@@ -88,22 +88,6 @@ function weekdayFromDate(date) {
   return day === 0 ? 7 : day;
 }
 
-function tagName(tag) {
-  return typeof tag === "string" ? tag : tag.name;
-}
-
-function tagsFromItem(item, detailFetched) {
-  if (Array.isArray(item.meta_tags)) return JSON.stringify(item.meta_tags);
-  if (Array.isArray(item.tags)) return JSON.stringify(item.tags.map(tagName).filter(Boolean).slice(0, 8));
-  return detailFetched ? "[]" : undefined;
-}
-
-function aliasesFromItem(item, detailFetched) {
-  const titles = collectBangumiTitles(item).filter((title) => title !== item.name && title !== item.name_cn);
-  if (titles.length > 0) return JSON.stringify(titles);
-  return detailFetched ? "[]" : undefined;
-}
-
 function ratingDistributionFromItem(item) {
   const count = item.rating?.count;
   if (!count || typeof count !== "object") return [];
@@ -169,24 +153,5 @@ export function normalizeBangumiSubject(item, weekday, { detailFetched = false, 
     }),
     aliases: normalizedAliasesFromItem(item, detailFetched),
     tags: normalizedTagsFromItem(item, detailFetched),
-    legacyAnime: compactRow({
-      id: item.id,
-      name: item.name,
-      nameCn: knownOrSkip(item.name_cn, detailFetched),
-      summary: knownOrSkip(item.summary, detailFetched),
-      airDate: knownOrSkip(airDate, detailFetched),
-      airWeekday: knownOrSkip(item.air_weekday ?? weekdayFromDate(airDate), detailFetched),
-      eps: knownOrSkip(epsFromItem(item), detailFetched),
-      totalEpisodes: knownOrSkip(totalEpisodesFromItem(item), detailFetched),
-      platform: knownOrSkip(item.platform, detailFetched),
-      coverUrl: knownOrSkip(coverUrl, detailFetched),
-      ratingScore: knownOrSkip(item.rating?.score, detailFetched),
-      rank: knownOrSkip(rankFromItem(item), detailFetched),
-      tags: tagsFromItem(item, detailFetched),
-      aliases: aliasesFromItem(item, detailFetched),
-      calendarWeekday: weekday,
-      detailFetchedAt: detailFetched ? timestamp : undefined,
-      updatedAt: timestamp,
-    }),
   };
 }

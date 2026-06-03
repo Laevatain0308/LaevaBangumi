@@ -7,18 +7,13 @@ const METADATA_SUBJECT_ID = 547888;
 
 function resetTables() {
   initDb();
-  sqlite.prepare("DELETE FROM episodes WHERE bangumi_id = ? OR anime_id = ?").run(METADATA_SUBJECT_ID, METADATA_SUBJECT_ID);
+  sqlite.prepare("DELETE FROM episodes WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
   sqlite.prepare("DELETE FROM resource_mappings WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
   sqlite.prepare("DELETE FROM retry_state WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
   sqlite.prepare("DELETE FROM manual_resource_state WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
   sqlite.prepare("DELETE FROM subject_tags WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
   sqlite.prepare("DELETE FROM subject_aliases WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
   sqlite.prepare("DELETE FROM subjects WHERE bangumi_id = ?").run(METADATA_SUBJECT_ID);
-  sqlite.prepare("DELETE FROM bangumi_cstation_map WHERE anime_id = ?").run(METADATA_SUBJECT_ID);
-  sqlite.prepare("DELETE FROM match_retry_state WHERE anime_id = ?").run(METADATA_SUBJECT_ID);
-  sqlite.prepare("DELETE FROM episode_fetch_retry_state WHERE anime_id = ?").run(METADATA_SUBJECT_ID);
-  sqlite.prepare("DELETE FROM manual_match_state WHERE anime_id = ?").run(METADATA_SUBJECT_ID);
-  sqlite.prepare("DELETE FROM anime WHERE id = ?").run(METADATA_SUBJECT_ID);
   sqlite.prepare("DELETE FROM anime_other WHERE id = ?").run(METADATA_SUBJECT_ID);
 }
 

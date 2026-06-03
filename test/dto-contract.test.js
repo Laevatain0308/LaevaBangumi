@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { envelope } from "../src/dto/apiEnvelope.js";
 import {
-  formatLegacyAnimeDetailDto,
   formatSubjectDetailDto,
   formatSubjectSearchDto,
 } from "../src/dto/subjectDto.js";
@@ -85,11 +84,12 @@ test("resource DTOs expose playUrl and videoUrl without legacy fields", () => {
     episode: {
       ep_index: 1,
       source_ep_index: 1,
-      ep_name: "第01集",
+      title: "第01集",
       updated_at: "2026-06-03 01:00:00",
     },
   });
   assert.equal(episode.playUrl, "/anime/api/play?id=547888&ch=1&ep=1");
+  assert.equal(episode.name, "第01集");
   assert.equal(Object.hasOwn(episode, "url"), false);
 
   const play = formatPlayDto("https://example.invalid/1.m3u8");
@@ -100,32 +100,6 @@ test("resource DTOs expose playUrl and videoUrl without legacy fields", () => {
     expiresAt: null,
   });
   assert.equal(Object.hasOwn(play, "videoURL"), false);
-});
-
-test("legacy detail DTO keeps the current fallback shape without legacy episode url", () => {
-  const detail = formatLegacyAnimeDetailDto({
-    anime: {
-      id: 547889,
-      name: "Legacy raw",
-      nameCn: "旧表标题",
-      summary: "legacy summary",
-      coverUrl: "https://example.invalid/legacy.jpg",
-      hasCover: 0,
-      eps: 12,
-      totalEpisodes: 12,
-      airDate: "2026-04-02",
-      platform: "TV",
-      ratingScore: 7.1,
-      rank: 4321,
-    },
-    fresh: true,
-    coverUrl: "https://example.invalid/legacy.jpg",
-    tags: ["旧表Tag"],
-    channels: [{ name: "ffzy", sourceAid: 456, episodes: [] }],
-  });
-  assert.equal(detail.data.id, 547889);
-  assert.deepEqual(detail.data.tags, ["旧表Tag"]);
-  assert.equal(Object.hasOwn(detail.data, "bangumiId"), false);
 });
 
 test("api envelope keeps data, timestamp, and meta shape centralized", () => {

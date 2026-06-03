@@ -13,10 +13,7 @@ function cleanupMigrationFixture() {
   sqlite.exec(`
     DELETE FROM episodes
     WHERE bangumi_id = ${MIGRATION_SUBJECT_ID}
-       OR anime_id = ${MIGRATION_SUBJECT_ID}
-       OR (source = '${MIGRATION_SOURCE}' AND source_aid = ${MIGRATION_SOURCE_AID})
-       OR (source_name = '${MIGRATION_SOURCE}' AND source_aid = ${MIGRATION_SOURCE_AID});
-
+       OR (source = '${MIGRATION_SOURCE}' AND source_aid = ${MIGRATION_SOURCE_AID});
     DELETE FROM resource_mappings
     WHERE bangumi_id = ${MIGRATION_SUBJECT_ID}
        OR (source = '${MIGRATION_SOURCE}' AND source_aid = ${MIGRATION_SOURCE_AID});
@@ -29,20 +26,6 @@ function cleanupMigrationFixture() {
 
     DELETE FROM resource_items
     WHERE source = '${MIGRATION_SOURCE}' AND source_aid = ${MIGRATION_SOURCE_AID};
-    DELETE FROM cstation_catalog
-    WHERE source = '${MIGRATION_SOURCE}' AND id = ${MIGRATION_SOURCE_AID};
-    DELETE FROM bangumi_cstation_map
-    WHERE anime_id = ${MIGRATION_SUBJECT_ID}
-       OR (source = '${MIGRATION_SOURCE}' AND cstation_id = ${MIGRATION_SOURCE_AID});
-    DELETE FROM match_retry_state
-    WHERE anime_id = ${MIGRATION_SUBJECT_ID} AND source = '${MIGRATION_SOURCE}';
-    DELETE FROM episode_fetch_retry_state
-    WHERE anime_id = ${MIGRATION_SUBJECT_ID} AND source = '${MIGRATION_SOURCE}';
-    DELETE FROM manual_match_state
-    WHERE anime_id = ${MIGRATION_SUBJECT_ID} AND source = '${MIGRATION_SOURCE}';
-    DELETE FROM source_sync_state
-    WHERE source = '${MIGRATION_SOURCE}' AND category = '${MIGRATION_SCOPE}';
-    DELETE FROM anime WHERE id = ${MIGRATION_SUBJECT_ID};
   `);
 
   const deleteTagIfOrphan = sqlite.prepare(`
@@ -53,8 +36,108 @@ function cleanupMigrationFixture() {
   for (const tag of MIGRATION_TAGS) deleteTagIfOrphan.run(tag);
 }
 
+function createLegacyTablesForMigration() {
+  sqlite.exec(`
+    DROP TABLE IF EXISTS episodes;
+
+    CREATE TABLE anime (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      name_cn TEXT,
+      aliases TEXT,
+      platform TEXT,
+      air_date TEXT,
+      air_weekday INTEGER,
+      calendar_weekday INTEGER,
+      eps INTEGER,
+      total_episodes INTEGER,
+      summary TEXT,
+      cover_url TEXT,
+      has_cover INTEGER DEFAULT 0,
+      rating_score REAL,
+      rank INTEGER,
+      tags TEXT,
+      sources_json TEXT,
+      detail_fetched_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE cstation_catalog (
+      source TEXT NOT NULL,
+      id INTEGER NOT NULL,
+      category TEXT,
+      name TEXT NOT NULL,
+      subname TEXT,
+      year TEXT,
+      last TEXT,
+      detail_fetched_at TEXT
+    );
+
+    CREATE TABLE bangumi_cstation_map (
+      anime_id INTEGER NOT NULL,
+      source TEXT NOT NULL DEFAULT 'ffzy',
+      cstation_id INTEGER NOT NULL,
+      source_ep_start INTEGER,
+      source_ep_end INTEGER,
+      display_ep_offset INTEGER NOT NULL DEFAULT 0,
+      score REAL,
+      matched_bg_name TEXT,
+      matched_cs_name TEXT,
+      matched_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE episodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      anime_id INTEGER,
+      bangumi_id INTEGER,
+      source_name TEXT,
+      source TEXT,
+      source_aid INTEGER,
+      ep_index INTEGER,
+      source_ep_index INTEGER,
+      ep_name TEXT,
+      video_url TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE match_retry_state (
+      anime_id INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      retry_at TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE episode_fetch_retry_state (
+      anime_id INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      retry_at TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE manual_match_state (
+      anime_id INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      status TEXT NOT NULL,
+      note TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE source_sync_state (
+      source TEXT NOT NULL,
+      category TEXT NOT NULL,
+      last_seen_at TEXT,
+      last_success_at TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+}
+
 function seedLegacyRowsThenClearNormalizedRows() {
   cleanupMigrationFixture();
+  createLegacyTablesForMigration();
   sqlite.exec(`
     INSERT INTO anime (
       id, name, name_cn, aliases, platform, air_date, air_weekday,
@@ -164,13 +247,6 @@ function seedLegacyRowsThenClearNormalizedRows() {
       '2026-06-03 07:10:00',
       '2026-06-03 07:20:00'
     );
-
-    UPDATE episodes
-    SET bangumi_id = NULL,
-        source = NULL
-    WHERE anime_id = ${MIGRATION_SUBJECT_ID}
-      AND source_name = '${MIGRATION_SOURCE}'
-      AND source_aid = ${MIGRATION_SOURCE_AID};
 
     DELETE FROM resource_mappings WHERE bangumi_id = ${MIGRATION_SUBJECT_ID};
     DELETE FROM retry_state WHERE bangumi_id = ${MIGRATION_SUBJECT_ID};
@@ -322,17 +398,17 @@ test("initDb migrates legacy rows into normalized tables idempotently", () => {
   });
 
   assert.deepEqual(sqlite.prepare(`
-    SELECT bangumi_id, source, source_aid, ep_index, source_ep_index, ep_name, video_url, updated_at
+    SELECT bangumi_id, source, source_aid, ep_index, source_ep_index, title, raw_video_url, updated_at
     FROM episodes
-    WHERE anime_id = ? AND source_name = ? AND source_aid = ?
+    WHERE bangumi_id = ? AND source = ? AND source_aid = ?
   `).get(MIGRATION_SUBJECT_ID, MIGRATION_SOURCE, MIGRATION_SOURCE_AID), {
     bangumi_id: MIGRATION_SUBJECT_ID,
     source: MIGRATION_SOURCE,
     source_aid: MIGRATION_SOURCE_AID,
     ep_index: 3,
     source_ep_index: 3,
-    ep_name: "第03集",
-    video_url: "https://example.invalid/migration-3.m3u8",
+    title: "第03集",
+    raw_video_url: "https://example.invalid/migration-3.m3u8",
     updated_at: "2026-06-03 04:00:00",
   });
 
