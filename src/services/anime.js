@@ -1288,6 +1288,7 @@ function clearStaleCalendarEntries(activeAnimeIds) {
 function formatSubjectSearchRow(row) {
   return formatSubjectSearchDto(row, {
     coverUrl: proxyCover(row.bangumi_id, row.cover_url, row.has_cover),
+    tags: listSubjectTags(row.bangumi_id),
   });
 }
 
@@ -1526,7 +1527,7 @@ export async function getAnimeDetail(id) {
 
   for (const row of sourceStatuses) {
     if (row.status === "fetching") {
-      log("detail", "enqueue episode refresh from detail page", { id, source: row.source, cstationId: row.cstationId });
+      log("detail", "enqueue episode refresh from detail page", { id, source: row.source, sourceAid: row.sourceAid });
       enqueueEpisodeRefresh(id, { source: row.source });
     }
   }
@@ -1573,7 +1574,7 @@ function getResourceSourceStatuses(mappedRows, episodeRows, retryRows, manualRow
       source: source.key,
       name: source.name,
       status,
-      cstationId: mapped?.cstationId ?? null,
+      sourceAid: mapped?.cstationId ?? null,
       note,
     };
   });
@@ -1661,14 +1662,27 @@ export async function getCalendarView() {
   const all = db.all(sql`
     SELECT
       bangumi_id AS id,
+      bangumi_id,
       name,
+      name_cn,
       name_cn AS nameCn,
+      summary,
       cover_url AS coverUrl,
+      cover_url,
       has_cover AS hasCover,
+      has_cover,
       rating_score AS ratingScore,
+      rating_score,
+      rating_rank,
+      rating_total,
+      rating_distribution_json,
       eps,
       total_episodes AS totalEpisodes,
+      total_episodes,
       air_date AS airDate,
+      air_date,
+      air_weekday,
+      platform,
       COALESCE(calendar_weekday, air_weekday) AS calendarWeekday
     FROM subjects
   `);
@@ -1703,11 +1717,24 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
   const rows = db.all(sql`
     SELECT
       s.bangumi_id AS id,
+      s.bangumi_id,
       s.name,
       s.name_cn AS nameCn,
+      s.name_cn,
       s.summary,
       s.cover_url AS coverUrl,
+      s.cover_url,
       s.has_cover AS hasCover,
+      s.has_cover,
+      s.air_date,
+      s.air_weekday,
+      s.platform,
+      s.eps,
+      s.total_episodes,
+      s.rating_score,
+      s.rating_rank,
+      s.rating_total,
+      s.rating_distribution_json,
       rm.source,
       rm.source_aid AS sourceAid,
       rm.source_ep_start AS sourceEpStart,
@@ -1759,10 +1786,10 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
     if (shouldReplace) {
       const sourceUpdates = existing?.sourceUpdates ? [...existing.sourceUpdates, sourceUpdate] : [sourceUpdate];
       latestByAnime.set(row.id, {
-        id: row.id,
-        title: row.nameCn || row.name,
-        coverUrl: proxyCover(row.id, row.coverUrl, row.hasCover),
-        summary: displaySummary(row.summary),
+        ...formatSubjectSearchDto(row, {
+          coverUrl: proxyCover(row.id, row.coverUrl, row.hasCover),
+          tags: listSubjectTags(row.id),
+        }),
         latestEp: row.latestEp ?? null,
         updatedAt: sourceUpdate.updatedAt,
         source: row.source,
@@ -1782,9 +1809,9 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
         return (sourceOrder.get(a.source) ?? Number.MAX_SAFE_INTEGER) - (sourceOrder.get(b.source) ?? Number.MAX_SAFE_INTEGER);
       });
       const primary = sourceUpdates[0];
+      const { sourceUpdates: _sourceUpdates, ...publicRow } = row;
       return {
-        ...row,
-        sourceUpdates,
+        ...publicRow,
         latestEp: primary?.latestEp ?? null,
         latestEpisode: primary?.hasEpisodeChange && primary?.latestEp
           ? `更新至第${String(primary.latestEp).padStart(2, "0")}集`
@@ -1821,12 +1848,10 @@ function groupByWeekday(list, epMap) {
       .map((a) => {
         const ep = epMap[a.id];
         return {
-          id: a.id,
-          title: a.nameCn || a.name,
-          coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover),
-          ratingScore: a.ratingScore,
-          eps: a.eps,
-          totalEpisodes: a.totalEpisodes,
+          ...formatSubjectSearchDto(a, {
+            coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover),
+            tags: listSubjectTags(a.id),
+          }),
           latestEp: ep?.latestEp ?? null,
           lastUpdated: ep?.lastUpdated ?? null,
           airDate: a.airDate,

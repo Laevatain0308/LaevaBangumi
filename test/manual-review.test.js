@@ -486,6 +486,13 @@ test("analyzeMappedMappings exports existing mappings for review", () => {
 });
 
 test("analyzeMappedMappings exports normalized mappings without legacy mappings", () => {
+  db.delete(bangumiCstationMap)
+    .where(and(eq(bangumiCstationMap.animeId, ANIME_ID), eq(bangumiCstationMap.source, SOURCE)))
+    .run();
+  db.delete(cstationCatalog)
+    .where(and(eq(cstationCatalog.source, SOURCE), eq(cstationCatalog.id, SOURCE_AID)))
+    .run();
+
   sqlite.exec(`
     INSERT INTO subjects (bangumi_id, name, name_cn, air_date, created_at, updated_at)
     VALUES (${ANIME_ID}, 'テスト番組', '测试番剧', '2026-04-01', datetime('now'), datetime('now'))
@@ -2415,8 +2422,7 @@ test("getUpdates aggregates multiple mapped sources by newest catalog last", asy
   assert.equal(current.sourceAid, SOURCE_AID);
   assert.equal(current.updatedAt, "2026-05-30T10:00:00.000Z");
   assert.equal(current.latestEp, 3);
-  assert.equal(current.sourceUpdates.length, 1);
-  assert.deepEqual(current.sourceUpdates.map((item) => item.source), ["ffzy"]);
+  assert.equal(Object.hasOwn(current, "sourceUpdates"), false);
 });
 
 test("getUpdates skips closed ranged mappings even when the source item updates", async () => {

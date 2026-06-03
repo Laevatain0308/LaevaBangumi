@@ -17,10 +17,27 @@ export function findSubjectById(id) {
 export function searchSubjectsByKeyword(keyword, { limit = 60 } = {}) {
   if (!keyword) return [];
   return sqlite.prepare(`
-    SELECT DISTINCT s.bangumi_id, s.name, s.name_cn, s.cover_url, s.has_cover
+    SELECT DISTINCT
+      s.bangumi_id,
+      s.name,
+      s.name_cn,
+      s.summary,
+      s.air_date,
+      s.air_weekday,
+      s.platform,
+      s.eps,
+      s.total_episodes,
+      s.cover_url,
+      s.has_cover,
+      s.rating_score,
+      s.rating_rank,
+      s.rating_total,
+      s.rating_distribution_json
     FROM subjects s
     LEFT JOIN subject_aliases a ON a.bangumi_id = s.bangumi_id
-    WHERE s.name LIKE @q OR s.name_cn LIKE @q OR a.alias LIKE @q
+    LEFT JOIN subject_tags st ON st.bangumi_id = s.bangumi_id
+    LEFT JOIN tags t ON t.tag_id = st.tag_id
+    WHERE s.name LIKE @q OR s.name_cn LIKE @q OR a.alias LIKE @q OR t.name LIKE @q
     ORDER BY s.updated_at DESC
     LIMIT @limit
   `).all({ q: `%${keyword}%`, limit: boundedLimit(limit) });
@@ -29,7 +46,22 @@ export function searchSubjectsByKeyword(keyword, { limit = 60 } = {}) {
 export function searchSubjectsByTag(tag, { limit = 60 } = {}) {
   if (!tag) return [];
   return sqlite.prepare(`
-    SELECT DISTINCT s.bangumi_id, s.name, s.name_cn, s.cover_url, s.has_cover
+    SELECT DISTINCT
+      s.bangumi_id,
+      s.name,
+      s.name_cn,
+      s.summary,
+      s.air_date,
+      s.air_weekday,
+      s.platform,
+      s.eps,
+      s.total_episodes,
+      s.cover_url,
+      s.has_cover,
+      s.rating_score,
+      s.rating_rank,
+      s.rating_total,
+      s.rating_distribution_json
     FROM subjects s
     JOIN subject_tags st ON st.bangumi_id = s.bangumi_id
     JOIN tags t ON t.tag_id = st.tag_id

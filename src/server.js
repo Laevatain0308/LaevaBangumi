@@ -101,7 +101,7 @@ export function createServer() {
       log("api", "play requested", { id, ch, ep });
       const result = await animeService.getPlayUrl(id, ch, ep);
       if (!result) return res.status(404).json(envelope(null, { updatedAt: ts(), meta: { warnings: ["剧集不存在或无播放地址"] } }));
-      res.json(envelope(result, { updatedAt: ts(), meta: { freshness: "cached" } }));
+      res.json(envelope(result, { updatedAt: ts(), meta: { freshness: "cache" } }));
     } catch (err) {
       error("api", "/api/play error", err);
       res.status(500).json(envelope(null, { updatedAt: ts(), meta: { error: err.message } }));

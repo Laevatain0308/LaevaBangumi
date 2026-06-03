@@ -209,6 +209,7 @@ export const resourceMappings = sqliteTable("resource_mappings", {
   updatedAt: text("updated_at").default("(datetime('now'))").notNull(),
 }, (table) => ({
   pk: uniqueIndex("idx_resource_mappings_unique").on(table.bangumiId, table.source),
+  sourceAidUnique: uniqueIndex("idx_resource_mappings_source_aid_unique").on(table.source, table.sourceAid),
 }));
 
 export const syncState = sqliteTable("sync_state", {

@@ -22,11 +22,24 @@ export function parseVotesCount(value) {
   return Array.isArray(parsed) ? parsed : [];
 }
 
-export function formatSubjectSearchDto(row, { coverUrl } = {}) {
+export function formatSubjectSearchDto(row, { coverUrl, tags = [] } = {}) {
   return {
     id: row.bangumi_id ?? row.id,
     title: row.name_cn || row.nameCn || row.name,
+    name: row.name,
+    nameCn: row.name_cn ?? row.nameCn ?? null,
     coverUrl,
+    summary: displaySummary(row.summary),
+    airDate: row.air_date ?? row.airDate ?? null,
+    airWeekday: row.air_weekday ?? row.airWeekday ?? null,
+    platform: row.platform ?? null,
+    eps: row.eps ?? null,
+    totalEpisodes: row.total_episodes ?? row.totalEpisodes ?? null,
+    ratingScore: row.rating_score ?? row.ratingScore ?? null,
+    rank: row.rating_rank ?? row.rank ?? null,
+    votes: row.rating_total ?? row.votes ?? null,
+    votesCount: parseVotesCount(row.rating_distribution_json ?? row.votesCount),
+    tags,
   };
 }
 

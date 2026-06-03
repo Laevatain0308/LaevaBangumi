@@ -186,9 +186,14 @@ test("resource repository writes retry and manual state rows", () => {
 
 test("resource repository upserts and deletes resource mappings", () => {
   const id = RESOURCE_STATE_SUBJECT_ID + 1;
+  const source = `${RESOURCE_SOURCE}_mapping`;
+  const sourceAid = RESOURCE_AID + 10;
   sqlite.exec(`
     DELETE FROM episodes WHERE bangumi_id = ${id};
     DELETE FROM resource_mappings WHERE bangumi_id = ${id};
+    DELETE FROM resource_mappings WHERE source = '${source}';
+    DELETE FROM resource_items WHERE source = '${source}';
+    DELETE FROM resource_sources WHERE source = '${source}';
     DELETE FROM subjects WHERE bangumi_id = ${id};
     INSERT INTO subjects (bangumi_id, name, rating_distribution_json)
       VALUES (${id}, 'Resource mapping raw', '[]');
@@ -196,8 +201,8 @@ test("resource repository upserts and deletes resource mappings", () => {
 
   upsertResourceMapping({
     bangumiId: id,
-    source: RESOURCE_SOURCE,
-    sourceAid: RESOURCE_AID,
+    source,
+    sourceAid,
     sourceEpStart: 1,
     sourceEpEnd: 12,
     displayEpOffset: 0,
@@ -209,8 +214,8 @@ test("resource repository upserts and deletes resource mappings", () => {
   let mapping = sqlite.prepare(`
     SELECT * FROM resource_mappings
     WHERE bangumi_id = ? AND source = ?
-  `).get(id, RESOURCE_SOURCE);
-  assert.equal(mapping.source_aid, RESOURCE_AID);
+  `).get(id, source);
+  assert.equal(mapping.source_aid, sourceAid);
   assert.equal(mapping.source_ep_start, 1);
   assert.equal(mapping.source_ep_end, 12);
   assert.equal(mapping.display_ep_offset, 0);
@@ -219,12 +224,12 @@ test("resource repository upserts and deletes resource mappings", () => {
   assert.equal(mapping.matched_resource_name, "资源站标题");
   assert.ok(mapping.matched_at);
   assert.ok(mapping.updated_at);
-  assert.equal(sqlite.prepare("SELECT enabled FROM resource_sources WHERE source = ?").get(RESOURCE_SOURCE).enabled, 1);
+  assert.equal(sqlite.prepare("SELECT enabled FROM resource_sources WHERE source = ?").get(source).enabled, 1);
 
   upsertResourceMapping({
     bangumiId: id,
-    source: RESOURCE_SOURCE,
-    sourceAid: RESOURCE_AID + 1,
+    source,
+    sourceAid: sourceAid + 1,
     sourceEpStart: 3,
     sourceEpEnd: null,
     displayEpOffset: 2,
@@ -236,8 +241,8 @@ test("resource repository upserts and deletes resource mappings", () => {
   mapping = sqlite.prepare(`
     SELECT * FROM resource_mappings
     WHERE bangumi_id = ? AND source = ?
-  `).get(id, RESOURCE_SOURCE);
-  assert.equal(mapping.source_aid, RESOURCE_AID + 1);
+  `).get(id, source);
+  assert.equal(mapping.source_aid, sourceAid + 1);
   assert.equal(mapping.source_ep_start, 3);
   assert.equal(mapping.source_ep_end, null);
   assert.equal(mapping.display_ep_offset, 2);
@@ -246,13 +251,36 @@ test("resource repository upserts and deletes resource mappings", () => {
   assert.equal(mapping.matched_resource_name, "手动资源站标题");
 
   assert.deepEqual(listResourceMappingsWithEpisodePresenceForSubject(id), [{
-    source: RESOURCE_SOURCE,
-    source_aid: RESOURCE_AID + 1,
+    source,
+    source_aid: sourceAid + 1,
     has_episodes: 0,
   }]);
 
-  deleteResourceMapping({ bangumiId: id, source: RESOURCE_SOURCE });
+  deleteResourceMapping({ bangumiId: id, source });
   assert.deepEqual(listResourceMappingsWithEpisodePresenceForSubject(id), []);
+});
+
+test("resource mappings enforce one subject owner per source item", () => {
+  const firstId = RESOURCE_STATE_SUBJECT_ID + 20;
+  const secondId = RESOURCE_STATE_SUBJECT_ID + 21;
+  const source = `${RESOURCE_SOURCE}_unique`;
+  const sourceAid = RESOURCE_AID + 20;
+  initDb();
+  sqlite.exec(`
+    DELETE FROM resource_mappings WHERE source = '${source}';
+    DELETE FROM resource_items WHERE source = '${source}';
+    DELETE FROM resource_sources WHERE source = '${source}';
+    DELETE FROM subjects WHERE bangumi_id IN (${firstId}, ${secondId});
+    INSERT INTO subjects (bangumi_id, name, rating_distribution_json)
+      VALUES (${firstId}, 'First owner', '[]'), (${secondId}, 'Second owner', '[]');
+  `);
+
+  upsertResourceMapping({ bangumiId: firstId, source, sourceAid });
+
+  assert.throws(
+    () => upsertResourceMapping({ bangumiId: secondId, source, sourceAid }),
+    /UNIQUE constraint failed: resource_mappings\.source, resource_mappings\.source_aid/,
+  );
 });
 
 test("resource repository upserts resource items without erasing existing optional fields", () => {

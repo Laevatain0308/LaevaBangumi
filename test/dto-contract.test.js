@@ -16,11 +16,37 @@ test("subject DTOs expose the normalized public contract", () => {
     bangumi_id: 547888,
     name: "Raw title",
     name_cn: "中文标题",
-  }, { coverUrl: "https://example.invalid/cover.jpg" });
+    summary: "简介[简介原文]原始内容",
+    air_date: "2026-04-01",
+    air_weekday: 3,
+    platform: "TV",
+    eps: 12,
+    total_episodes: 12,
+    rating_score: 7.6,
+    rating_rank: 1234,
+    rating_total: 420,
+    rating_distribution_json: "[0,0,1,2,3,10,20,30,5,1]",
+  }, {
+    coverUrl: "https://example.invalid/cover.jpg",
+    tags: [{ name: "原创", count: 10, totalCount: 20 }],
+  });
   assert.deepEqual(search, {
     id: 547888,
     title: "中文标题",
+    name: "Raw title",
+    nameCn: "中文标题",
     coverUrl: "https://example.invalid/cover.jpg",
+    summary: "简介",
+    airDate: "2026-04-01",
+    airWeekday: 3,
+    platform: "TV",
+    eps: 12,
+    totalEpisodes: 12,
+    ratingScore: 7.6,
+    rank: 1234,
+    votes: 420,
+    votesCount: [0, 0, 1, 2, 3, 10, 20, 30, 5, 1],
+    tags: [{ name: "原创", count: 10, totalCount: 20 }],
   });
   assert.equal(Object.hasOwn(search, "bangumiId"), false);
 

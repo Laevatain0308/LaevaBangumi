@@ -116,6 +116,8 @@ test("detail exposes the new stable Aslan DTO contract", async () => {
     assert.equal(detail.channels[0].episodes[0].playUrl, `/anime/api/play?id=${CONTRACT_SUBJECT_ID}&ch=1&ep=1`);
     assert.equal(Object.hasOwn(detail.channels[0].episodes[0], "url"), false);
     assert.equal(Object.hasOwn(detail, "bangumiId"), false);
+    assert.equal(response.body.meta.resourceSources[0].sourceAid, 123);
+    assert.equal(Object.hasOwn(response.body.meta.resourceSources[0], "cstationId"), false);
   } finally {
     server.close();
   }
@@ -166,6 +168,8 @@ test("legacy fallback detail still exposes playUrl without episode url", async (
     assert.equal(episode.playUrl, `/anime/api/play?id=${legacySubjectId}&ch=1&ep=1`);
     assert.equal(Object.hasOwn(episode, "url"), false);
     assert.equal(Object.hasOwn(response.body.data, "bangumiId"), false);
+    assert.equal(response.body.meta.resourceSources[0].sourceAid, 456);
+    assert.equal(Object.hasOwn(response.body.meta.resourceSources[0], "cstationId"), false);
   } finally {
     server.close();
   }
@@ -177,6 +181,7 @@ test("play exposes videoUrl without legacy videoURL", async () => {
   try {
     const response = await getJson(server, `/api/play?id=${CONTRACT_SUBJECT_ID}&ch=1&ep=1`);
     assert.equal(response.status, 200);
+    assert.equal(response.body.meta.freshness, "cache");
     assert.equal(response.body.data.videoUrl, "https://example.invalid/1.m3u8");
     assert.equal(response.body.data.directPlay, false);
     assert.equal(Object.hasOwn(response.body.data, "videoURL"), false);
@@ -193,7 +198,34 @@ test("tag search returns subject summaries", async () => {
     assert.equal(response.status, 200);
     const item = response.body.data.find((row) => row.id === CONTRACT_SUBJECT_ID);
     assert.ok(item);
+    assert.equal(item.name, "Raw title");
+    assert.equal(item.nameCn, "中文标题");
+    assert.equal(item.summary, "summary");
+    assert.equal(item.airDate, "2026-04-01");
+    assert.equal(item.airWeekday, 3);
+    assert.equal(item.platform, "TV");
+    assert.equal(item.eps, 12);
+    assert.equal(item.totalEpisodes, 12);
+    assert.equal(item.ratingScore, 7.6);
+    assert.equal(item.rank, 1234);
+    assert.equal(item.votes, 420);
+    assert.deepEqual(item.votesCount, [0, 0, 1, 2, 3, 10, 20, 30, 5, 1]);
+    assert.deepEqual(item.tags, [{ name: "原创", count: 10, totalCount: 20 }]);
     assert.equal(Object.hasOwn(item, "bangumiId"), false);
+  } finally {
+    server.close();
+  }
+});
+
+test("keyword search matches local tag names", async () => {
+  seedContractSubject();
+  const server = createServer().listen(0);
+  try {
+    const response = await getJson(server, "/api/search?q=%E5%8E%9F%E5%88%9B");
+    assert.equal(response.status, 200);
+    const item = response.body.data.find((row) => row.id === CONTRACT_SUBJECT_ID);
+    assert.ok(item);
+    assert.deepEqual(item.tags, [{ name: "原创", count: 10, totalCount: 20 }]);
   } finally {
     server.close();
   }
@@ -211,6 +243,15 @@ test("calendar reads normalized subjects and episodes", async () => {
     assert.ok(item);
     assert.equal(item.latestEp, 1);
     assert.equal(item.ratingScore, 7.6);
+    assert.equal(item.name, "Raw title");
+    assert.equal(item.nameCn, "中文标题");
+    assert.equal(item.summary, "summary");
+    assert.equal(item.airWeekday, 3);
+    assert.equal(item.platform, "TV");
+    assert.equal(item.rank, 1234);
+    assert.equal(item.votes, 420);
+    assert.deepEqual(item.votesCount, [0, 0, 1, 2, 3, 10, 20, 30, 5, 1]);
+    assert.deepEqual(item.tags, [{ name: "原创", count: 10, totalCount: 20 }]);
     assert.equal(Object.hasOwn(item, "bangumiId"), false);
   } finally {
     server.close();
@@ -229,6 +270,19 @@ test("updates read normalized resource mappings and items", async () => {
     assert.equal(item.latestEpisode, "更新至第01集");
     assert.equal(item.source, "ffzy");
     assert.equal(item.sourceAid, 123);
+    assert.equal(item.name, "Raw title");
+    assert.equal(item.nameCn, "中文标题");
+    assert.equal(item.airDate, "2026-04-01");
+    assert.equal(item.airWeekday, 3);
+    assert.equal(item.platform, "TV");
+    assert.equal(item.eps, 12);
+    assert.equal(item.totalEpisodes, 12);
+    assert.equal(item.ratingScore, 7.6);
+    assert.equal(item.rank, 1234);
+    assert.equal(item.votes, 420);
+    assert.deepEqual(item.votesCount, [0, 0, 1, 2, 3, 10, 20, 30, 5, 1]);
+    assert.deepEqual(item.tags, [{ name: "原创", count: 10, totalCount: 20 }]);
+    assert.equal(Object.hasOwn(item, "sourceUpdates"), false);
     assert.equal(Object.hasOwn(item, "bangumiId"), false);
   } finally {
     server.close();

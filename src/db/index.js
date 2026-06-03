@@ -363,6 +363,16 @@ export function initDb() {
       matched_at = excluded.matched_at,
       updated_at = excluded.updated_at;
 
+    DELETE FROM resource_mappings
+    WHERE rowid NOT IN (
+      SELECT MIN(rowid)
+      FROM resource_mappings
+      GROUP BY source, source_aid
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_mappings_source_aid_unique
+      ON resource_mappings(source, source_aid);
+
     INSERT INTO resource_items (
       source, source_aid, title, subtitle, category, year, latest_text, detail_fetched_at
     )
