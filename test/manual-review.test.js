@@ -2597,11 +2597,25 @@ test("syncCalendar clears stale calendar weekdays only after a successful calend
     });
     const active = db.select().from(anime).where(eq(anime.id, ANIME_ID)).get();
     const stale = db.select().from(anime).where(eq(anime.id, staleAnimeId)).get();
+    const activeSubject = sqlite.prepare(`
+      SELECT calendar_weekday, calendar_synced_at
+      FROM subjects
+      WHERE bangumi_id = ?
+    `).get(ANIME_ID);
+    const staleSubject = sqlite.prepare(`
+      SELECT calendar_weekday, calendar_synced_at
+      FROM subjects
+      WHERE bangumi_id = ?
+    `).get(staleAnimeId);
 
     assert.equal(stats.errors, 0);
     assert.ok(stats.staleCleared >= 1);
     assert.equal(active.calendarWeekday, 1);
     assert.equal(stale.calendarWeekday, null);
+    assert.equal(activeSubject.calendar_weekday, 1);
+    assert.ok(activeSubject.calendar_synced_at);
+    assert.equal(staleSubject.calendar_weekday, null);
+    assert.equal(staleSubject.calendar_synced_at, null);
   } finally {
     db.delete(anime).where(eq(anime.id, staleAnimeId)).run();
   }

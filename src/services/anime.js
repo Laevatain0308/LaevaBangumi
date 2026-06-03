@@ -752,6 +752,13 @@ export async function syncCalendar({ enqueueEpisodes = true, matchSources = true
       try {
         const a = await upsertAnime(item, day.weekday?.id);
         if (!a) continue;
+        sqlite.prepare(`
+          UPDATE subjects
+          SET calendar_synced_at = datetime('now'),
+              calendar_weekday = ?,
+              updated_at = datetime('now')
+          WHERE bangumi_id = ?
+        `).run(day.weekday?.id ?? null, item.id);
         activeAnimeIds.add(item.id);
         stats.upserted++;
 
@@ -1266,6 +1273,14 @@ function clearStaleCalendarEntries(activeAnimeIds) {
     .set({ calendarWeekday: null, updatedAt: now() })
     .where(and(isNotNull(anime.calendarWeekday), notInArray(anime.id, [...activeAnimeIds])))
     .run();
+  sqlite.prepare(`
+    UPDATE subjects
+    SET calendar_weekday = NULL,
+        calendar_synced_at = NULL,
+        updated_at = datetime('now')
+    WHERE calendar_weekday IS NOT NULL
+      AND bangumi_id NOT IN (${[...activeAnimeIds].map(() => "?").join(", ")})
+  `).run(...activeAnimeIds);
   return result.changes ?? 0;
 }
 

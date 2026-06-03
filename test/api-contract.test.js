@@ -196,6 +196,8 @@ test("tag search returns subject summaries", async () => {
   try {
     const response = await getJson(server, "/api/search?tag=%E5%8E%9F%E5%88%9B");
     assert.equal(response.status, 200);
+    assert.equal(response.body.meta.query, null);
+    assert.equal(response.body.meta.tag, "原创");
     const item = response.body.data.find((row) => row.id === CONTRACT_SUBJECT_ID);
     assert.ok(item);
     assert.equal(item.name, "Raw title");
@@ -223,6 +225,8 @@ test("keyword search matches local tag names", async () => {
   try {
     const response = await getJson(server, "/api/search?q=%E5%8E%9F%E5%88%9B");
     assert.equal(response.status, 200);
+    assert.equal(response.body.meta.query, "原创");
+    assert.equal(response.body.meta.tag, null);
     const item = response.body.data.find((row) => row.id === CONTRACT_SUBJECT_ID);
     assert.ok(item);
     assert.deepEqual(item.tags, [{ name: "原创", count: 10, totalCount: 20 }]);

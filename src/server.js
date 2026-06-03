@@ -60,7 +60,15 @@ export function createServer() {
       log("api", "search requested", tag ? { tag } : { q });
       const result = tag ? await animeService.searchAnimeByTag(tag) : await animeService.searchAnime(q);
       if (q) enqueueSearch(q);
-      res.json(envelope(result.data, { updatedAt: ts(), meta: { freshness: result.freshness, total: result.data.length } }));
+      res.json(envelope(result.data, {
+        updatedAt: ts(),
+        meta: {
+          freshness: result.freshness,
+          total: result.data.length,
+          query: q || null,
+          tag: tag || null,
+        },
+      }));
     } catch (err) {
       error("api", "/api/search error", err);
       res.status(500).json(envelope([], { updatedAt: ts(), meta: { error: err.message } }));
