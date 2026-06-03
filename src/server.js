@@ -24,7 +24,7 @@ export function createServer() {
       res.json(envelope(result.data, { updatedAt: ts(), meta: { freshness: result.freshness } }));
     } catch (err) {
       error("api", "/api/calendar error", err);
-      res.status(500).json(serverErrorEnvelope([], err, { updatedAt: ts() }));
+      res.status(500).json(serverErrorEnvelope(null, err, { updatedAt: ts() }));
     }
   });
 
@@ -41,7 +41,7 @@ export function createServer() {
       }));
     } catch (err) {
       error("api", "/api/updates error", err);
-      res.status(500).json(serverErrorEnvelope([], err, { updatedAt: ts() }));
+      res.status(500).json(serverErrorEnvelope(null, err, { updatedAt: ts() }));
     }
   });
 
@@ -50,10 +50,10 @@ export function createServer() {
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     const tag = typeof req.query.tag === "string" ? req.query.tag.trim() : "";
     if (q && tag) {
-      return res.status(400).json(errorEnvelope([], { updatedAt: ts(), message: "q 和 tag 不能同时使用", errorCode: "invalid_query", meta: { total: 0 } }));
+      return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "q 和 tag 不能同时使用", errorCode: "invalid_query", meta: { total: 0 } }));
     }
     if (!tag && (!q || q.length < 2)) {
-      return res.status(400).json(errorEnvelope([], { updatedAt: ts(), message: "关键词至少需要 2 个字符", errorCode: "invalid_query", meta: { total: 0 } }));
+      return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "关键词至少需要 2 个字符", errorCode: "invalid_query", meta: { total: 0 } }));
     }
     try {
       log("api", "search requested", tag ? { tag } : { q });
@@ -70,7 +70,7 @@ export function createServer() {
       }));
     } catch (err) {
       error("api", "/api/search error", err);
-      res.status(500).json(serverErrorEnvelope([], err, { updatedAt: ts() }));
+      res.status(500).json(serverErrorEnvelope(null, err, { updatedAt: ts() }));
     }
   });
 

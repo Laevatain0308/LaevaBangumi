@@ -315,7 +315,7 @@ test("search rejects q and tag together", async () => {
   try {
     const response = await getJson(server, "/api/search?q=abc&tag=%E5%8E%9F%E5%88%9B");
     assert.equal(response.status, 400);
-    assert.deepEqual(response.body.data, []);
+    assert.equal(response.body.data, null);
     assert.equal(response.body.meta.freshness, "error");
     assert.equal(response.body.meta.error, "invalid_query");
     assert.deepEqual(response.body.meta.warnings, ["q 和 tag 不能同时使用"]);
