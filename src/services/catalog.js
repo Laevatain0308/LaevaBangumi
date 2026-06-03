@@ -4,6 +4,7 @@ import { cstationCatalog, sourceSyncState } from "../db/schema.js";
 import * as cstation from "./cstation.js";
 import { log, error } from "../lib/logger.js";
 import { upsertResourceItem, upsertResourceSyncState } from "../repositories/resourceRepository.js";
+import { normalizeResourceItem } from "../normalizers/resourceItemNormalizer.js";
 
 function now() {
   return new Date().toISOString().replace("T", " ").slice(0, 19);
@@ -14,24 +15,25 @@ export async function saveCatalog(catalog, { source } = {}) {
   let count = 0;
   for (const item of catalog) {
     try {
+      const normalized = normalizeResourceItem(item, { source });
       const values = {
         source,
-        id: item.id,
-        name: item.name,
-        subname: item.subname || null,
-        year: item.year || null,
-        last: item.last || null,
-        category: item.category || null,
-        detailFetchedAt: item.detailFetchedAt || null,
+        id: normalized.sourceAid,
+        name: normalized.title,
+        subname: normalized.subtitle,
+        year: normalized.year,
+        last: normalized.latestText,
+        category: normalized.category,
+        detailFetchedAt: normalized.detailFetchedAt,
       };
       const set = {
-        name: item.name,
-        year: item.year || null,
+        name: normalized.title,
+        year: normalized.year,
       };
-      if (item.last) set.last = item.last;
-      if (item.category) set.category = item.category;
-      if (item.subname) set.subname = item.subname;
-      if (item.detailFetchedAt) set.detailFetchedAt = item.detailFetchedAt;
+      if (normalized.latestText) set.last = normalized.latestText;
+      if (normalized.category) set.category = normalized.category;
+      if (normalized.subtitle) set.subname = normalized.subtitle;
+      if (normalized.detailFetchedAt) set.detailFetchedAt = normalized.detailFetchedAt;
 
       db.insert(cstationCatalog)
         .values(values)
@@ -40,19 +42,14 @@ export async function saveCatalog(catalog, { source } = {}) {
           set,
         })
         .run();
-      upsertResourceItem({
-        source,
-        sourceAid: item.id,
-        title: item.name,
-        subtitle: item.subname || null,
-        category: item.category || null,
-        year: item.year || null,
-        latestText: item.last || null,
-        detailFetchedAt: item.detailFetchedAt || null,
-      });
+      upsertResourceItem(normalized);
       count++;
     } catch (err) {
-      error("catalog", "save catalog item failed", { id: item.id, name: item.name, message: err.message });
+      error("catalog", "save catalog item failed", {
+        id: item.id ?? item.sourceAid,
+        name: item.name ?? item.title,
+        message: err.message,
+      });
     }
   }
   return count;

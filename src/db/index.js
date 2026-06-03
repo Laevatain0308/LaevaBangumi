@@ -25,6 +25,112 @@ function addColumnIfMissing(table, column, definition) {
   }
 }
 
+function safeJson(value, fallback = null) {
+  if (value == null) return fallback;
+  if (Array.isArray(value)) return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function compactUniqueStrings(values) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    if (value == null) continue;
+    const text = String(value).trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    result.push(text);
+  }
+  return result;
+}
+
+function legacyAliasName(value) {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return null;
+  return value.alias ?? value.name ?? value.value ?? value.v ?? null;
+}
+
+function legacyTagName(value) {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return null;
+  return value.name ?? value.value ?? value.v ?? null;
+}
+
+function legacyJsonList(value, mapper) {
+  const parsed = safeJson(value, null);
+  if (Array.isArray(parsed)) return compactUniqueStrings(parsed.map(mapper));
+  return compactUniqueStrings([parsed]);
+}
+
+function migrateLegacyAliasesAndTags() {
+  if (!tableExists("anime")) return;
+
+  const rows = sqlite.prepare(`
+    SELECT id, aliases, tags
+    FROM anime
+    WHERE id IN (SELECT bangumi_id FROM subjects)
+  `).all();
+
+  const insertAlias = sqlite.prepare(`
+    INSERT OR IGNORE INTO subject_aliases (bangumi_id, alias, source)
+    VALUES (?, ?, 'legacy')
+  `);
+  const insertTag = sqlite.prepare("INSERT OR IGNORE INTO tags (name) VALUES (?)");
+  const findTag = sqlite.prepare("SELECT tag_id FROM tags WHERE name = ?");
+  const insertSubjectTag = sqlite.prepare(`
+    INSERT OR IGNORE INTO subject_tags (
+      bangumi_id, tag_id, count, total_count, source, updated_at
+    )
+    VALUES (?, ?, 0, 0, 'legacy', datetime('now'))
+  `);
+
+  sqlite.transaction(() => {
+    for (const row of rows) {
+      for (const alias of legacyJsonList(row.aliases, legacyAliasName)) {
+        insertAlias.run(row.id, alias);
+      }
+
+      for (const tag of legacyJsonList(row.tags, legacyTagName)) {
+        insertTag.run(tag);
+        const tagRow = findTag.get(tag);
+        if (tagRow) insertSubjectTag.run(row.id, tagRow.tag_id);
+      }
+    }
+  })();
+}
+
+function migrateLegacyStateRows() {
+  sqlite.exec(`
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    SELECT anime_id, source, 'mapping', retry_count, retry_at, updated_at
+    FROM match_retry_state
+    WHERE anime_id IN (SELECT bangumi_id FROM subjects)
+    ON CONFLICT(bangumi_id, source, kind) DO NOTHING;
+
+    INSERT INTO retry_state (bangumi_id, source, kind, retry_count, retry_at, updated_at)
+    SELECT anime_id, source, 'episode_fetch', retry_count, retry_at, updated_at
+    FROM episode_fetch_retry_state
+    WHERE anime_id IN (SELECT bangumi_id FROM subjects)
+    ON CONFLICT(bangumi_id, source, kind) DO NOTHING;
+
+    INSERT INTO manual_resource_state (bangumi_id, source, status, note, updated_at)
+    SELECT anime_id, source, status, note, updated_at
+    FROM manual_match_state
+    WHERE anime_id IN (SELECT bangumi_id FROM subjects)
+    ON CONFLICT(bangumi_id, source) DO NOTHING;
+
+    INSERT INTO sync_state (source, scope, last_seen_at, last_success_at, updated_at)
+    SELECT source, category, last_seen_at, last_success_at, updated_at
+    FROM source_sync_state
+    WHERE true
+    ON CONFLICT(source, scope) DO NOTHING;
+  `);
+}
+
 function createEpisodesTable() {
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS episodes (
@@ -301,6 +407,12 @@ export function initDb() {
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (bangumi_id, source)
     );
+
+    CREATE INDEX IF NOT EXISTS idx_subject_aliases_alias
+      ON subject_aliases(alias);
+
+    CREATE INDEX IF NOT EXISTS idx_subject_tags_tag_id
+      ON subject_tags(tag_id);
   `);
 
   migrateEpisodesTableIfNeeded();
@@ -313,6 +425,16 @@ export function initDb() {
   sqlite.exec(`
     INSERT OR IGNORE INTO resource_sources (source, name, enabled)
       VALUES ('ffzy', '非凡资源', 1);
+
+    INSERT OR IGNORE INTO resource_sources (source, name, enabled)
+    SELECT DISTINCT source, source, 1
+    FROM bangumi_cstation_map
+    WHERE source IS NOT NULL;
+
+    INSERT OR IGNORE INTO resource_sources (source, name, enabled)
+    SELECT DISTINCT source, source, 1
+    FROM cstation_catalog
+    WHERE source IS NOT NULL;
 
     INSERT INTO subjects (
       bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
@@ -629,4 +751,7 @@ export function initDb() {
       WHERE id = NEW.id;
     END;
   `);
+
+  migrateLegacyAliasesAndTags();
+  migrateLegacyStateRows();
 }

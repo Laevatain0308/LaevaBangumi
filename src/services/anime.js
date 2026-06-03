@@ -23,6 +23,7 @@ import {
   normalizeBangumiSubject,
   normalizeCoverUrl,
 } from "../normalizers/bangumiSubjectNormalizer.js";
+import { normalizeResourceEpisodes, normalizeResourceItem } from "../normalizers/resourceItemNormalizer.js";
 import {
   formatLegacyAnimeDetailDto,
   formatSubjectDetailDto,
@@ -415,17 +416,8 @@ function applyEpisodeRange(episodesList, mapping) {
 
 async function upsertEpisodes(animeId, source, cstationId, episodesList) {
   ensureSubjectFromAnime(animeId);
-  for (const ep of episodesList) {
-    const sourceEpIndex = ep.sourceEpIndex ?? ep.epIndex;
-    upsertResourceEpisode({
-      bangumiId: animeId,
-      source,
-      sourceAid: cstationId,
-      epIndex: ep.epIndex,
-      sourceEpIndex,
-      epName: ep.epName,
-      videoUrl: ep.videoUrl,
-    });
+  for (const episode of normalizeResourceEpisodes(episodesList, { bangumiId: animeId, source, sourceAid: cstationId })) {
+    upsertResourceEpisode(episode);
   }
 }
 
@@ -711,15 +703,7 @@ export async function refreshEpisodesForAnime(animeId, { source } = {}) {
     return { animeId, refreshed: false, reason: "fetch-detail-failed" };
   }
 
-  await saveCatalog([{
-    id: detail.id,
-    name: detail.name,
-    subname: detail.subname || null,
-    year: detail.year || null,
-    last: detail.last || null,
-    category: detail.type || null,
-    detailFetchedAt: now(),
-  }], { source });
+  await saveCatalog([normalizeResourceItem(detail, { source, detailFetchedAt: now() })], { source });
 
   const rangedEpisodes = applyEpisodeRange(detail.episodes, mapped);
   pruneEpisodesForRefresh(animeId, source, detail.id, rangedEpisodes);

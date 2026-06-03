@@ -69,6 +69,7 @@ test("saveCatalog persists resource items in normalized storage", async () => {
   initDb();
   sqlite.exec(`
     DELETE FROM resource_items WHERE source = 'test_cstation';
+    DELETE FROM cstation_catalog WHERE source = 'test_cstation';
     INSERT INTO resource_sources (source, name, enabled)
     VALUES ('test_cstation', '测试资源', 1)
     ON CONFLICT(source) DO UPDATE SET name = excluded.name, enabled = excluded.enabled;
@@ -95,4 +96,45 @@ test("saveCatalog persists resource items in normalized storage", async () => {
   assert.equal(row.latest_text, "2026-06-03 01:00:00");
   assert.equal(row.category, "anime");
   assert.equal(row.detail_fetched_at, "2026-06-03 01:01:00");
+});
+
+test("saveCatalog accepts already normalized resource items", async () => {
+  initDb();
+  sqlite.exec(`
+    DELETE FROM resource_items WHERE source = 'test_cstation_normalized';
+    DELETE FROM cstation_catalog WHERE source = 'test_cstation_normalized';
+    INSERT INTO resource_sources (source, name, enabled)
+    VALUES ('test_cstation_normalized', '测试资源', 1)
+    ON CONFLICT(source) DO UPDATE SET name = excluded.name, enabled = excluded.enabled;
+  `);
+
+  const saved = await saveCatalog([{
+    source: "test_cstation_normalized",
+    sourceAid: 1002,
+    title: "规范化标题",
+    subtitle: "规范化副标题",
+    category: "OVA",
+    year: "2026",
+    latestText: "第02集",
+    detailFetchedAt: "2026-06-03 02:01:00",
+  }], { source: "test_cstation_normalized" });
+
+  assert.equal(saved, 1);
+  assert.deepEqual(sqlite.prepare(`
+    SELECT id, name, subname, category, year, last, detail_fetched_at
+    FROM cstation_catalog
+    WHERE source = 'test_cstation_normalized' AND id = 1002
+  `).get(), {
+    id: 1002,
+    name: "规范化标题",
+    subname: "规范化副标题",
+    category: "OVA",
+    year: "2026",
+    last: "第02集",
+    detail_fetched_at: "2026-06-03 02:01:00",
+  });
+  assert.equal(sqlite.prepare(`
+    SELECT title FROM resource_items
+    WHERE source = 'test_cstation_normalized' AND source_aid = 1002
+  `).get().title, "规范化标题");
 });
