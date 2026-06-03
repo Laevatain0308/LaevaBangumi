@@ -5,6 +5,9 @@ const BG = "https://api.bgm.tv";
 const TIMEOUT = 30000;
 const UA = "laevatain/aslan (https://github.com/Laevatain0308/aslan)";
 const DEFAULT_RETRY_DELAYS_MS = [500, 1500];
+const DEFAULT_SEARCH_LIMIT = 50;
+const DEFAULT_SEARCH_MAX_RESULTS = 100;
+const DEFAULT_SEARCH_MAX_PAGES = 2;
 const RETRYABLE_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -34,6 +37,12 @@ function isRetryableFetchError(err) {
   if (code && RETRYABLE_ERROR_CODES.has(code)) return true;
   const causeName = err?.cause?.name;
   return causeName === "ConnectTimeoutError" || causeName === "SocketError";
+}
+
+function boundedInteger(value, { fallback, min, max }) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(parsed, max));
 }
 
 export async function fetchJson(url, opts = {}) {
@@ -79,18 +88,58 @@ export async function getCalendar() {
 }
 
 /** POST /v0/search/subjects */
-export async function searchSubjects(keyword, { sort = "rank", offset = 0 } = {}) {
-  const url = `${BG}/v0/search/subjects?limit=20&offset=${offset}`;
+export async function searchSubjects(keyword, {
+  sort = "rank",
+  offset = 0,
+  limit = DEFAULT_SEARCH_LIMIT,
+  maxResults = DEFAULT_SEARCH_MAX_RESULTS,
+  maxPages = DEFAULT_SEARCH_MAX_PAGES,
+  ...fetchOpts
+} = {}) {
+  const resultLimit = boundedInteger(maxResults, { fallback: DEFAULT_SEARCH_MAX_RESULTS, min: 1, max: 500 });
+  const pageLimit = Math.min(
+    boundedInteger(limit, { fallback: DEFAULT_SEARCH_LIMIT, min: 1, max: DEFAULT_SEARCH_LIMIT }),
+    resultLimit,
+  );
+  const pageLimitCount = boundedInteger(maxPages, { fallback: DEFAULT_SEARCH_MAX_PAGES, min: 1, max: 10 });
+  const startOffset = boundedInteger(offset, { fallback: 0, min: 0, max: Number.MAX_SAFE_INTEGER });
   const body = {
     keyword,
     sort,
     filter: { type: [2], tag: [], rank: [">=0", "<=99999"], nsfw: false },
   };
-  return fetchJson(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const data = [];
+  let total = null;
+  let currentOffset = startOffset;
+  let responseLimit = pageLimit;
+  let responseOffset = startOffset;
+
+  for (let page = 0; page < pageLimitCount && data.length < resultLimit; page += 1) {
+    const url = `${BG}/v0/search/subjects?limit=${pageLimit}&offset=${currentOffset}`;
+    const pageResult = await fetchJson(url, {
+      ...fetchOpts,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...fetchOpts.headers },
+      body: JSON.stringify(body),
+    });
+    const pageData = Array.isArray(pageResult?.data) ? pageResult.data : [];
+    if (total == null && Number.isFinite(pageResult?.total)) total = pageResult.total;
+    if (Number.isFinite(pageResult?.limit)) responseLimit = pageResult.limit;
+    if (Number.isFinite(pageResult?.offset)) responseOffset = pageResult.offset;
+
+    data.push(...pageData.slice(0, resultLimit - data.length));
+    if (pageData.length < pageLimit) break;
+    // Bangumi v0 search offset is an item offset, not a page number.
+    currentOffset += pageLimit;
+    if (total != null && currentOffset >= total) break;
+  }
+
+  return {
+    data,
+    total: total ?? data.length,
+    limit: responseLimit,
+    offset: responseOffset,
+  };
 }
 
 /** GET /v0/subjects/{id} */

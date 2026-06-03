@@ -76,7 +76,7 @@ export async function prewarmAnime({
 
   if (keyword) {
     log("prewarm", "bangumi search started", { keyword, limit: rowLimit });
-    const searchResult = await searchSubjects(keyword);
+    const searchResult = await searchSubjects(keyword, rowLimit ? { maxResults: rowLimit } : undefined);
     const subjects = (searchResult?.data || []).slice(0, rowLimit ?? undefined);
     for (const subject of subjects) {
       const row = await upsertSubject(subject);
