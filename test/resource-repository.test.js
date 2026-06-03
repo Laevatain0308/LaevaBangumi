@@ -261,6 +261,8 @@ test("resource repository upserts and deletes resource mappings", () => {
   assert.equal(mapping.score, 0.91);
   assert.equal(mapping.matched_bg_name, "番剧标题");
   assert.equal(mapping.matched_resource_name, "资源站标题");
+  assert.equal(mapping.status, "matched");
+  assert.equal(mapping.note, null);
   assert.ok(mapping.matched_at);
   assert.ok(mapping.updated_at);
   assert.equal(sqlite.prepare("SELECT enabled FROM resource_sources WHERE source = ?").get(source).enabled, 1);
@@ -275,6 +277,7 @@ test("resource repository upserts and deletes resource mappings", () => {
     score: null,
     matchedBgName: "手动番剧标题",
     matchedResourceName: "手动资源站标题",
+    note: "manual range",
   });
 
   mapping = sqlite.prepare(`
@@ -288,6 +291,8 @@ test("resource repository upserts and deletes resource mappings", () => {
   assert.equal(mapping.score, null);
   assert.equal(mapping.matched_bg_name, "手动番剧标题");
   assert.equal(mapping.matched_resource_name, "手动资源站标题");
+  assert.equal(mapping.status, "matched");
+  assert.equal(mapping.note, "manual range");
 
   assert.deepEqual(listResourceMappingsWithEpisodePresenceForSubject(id), [{
     source,

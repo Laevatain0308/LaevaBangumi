@@ -376,6 +376,8 @@ export function initDb() {
       score REAL,
       matched_bg_name TEXT,
       matched_resource_name TEXT,
+      status TEXT NOT NULL DEFAULT 'matched',
+      note TEXT,
       matched_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (bangumi_id, source)
@@ -420,6 +422,8 @@ export function initDb() {
   migrateEpisodesTableIfNeeded();
   addColumnIfMissing("resource_sources", "priority", "INTEGER NOT NULL DEFAULT 100");
   addColumnIfMissing("retry_state", "last_error", "TEXT");
+  addColumnIfMissing("resource_mappings", "status", "TEXT NOT NULL DEFAULT 'matched'");
+  addColumnIfMissing("resource_mappings", "note", "TEXT");
   addColumnIfMissing("resource_mappings", "updated_at", "TEXT");
   sqlite.exec(`
     UPDATE resource_mappings

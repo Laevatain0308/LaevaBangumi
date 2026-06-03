@@ -224,6 +224,10 @@ test("initDb creates the normalized schema tables", () => {
 
   const retryColumns = new Set(sqlite.prepare("PRAGMA table_info(retry_state)").all().map((row) => row.name));
   assert.equal(retryColumns.has("last_error"), true, "retry_state.last_error column should exist");
+
+  const mappingColumns = new Set(sqlite.prepare("PRAGMA table_info(resource_mappings)").all().map((row) => row.name));
+  assert.equal(mappingColumns.has("status"), true, "resource_mappings.status column should exist");
+  assert.equal(mappingColumns.has("note"), true, "resource_mappings.note column should exist");
 });
 
 test("initDb migrates legacy rows into normalized tables idempotently", () => {

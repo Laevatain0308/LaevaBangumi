@@ -206,6 +206,8 @@ export const resourceMappings = sqliteTable("resource_mappings", {
   score: real("score"),
   matchedBgName: text("matched_bg_name"),
   matchedResourceName: text("matched_resource_name"),
+  status: text("status").notNull().default("matched"),
+  note: text("note"),
   matchedAt: text("matched_at").default("(datetime('now'))").notNull(),
   updatedAt: text("updated_at").default("(datetime('now'))").notNull(),
 }, (table) => ({

@@ -279,6 +279,8 @@ export function upsertResourceMapping({
   score = null,
   matchedBgName = null,
   matchedResourceName = null,
+  status = "matched",
+  note = null,
   matchedAt = null,
 }) {
   assertResourceStateKey({ bangumiId, source });
@@ -289,12 +291,13 @@ export function upsertResourceMapping({
     sqlite.prepare(`
       INSERT INTO resource_mappings (
         bangumi_id, source, source_aid, source_ep_start, source_ep_end,
-        display_ep_offset, score, matched_bg_name, matched_resource_name, matched_at, updated_at
+        display_ep_offset, score, matched_bg_name, matched_resource_name,
+        status, note, matched_at, updated_at
       )
       VALUES (
         @bangumiId, @source, @sourceAid, @sourceEpStart, @sourceEpEnd,
         @displayEpOffset, @score, @matchedBgName, @matchedResourceName,
-        COALESCE(@matchedAt, datetime('now')), datetime('now')
+        @status, @note, COALESCE(@matchedAt, datetime('now')), datetime('now')
       )
       ON CONFLICT(bangumi_id, source) DO UPDATE SET
         source_aid = excluded.source_aid,
@@ -304,6 +307,8 @@ export function upsertResourceMapping({
         score = excluded.score,
         matched_bg_name = excluded.matched_bg_name,
         matched_resource_name = excluded.matched_resource_name,
+        status = excluded.status,
+        note = excluded.note,
         matched_at = excluded.matched_at,
         updated_at = excluded.updated_at
     `).run({
@@ -316,6 +321,8 @@ export function upsertResourceMapping({
       score,
       matchedBgName,
       matchedResourceName,
+      status,
+      note,
       matchedAt,
     });
   })();
