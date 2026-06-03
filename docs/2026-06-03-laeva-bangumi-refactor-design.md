@@ -323,12 +323,12 @@ CREATE TABLE resource_mappings (
   note TEXT,
   matched_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (bangumi_id, source),
-  UNIQUE (source, source_aid)
+  PRIMARY KEY (bangumi_id, source)
 );
 ```
 
-`UNIQUE (source, source_aid)` 用来避免一个资源站条目被多个 Bangumi subject 自动占用。手动例外如果未来需要，可另设 override 表，不建议一开始放宽。
+数据库层允许多个 Bangumi subject 映射到同一个 `source_aid`，用于人工手动分段匹配。
+自动匹配仍必须在服务层检查已有 owner，避免一个资源站条目被多个 Bangumi subject 自动占用。
 
 ### episodes
 
@@ -342,12 +342,15 @@ CREATE TABLE episodes (
   source_ep_index INTEGER,
   title TEXT,
   raw_video_url TEXT NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT,
   UNIQUE (bangumi_id, source, source_aid, ep_index),
   FOREIGN KEY (source, source_aid)
     REFERENCES resource_items(source, source_aid)
 );
 ```
+
+`episodes.updated_at` 表示资源站侧确认该剧集新增或变更的时间；不能用本地入库/刷新时间冒充。
+资源站只给条目级更新时间时，只将该时间写到本次详情中最高 `source_ep_index` 的剧集。
 
 ### sync_state
 
@@ -592,8 +595,9 @@ interface SubjectTag {
 
 规则：
 
-- `updatedAt` 是资源站目录或剧集更新时间中用于排序的主要更新时间。
+- `updatedAt` 使用映射剧集的 `episodes.updated_at`，不使用 subject 入库时间或 `resource_items.updated_at`。
 - closed range 映射默认不进入 updates，避免历史资源反复刷榜。
+- closed range 映射如果刚好更新到 `source_ep_end` 对应的最后一集，仍可以进入 updates。
 - `sourceUpdates` 不作为对外字段保留；如果后续需要多源更新详情，新增专门 endpoint。
 
 ### `/api/calendar`
@@ -798,7 +802,8 @@ interface SubjectTag {
 行为：
 
 - 使用 title aliases + year 进行匹配。
-- 自动匹配必须遵守 `UNIQUE(source, source_aid)`。
+- 自动匹配必须检查同一 `source_aid` 是否已有 owner；已有 owner 时写入 `source_already_mapped` 人工状态并停止自动占用。
+- 人工手动分段匹配允许多个 Bangumi subject 共享同一个 `source_aid`。
 - 匹配成功后 enqueue `refresh-episodes`。
 
 ### refresh-episodes

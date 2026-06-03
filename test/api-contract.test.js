@@ -6,6 +6,9 @@ import { initDb, sqlite } from "../src/db/index.js";
 
 const CONTRACT_SUBJECT_ID = 990547888;
 const EPISODE_UPDATE_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1000;
+const RESOURCE_ENTRY_ONLY_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1001;
+const CLOSED_RANGE_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1002;
+const CLOSED_RANGE_FINAL_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1003;
 
 function getJson(server, path) {
   return new Promise((resolve, reject) => {
@@ -304,6 +307,105 @@ test("updates use episode update time when it is newer than catalog time", async
     assert.equal(item.latestEp, 7);
     assert.equal(item.latestEpisode, "更新至第07集");
     assert.equal(item.updatedAt, "2026-06-03T03:00:00.000Z");
+  } finally {
+    server.close();
+  }
+});
+
+test("updates ignore new resource catalog rows without episode update time", async () => {
+  seedContractSubject();
+  sqlite.exec(`
+    DELETE FROM episodes WHERE bangumi_id = ${RESOURCE_ENTRY_ONLY_SUBJECT_ID};
+    DELETE FROM resource_mappings WHERE bangumi_id = ${RESOURCE_ENTRY_ONLY_SUBJECT_ID};
+    DELETE FROM resource_items WHERE source = 'ffzy' AND source_aid = 125;
+    DELETE FROM subjects WHERE bangumi_id = ${RESOURCE_ENTRY_ONLY_SUBJECT_ID};
+
+    INSERT INTO subjects (
+      bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
+      eps, total_episodes, rating_distribution_json, metadata_fetched_at, created_at, updated_at
+    ) VALUES (
+      ${RESOURCE_ENTRY_ONLY_SUBJECT_ID}, 'Catalog entry raw', '新入库旧番',
+      'catalog entry summary', 'TV', '2025-01-01', 1, 12, 12, '[]',
+      '2026-06-03 10:00:00', '2026-06-03 10:00:00', '2026-06-03 10:00:00'
+    );
+    INSERT INTO resource_items (source, source_aid, title, latest_text, detail_fetched_at, updated_at)
+      VALUES ('ffzy', 125, '新入库资源站旧番', '2026-06-03 10:00:00', '2026-06-03 10:00:00', '2026-06-03 10:00:00')
+      ON CONFLICT(source, source_aid) DO UPDATE SET
+        title = excluded.title,
+        latest_text = excluded.latest_text,
+        detail_fetched_at = excluded.detail_fetched_at,
+        updated_at = excluded.updated_at;
+    INSERT INTO resource_mappings (bangumi_id, source, source_aid, score, matched_at, updated_at)
+      VALUES (${RESOURCE_ENTRY_ONLY_SUBJECT_ID}, 'ffzy', 125, 0.91, '2026-06-03 10:00:00', '2026-06-03 10:00:00')
+      ON CONFLICT(bangumi_id, source) DO UPDATE SET source_aid = excluded.source_aid;
+    INSERT INTO episodes (bangumi_id, source, source_aid, ep_index, source_ep_index, title, raw_video_url, updated_at)
+      VALUES (${RESOURCE_ENTRY_ONLY_SUBJECT_ID}, 'ffzy', 125, 12, 12, '第12集', 'https://example.invalid/old-12.m3u8', '2026-05-01 00:00:00')
+      ON CONFLICT(bangumi_id, source, source_aid, ep_index) DO UPDATE SET updated_at = excluded.updated_at;
+  `);
+
+  const server = createServer().listen(0);
+  try {
+    const response = await getJson(server, "/api/updates?days=1&limit=20&today=2026-06-03");
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.body.data.some((row) => row.id === RESOURCE_ENTRY_ONLY_SUBJECT_ID),
+      false,
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test("updates skip closed episode ranges unless the closed range final episode updated", async () => {
+  seedContractSubject();
+  sqlite.exec(`
+    DELETE FROM episodes WHERE bangumi_id IN (${CLOSED_RANGE_SUBJECT_ID}, ${CLOSED_RANGE_FINAL_SUBJECT_ID});
+    DELETE FROM resource_mappings WHERE bangumi_id IN (${CLOSED_RANGE_SUBJECT_ID}, ${CLOSED_RANGE_FINAL_SUBJECT_ID});
+    DELETE FROM resource_items WHERE source = 'ffzy' AND source_aid = 126;
+    DELETE FROM subjects WHERE bangumi_id IN (${CLOSED_RANGE_SUBJECT_ID}, ${CLOSED_RANGE_FINAL_SUBJECT_ID});
+
+    INSERT INTO subjects (
+      bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
+      eps, total_episodes, rating_distribution_json, metadata_fetched_at
+    ) VALUES
+      (${CLOSED_RANGE_SUBJECT_ID}, 'Closed range raw', '分段前半已完结', 'closed range summary', 'TV', '2026-04-03', 5, 12, 12, '[]', datetime('now')),
+      (${CLOSED_RANGE_FINAL_SUBJECT_ID}, 'Closed final raw', '分段末集刚更新', 'closed final summary', 'TV', '2026-04-10', 5, 12, 12, '[]', datetime('now'));
+    INSERT INTO resource_items (source, source_aid, title, latest_text, detail_fetched_at)
+      VALUES ('ffzy', 126, '共享资源站条目', '2026-06-03 12:00:00', datetime('now'))
+      ON CONFLICT(source, source_aid) DO UPDATE SET
+        title = excluded.title,
+        latest_text = excluded.latest_text,
+        detail_fetched_at = excluded.detail_fetched_at;
+    INSERT INTO resource_mappings (
+      bangumi_id, source, source_aid, source_ep_start, source_ep_end, display_ep_offset, score, matched_at
+    ) VALUES
+      (${CLOSED_RANGE_SUBJECT_ID}, 'ffzy', 126, 1, 12, 0, 0.91, datetime('now')),
+      (${CLOSED_RANGE_FINAL_SUBJECT_ID}, 'ffzy', 126, 13, 24, 12, 0.91, datetime('now'))
+    ON CONFLICT(bangumi_id, source) DO UPDATE SET
+      source_aid = excluded.source_aid,
+      source_ep_start = excluded.source_ep_start,
+      source_ep_end = excluded.source_ep_end,
+      display_ep_offset = excluded.display_ep_offset;
+    INSERT INTO episodes (bangumi_id, source, source_aid, ep_index, source_ep_index, title, raw_video_url, updated_at)
+      VALUES
+        (${CLOSED_RANGE_SUBJECT_ID}, 'ffzy', 126, 12, 12, '第12集', 'https://example.invalid/12.m3u8', '2026-05-01 00:00:00'),
+        (${CLOSED_RANGE_FINAL_SUBJECT_ID}, 'ffzy', 126, 12, 24, '第24集', 'https://example.invalid/24.m3u8', '2026-06-03 12:00:00')
+      ON CONFLICT(bangumi_id, source, source_aid, ep_index) DO UPDATE SET updated_at = excluded.updated_at;
+  `);
+
+  const server = createServer().listen(0);
+  try {
+    const response = await getJson(server, "/api/updates?days=1&limit=20&today=2026-06-03");
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.body.data.some((row) => row.id === CLOSED_RANGE_SUBJECT_ID),
+      false,
+    );
+    const finalRange = response.body.data.find((row) => row.id === CLOSED_RANGE_FINAL_SUBJECT_ID);
+    assert.ok(finalRange);
+    assert.equal(finalRange.latestEp, 12);
+    assert.equal(finalRange.latestEpisode, "更新至第12集");
+    assert.equal(finalRange.updatedAt, "2026-06-03T04:00:00.000Z");
   } finally {
     server.close();
   }

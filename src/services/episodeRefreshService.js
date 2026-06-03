@@ -53,9 +53,14 @@ function applyEpisodeRange(episodesList, mapping) {
     .filter((ep) => ep.epIndex > 0);
 }
 
-async function upsertEpisodes(animeId, source, sourceAid, episodesList) {
+async function upsertEpisodes(animeId, source, sourceAid, episodesList, { sourceUpdatedAt = null } = {}) {
   if (!ensureSubjectFromAnime(animeId)) throw new Error(`subject ${animeId} does not exist`);
-  for (const episode of normalizeResourceEpisodes(episodesList, { bangumiId: animeId, source, sourceAid })) {
+  for (const episode of normalizeResourceEpisodes(episodesList, {
+    bangumiId: animeId,
+    source,
+    sourceAid,
+    sourceUpdatedAt,
+  })) {
     upsertResourceEpisode(episode);
   }
 }
@@ -96,7 +101,9 @@ export async function refreshEpisodesForAnime(animeId, { source } = {}) {
 
   const rangedEpisodes = applyEpisodeRange(detail.episodes, mapped);
   pruneEpisodesForRefresh(animeId, source, detail.id, rangedEpisodes);
-  await upsertEpisodes(animeId, source, detail.id, rangedEpisodes);
+  await upsertEpisodes(animeId, source, detail.id, rangedEpisodes, {
+    sourceUpdatedAt: detail.last || null,
+  });
   await upsertMap(animeId, source, detail.id, mapped.score, mapped.matchedSubjectTitle, detail.name, {
     sourceEpStart: mapped.sourceEpStart,
     sourceEpEnd: mapped.sourceEpEnd,

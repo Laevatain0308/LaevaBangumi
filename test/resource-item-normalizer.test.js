@@ -48,19 +48,34 @@ test("normalizeResourceItem maps detail rows and caller supplied timestamps", ()
 });
 
 test("normalizeResourceEpisodes maps parsed source episodes into repository input", () => {
-  assert.deepEqual(normalizeResourceEpisodes(resourceDetailFixture.episodes, {
+  assert.deepEqual(normalizeResourceEpisodes([
+    {
+      epIndex: 1,
+      sourceEpIndex: 1,
+      epName: "第01集",
+      videoUrl: "https://example.invalid/1.m3u8",
+    },
+    {
+      epIndex: 2,
+      sourceEpIndex: 2,
+      epName: "第02集",
+      videoUrl: "https://example.invalid/2.m3u8",
+    },
+  ], {
     bangumiId: 547888,
     source: "ffzy",
     sourceAid: "1001",
+    sourceUpdatedAt: "2026-06-03 02:00:00",
   }), [
     {
       bangumiId: 547888,
       source: "ffzy",
       sourceAid: 1001,
       epIndex: 1,
-      sourceEpIndex: 3,
-      title: "第03集",
-      rawVideoUrl: "https://example.invalid/3.m3u8",
+      sourceEpIndex: 1,
+      title: "第01集",
+      rawVideoUrl: "https://example.invalid/1.m3u8",
+      updatedAt: null,
     },
     {
       bangumiId: 547888,
@@ -68,8 +83,9 @@ test("normalizeResourceEpisodes maps parsed source episodes into repository inpu
       sourceAid: 1001,
       epIndex: 2,
       sourceEpIndex: 2,
-      title: "第04集",
-      rawVideoUrl: "https://example.invalid/4.m3u8",
+      title: "第02集",
+      rawVideoUrl: "https://example.invalid/2.m3u8",
+      updatedAt: "2026-06-03 02:00:00",
     },
   ]);
 });

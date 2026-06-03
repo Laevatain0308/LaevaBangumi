@@ -252,6 +252,7 @@ export function listUpdateCandidateRows() {
       rm.display_ep_offset AS displayEpOffset,
       ri.latest_text AS sourceUpdatedAt,
       MAX(e.ep_index) AS latestEp,
+      MAX(e.source_ep_index) AS latestSourceEpIndex,
       MAX(e.updated_at) AS episodeUpdatedAt
     FROM resource_mappings rm
     JOIN subjects s ON s.bangumi_id = rm.bangumi_id

@@ -3,7 +3,6 @@ import { listUpdateCandidateRows } from "../repositories/resourceRepository.js";
 import { formatSubjectSearchDto } from "../dto/subjectDto.js";
 import {
   DAY_MS,
-  normalizeTimestamp,
   parseTimestamp,
   parseUpdateNow,
   proxyCover,
@@ -22,20 +21,23 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
   const latestByAnime = new Map();
   for (const row of rows) {
     if (!enabledSourcesSet.has(row.source)) continue;
-    const sourceUpdatedMs = parseTimestamp(row.sourceUpdatedAt);
     const episodeUpdatedMs = parseTimestamp(row.episodeUpdatedAt);
-    const primaryUpdatedMs = Math.max(sourceUpdatedMs ?? -Infinity, episodeUpdatedMs ?? -Infinity);
-    if (!Number.isFinite(primaryUpdatedMs) || primaryUpdatedMs < cutoffMs || primaryUpdatedMs > nowMs) continue;
+    if (episodeUpdatedMs == null || episodeUpdatedMs < cutoffMs || episodeUpdatedMs > nowMs) continue;
 
     const isClosedRange = row.sourceEpEnd != null;
-    if (isClosedRange) continue;
+    const isClosedRangeFinalUpdate =
+      isClosedRange &&
+      row.latestSourceEpIndex != null &&
+      row.latestSourceEpIndex === row.sourceEpEnd;
+    if (isClosedRange && !isClosedRangeFinalUpdate) continue;
     const hasEpisodeChange = row.latestEp != null;
 
     const sourceUpdate = {
       source: row.source,
       sourceAid: row.sourceAid,
-      updatedAt: new Date(primaryUpdatedMs).toISOString(),
+      updatedAt: new Date(episodeUpdatedMs).toISOString(),
       latestEp: row.latestEp ?? null,
+      latestSourceEpIndex: row.latestSourceEpIndex ?? null,
       sourceEpStart: row.sourceEpStart ?? null,
       sourceEpEnd: row.sourceEpEnd ?? null,
       displayEpOffset: row.displayEpOffset ?? 0,
@@ -48,8 +50,8 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
 
     const shouldReplace =
       !existing ||
-      primaryUpdatedMs > existingMs ||
-      (primaryUpdatedMs === existingMs && sourceRank < existingRank);
+      episodeUpdatedMs > existingMs ||
+      (episodeUpdatedMs === existingMs && sourceRank < existingRank);
 
     if (shouldReplace) {
       const sourceUpdates = existing?.sourceUpdates ? [...existing.sourceUpdates, sourceUpdate] : [sourceUpdate];

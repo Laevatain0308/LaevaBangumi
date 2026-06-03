@@ -82,6 +82,7 @@ export function upsertResourceEpisode({
   sourceEpIndex = null,
   title = null,
   rawVideoUrl,
+  updatedAt = null,
 }) {
   assertEpisodeKey({ bangumiId, source });
   if (sourceAid == null) throw new Error("resource episode write requires sourceAid");
@@ -105,6 +106,7 @@ export function upsertResourceEpisode({
     sourceEpIndex,
     title,
     rawVideoUrl,
+    updatedAt,
   };
 
   if (!existing) {
@@ -115,7 +117,7 @@ export function upsertResourceEpisode({
       )
       VALUES (
         @bangumiId, @source, @sourceAid,
-        @epIndex, @sourceEpIndex, @title, @rawVideoUrl, datetime('now')
+        @epIndex, @sourceEpIndex, @title, @rawVideoUrl, @updatedAt
       )
     `).run(row);
     return;
@@ -130,7 +132,7 @@ export function upsertResourceEpisode({
       source_ep_index = @sourceEpIndex,
       title = @title,
       raw_video_url = @rawVideoUrl,
-      updated_at = datetime('now')
+      updated_at = COALESCE(@updatedAt, updated_at)
     WHERE episode_id = @episodeId
   `).run({ ...row, episodeId: existing.episode_id });
 }

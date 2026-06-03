@@ -37,13 +37,18 @@ export function normalizeResourceItem(item, { source, detailFetchedAt = null } =
   };
 }
 
-export function normalizeResourceEpisodes(episodes, { bangumiId, source, sourceAid } = {}) {
+export function normalizeResourceEpisodes(episodes, {
+  bangumiId,
+  source,
+  sourceAid,
+  sourceUpdatedAt = null,
+} = {}) {
   if (!bangumiId) throw new Error("normalizeResourceEpisodes requires bangumiId");
   if (!source) throw new Error("normalizeResourceEpisodes requires source");
   const normalizedSourceAid = intValue(sourceAid);
   if (normalizedSourceAid == null) throw new Error("normalizeResourceEpisodes requires sourceAid");
 
-  return (episodes || [])
+  const parsedEpisodes = (episodes || [])
     .map((episode) => {
       const epIndex = intValue(episode.epIndex ?? episode.index);
       const videoUrl = stringValue(episode.videoUrl ?? episode.video_url ?? episode.url);
@@ -60,4 +65,14 @@ export function normalizeResourceEpisodes(episodes, { bangumiId, source, sourceA
       };
     })
     .filter(Boolean);
+  const latestSourceEpIndex = parsedEpisodes.reduce((latest, episode) => (
+    latest == null || episode.sourceEpIndex > latest ? episode.sourceEpIndex : latest
+  ), null);
+
+  return parsedEpisodes.map((episode) => ({
+    ...episode,
+    updatedAt: sourceUpdatedAt && episode.sourceEpIndex === latestSourceEpIndex
+      ? stringValue(sourceUpdatedAt)
+      : null,
+  }));
 }

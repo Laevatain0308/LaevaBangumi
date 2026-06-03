@@ -308,10 +308,10 @@ test("resource repository upserts and deletes resource mappings", () => {
   assert.deepEqual(listResourceMappingsWithEpisodePresenceForSubject(id), []);
 });
 
-test("resource mappings enforce one subject owner per source item", () => {
+test("resource mappings allow multiple subjects to share one source item for ranged mappings", () => {
   const firstId = RESOURCE_STATE_SUBJECT_ID + 20;
   const secondId = RESOURCE_STATE_SUBJECT_ID + 21;
-  const source = `${RESOURCE_SOURCE}_unique`;
+  const source = `${RESOURCE_SOURCE}_shared`;
   const sourceAid = RESOURCE_AID + 20;
   initDb();
   sqlite.exec(`
@@ -324,10 +324,38 @@ test("resource mappings enforce one subject owner per source item", () => {
   `);
 
   upsertResourceMapping({ bangumiId: firstId, source, sourceAid });
+  upsertResourceMapping({
+    bangumiId: secondId,
+    source,
+    sourceAid,
+    sourceEpStart: 13,
+    sourceEpEnd: 24,
+    displayEpOffset: 12,
+  });
 
-  assert.throws(
-    () => upsertResourceMapping({ bangumiId: secondId, source, sourceAid }),
-    /UNIQUE constraint failed: resource_mappings\.source, resource_mappings\.source_aid/,
+  assert.deepEqual(
+    sqlite.prepare(`
+      SELECT bangumi_id, source_aid, source_ep_start, source_ep_end, display_ep_offset
+      FROM resource_mappings
+      WHERE source = ?
+      ORDER BY bangumi_id
+    `).all(source),
+    [
+      {
+        bangumi_id: firstId,
+        source_aid: sourceAid,
+        source_ep_start: null,
+        source_ep_end: null,
+        display_ep_offset: 0,
+      },
+      {
+        bangumi_id: secondId,
+        source_aid: sourceAid,
+        source_ep_start: 13,
+        source_ep_end: 24,
+        display_ep_offset: 12,
+      },
+    ],
   );
 });
 

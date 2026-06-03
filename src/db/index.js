@@ -239,7 +239,7 @@ function createEpisodesTable() {
       source_ep_index INTEGER,
       title TEXT,
       raw_video_url TEXT NOT NULL,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT,
       UNIQUE (bangumi_id, source, source_aid, ep_index),
       FOREIGN KEY (source, source_aid)
         REFERENCES resource_items(source, source_aid)
@@ -252,6 +252,10 @@ function createEpisodesTable() {
 
 function migrateEpisodesTableIfNeeded() {
   const columns = tableColumns("episodes");
+  const updatedAtRequired = sqlite
+    .prepare("PRAGMA table_info(episodes)")
+    .all()
+    .find((row) => row.name === "updated_at")?.notnull === 1;
   const isTerminal =
     columns.has("episode_id")
     && columns.has("title")
@@ -259,7 +263,8 @@ function migrateEpisodesTableIfNeeded() {
     && !columns.has("anime_id")
     && !columns.has("source_name")
     && !columns.has("ep_name")
-    && !columns.has("video_url");
+    && !columns.has("video_url")
+    && !updatedAtRequired;
 
   if (columns.size === 0 || isTerminal) {
     createEpisodesTable();
@@ -309,7 +314,7 @@ function migrateEpisodesTableIfNeeded() {
     )
     SELECT
       ${idExpr}, ${bangumiExpr}, ${sourceExpr}, source_aid, ep_index,
-      source_ep_index, ${titleExpr}, ${videoExpr}, COALESCE(updated_at, datetime('now'))
+      source_ep_index, ${titleExpr}, ${videoExpr}, updated_at
     FROM ${legacyName}
     WHERE ${bangumiExpr} IN (SELECT bangumi_id FROM subjects)
       AND ${sourceExpr} IS NOT NULL
@@ -652,17 +657,9 @@ function migrateLegacyResourceMappings() {
   `);
 }
 
-function dedupeResourceMappingsAndEnsureIndex() {
+function removeAutomaticSourceAidUniqueIndex() {
   sqlite.exec(`
-    DELETE FROM resource_mappings
-    WHERE rowid NOT IN (
-      SELECT MIN(rowid)
-      FROM resource_mappings
-      GROUP BY source, source_aid
-    );
-
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_mappings_source_aid_unique
-      ON resource_mappings(source, source_aid);
+    DROP INDEX IF EXISTS idx_resource_mappings_source_aid_unique;
   `);
 }
 
@@ -836,7 +833,7 @@ export function initDb() {
   migrateLegacyAliasesAndTags();
   migrateLegacyResourceItems();
   migrateLegacyResourceMappings();
-  dedupeResourceMappingsAndEnsureIndex();
+  removeAutomaticSourceAidUniqueIndex();
   migrateEpisodesTableIfNeeded();
   ensureRecommendedIndexes();
   migrateSyncStateTableIfNeeded();
