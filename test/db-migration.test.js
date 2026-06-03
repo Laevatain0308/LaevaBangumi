@@ -217,6 +217,10 @@ test("initDb creates the normalized schema tables", () => {
   ]) {
     assert.equal(tableNames.has(table), true, `${table} table should exist`);
   }
+
+  const sourceColumns = new Set(sqlite.prepare("PRAGMA table_info(resource_sources)").all().map((row) => row.name));
+  assert.equal(sourceColumns.has("priority"), true, "resource_sources.priority column should exist");
+  assert.equal(sqlite.prepare("SELECT priority FROM resource_sources WHERE source = 'ffzy'").get().priority, 100);
 });
 
 test("initDb migrates legacy rows into normalized tables idempotently", () => {

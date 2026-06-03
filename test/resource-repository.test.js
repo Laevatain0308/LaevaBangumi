@@ -78,6 +78,38 @@ test("resource repository reads normalized detail and playback rows", () => {
   }), { video_url: "https://example.invalid/repo-1.m3u8" });
 });
 
+test("resource repository orders episode channel rows by source priority", () => {
+  initDb();
+  const id = RESOURCE_SUBJECT_ID + 20;
+  sqlite.exec(`
+    DELETE FROM episodes WHERE bangumi_id = ${id};
+    DELETE FROM resource_mappings WHERE bangumi_id = ${id};
+    DELETE FROM resource_items WHERE source IN ('priority_z', 'priority_a');
+    DELETE FROM resource_sources WHERE source IN ('priority_z', 'priority_a');
+    DELETE FROM subjects WHERE bangumi_id = ${id};
+
+    INSERT INTO subjects (bangumi_id, name, rating_distribution_json)
+      VALUES (${id}, 'Priority raw', '[]');
+    INSERT INTO resource_sources (source, name, enabled, priority)
+      VALUES ('priority_z', 'Z Source', 1, 10),
+             ('priority_a', 'A Source', 1, 200);
+    INSERT INTO resource_items (source, source_aid, title, detail_fetched_at)
+      VALUES ('priority_z', 9002, 'Z resource', datetime('now')),
+             ('priority_a', 9001, 'A resource', datetime('now'));
+    INSERT INTO resource_mappings (bangumi_id, source, source_aid, score, matched_at)
+      VALUES (${id}, 'priority_z', 9002, 0.9, datetime('now')),
+             (${id}, 'priority_a', 9001, 0.9, datetime('now'));
+    INSERT INTO episodes (bangumi_id, source, source_aid, ep_index, source_ep_index, ep_name, video_url, updated_at)
+      VALUES (${id}, 'priority_a', 9001, 1, 1, 'A 第01集', 'https://example.invalid/a.m3u8', datetime('now')),
+             (${id}, 'priority_z', 9002, 1, 1, 'Z 第01集', 'https://example.invalid/z.m3u8', datetime('now'));
+  `);
+
+  assert.deepEqual(listEpisodeChannelRowsForSubject(id).map((row) => row.source), [
+    "priority_z",
+    "priority_a",
+  ]);
+});
+
 test("resource repository reads normalized retry and manual state rows", () => {
   seedResourceRows();
 

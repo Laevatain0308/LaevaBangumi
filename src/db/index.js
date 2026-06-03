@@ -349,6 +349,7 @@ export function initDb() {
       name TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       base_url TEXT,
+      priority INTEGER NOT NULL DEFAULT 100,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -416,6 +417,7 @@ export function initDb() {
   `);
 
   migrateEpisodesTableIfNeeded();
+  addColumnIfMissing("resource_sources", "priority", "INTEGER NOT NULL DEFAULT 100");
   addColumnIfMissing("resource_mappings", "updated_at", "TEXT");
   sqlite.exec(`
     UPDATE resource_mappings

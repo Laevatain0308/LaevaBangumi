@@ -178,6 +178,7 @@ export const resourceSources = sqliteTable("resource_sources", {
   name: text("name").notNull(),
   enabled: integer("enabled").notNull().default(1),
   baseUrl: text("base_url"),
+  priority: integer("priority").notNull().default(100),
   updatedAt: text("updated_at").default("(datetime('now'))").notNull(),
 });
 

@@ -72,6 +72,7 @@ export function listEpisodeChannelRowsForSubject(bangumiId) {
       e.ep_name,
       e.updated_at,
       rs.name AS source_name,
+      COALESCE(rs.priority, 100) AS source_priority,
       ri.title AS resource_title
     FROM episodes e
     JOIN resource_mappings rm
@@ -81,7 +82,7 @@ export function listEpisodeChannelRowsForSubject(bangumiId) {
     LEFT JOIN resource_sources rs ON rs.source = e.source
     LEFT JOIN resource_items ri ON ri.source = e.source AND ri.source_aid = e.source_aid
     WHERE e.bangumi_id = ?
-    ORDER BY e.source ASC, e.source_aid ASC, e.ep_index ASC
+    ORDER BY COALESCE(rs.priority, 100) ASC, e.source ASC, e.source_aid ASC, e.ep_index ASC
   `).all(bangumiId);
 }
 
