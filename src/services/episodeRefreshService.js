@@ -78,7 +78,7 @@ export async function refreshEpisodesForAnime(animeId, { source } = {}) {
     if (!mapping.matched) return { animeId, refreshed: false, reason: mapping.reason };
     mapped = getMap(animeId, source);
   }
-  await upsertMap(animeId, source, mapped.sourceAid, mapped.score, mapped.matchedBgName, mapped.matchedResourceName, {
+  await upsertMap(animeId, source, mapped.sourceAid, mapped.score, mapped.matchedSubjectTitle, mapped.matchedResourceTitle, {
     sourceEpStart: mapped.sourceEpStart,
     sourceEpEnd: mapped.sourceEpEnd,
     displayEpOffset: mapped.displayEpOffset,
@@ -97,7 +97,7 @@ export async function refreshEpisodesForAnime(animeId, { source } = {}) {
   const rangedEpisodes = applyEpisodeRange(detail.episodes, mapped);
   pruneEpisodesForRefresh(animeId, source, detail.id, rangedEpisodes);
   await upsertEpisodes(animeId, source, detail.id, rangedEpisodes);
-  await upsertMap(animeId, source, detail.id, mapped.score, mapped.matchedBgName, detail.name, {
+  await upsertMap(animeId, source, detail.id, mapped.score, mapped.matchedSubjectTitle, detail.name, {
     sourceEpStart: mapped.sourceEpStart,
     sourceEpEnd: mapped.sourceEpEnd,
     displayEpOffset: mapped.displayEpOffset,

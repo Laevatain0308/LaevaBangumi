@@ -108,7 +108,7 @@ test("manual review match writes normalized mapping for mapped review export", a
 
   const stats = await withCsv(csv, (filePath) => importManualReview(filePath, { refreshEpisodes: false }));
   const mapping = sqlite.prepare(`
-    SELECT source_aid, matched_bg_name, matched_resource_name
+    SELECT source_aid, matched_subject_title, matched_resource_title
     FROM resource_mappings
     WHERE bangumi_id = ? AND source = ?
   `).get(SUBJECT_ID, SOURCE);
@@ -118,8 +118,8 @@ test("manual review match writes normalized mapping for mapped review export", a
   assert.equal(stats.matched, 1);
   assert.deepEqual(mapping, {
     source_aid: SOURCE_AID,
-    matched_bg_name: "手动标准化番剧",
-    matched_resource_name: "手动标准化番剧",
+    matched_subject_title: "手动标准化番剧",
+    matched_resource_title: "手动标准化番剧",
   });
   assert.ok(row);
   assert.equal(row.source_aid, SOURCE_AID);

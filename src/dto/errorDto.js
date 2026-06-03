@@ -2,6 +2,7 @@ import { envelope } from "./apiEnvelope.js";
 
 export function errorEnvelope(data, {
   message,
+  errorCode = "error",
   warnings = null,
   updatedAt = new Date().toISOString(),
   meta = {},
@@ -10,8 +11,10 @@ export function errorEnvelope(data, {
   return envelope(data, {
     updatedAt,
     meta: {
+      freshness: "error",
       ...meta,
       warnings: normalizedWarnings,
+      error: errorCode,
     },
   });
 }
@@ -23,8 +26,10 @@ export function serverErrorEnvelope(data, error, {
   return envelope(data, {
     updatedAt,
     meta: {
+      freshness: "error",
       ...meta,
-      error: error?.message ?? String(error),
+      warnings: [error?.message ?? String(error)],
+      error: "server_error",
     },
   });
 }

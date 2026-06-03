@@ -48,6 +48,13 @@ test("syncCatalogCategory records successful sync_state after catalog save", asy
     t: SCOPE,
     incremental: false,
     hydrateDetails: false,
+    sourceConfig: {
+      key: SOURCE,
+      name: "Catalog State Source",
+      enabled: true,
+      apiEndpoint: "https://example.invalid/catalog-state",
+      priority: 42,
+    },
     fetchCatalog: async () => [{
       id: 123,
       name: "Catalog State Item",
@@ -66,4 +73,14 @@ test("syncCatalogCategory records successful sync_state after catalog save", asy
   assert.equal(state.last_error, null);
   assert.ok(state.last_success_at);
   assert.equal(state.last_seen_at, "2026-06-03 02:00:00");
+  assert.deepEqual(sqlite.prepare(`
+    SELECT name, enabled, base_url, priority
+    FROM resource_sources
+    WHERE source = ?
+  `).get(SOURCE), {
+    name: "Catalog State Source",
+    enabled: 1,
+    base_url: "https://example.invalid/catalog-state",
+    priority: 42,
+  });
 });

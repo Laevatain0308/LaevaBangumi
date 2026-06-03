@@ -315,6 +315,37 @@ test("search rejects q and tag together", async () => {
   try {
     const response = await getJson(server, "/api/search?q=abc&tag=%E5%8E%9F%E5%88%9B");
     assert.equal(response.status, 400);
+    assert.deepEqual(response.body.data, []);
+    assert.equal(response.body.meta.freshness, "error");
+    assert.equal(response.body.meta.error, "invalid_query");
+    assert.deepEqual(response.body.meta.warnings, ["q 和 tag 不能同时使用"]);
+  } finally {
+    server.close();
+  }
+});
+
+test("missing detail returns the documented error envelope without inline metadata fetch", async () => {
+  initDb();
+  const missingId = CONTRACT_SUBJECT_ID + 9000;
+  sqlite.exec(`
+    DELETE FROM retry_state WHERE bangumi_id = ${missingId};
+    DELETE FROM subject_aliases WHERE bangumi_id = ${missingId};
+    DELETE FROM subject_tags WHERE bangumi_id = ${missingId};
+    DELETE FROM subjects WHERE bangumi_id = ${missingId};
+  `);
+
+  const server = createServer().listen(0);
+  try {
+    const response = await getJson(server, `/api/detail?id=${missingId}`);
+    assert.equal(response.status, 404);
+    assert.equal(response.body.data, null);
+    assert.equal(response.body.meta.freshness, "error");
+    assert.equal(response.body.meta.error, "subject_not_found");
+    assert.deepEqual(response.body.meta.warnings, ["番剧不存在"]);
+    assert.equal(
+      sqlite.prepare("SELECT COUNT(*) AS count FROM retry_state WHERE bangumi_id = ? AND kind = 'metadata_fetch'").get(missingId).count,
+      0,
+    );
   } finally {
     server.close();
   }

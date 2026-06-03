@@ -2,6 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { envelope } from "../src/dto/apiEnvelope.js";
 import {
+  errorEnvelope,
+  serverErrorEnvelope,
+} from "../src/dto/errorDto.js";
+import {
   formatSubjectDetailDto,
   formatSubjectSearchDto,
 } from "../src/dto/subjectDto.js";
@@ -106,6 +110,34 @@ test("api envelope keeps data, timestamp, and meta shape centralized", () => {
   assert.deepEqual(envelope([1], { updatedAt: "2026-06-03T00:00:00.000Z", meta: { total: 1 } }), {
     data: [1],
     updatedAt: "2026-06-03T00:00:00.000Z",
-    meta: { total: 1 },
+    meta: { warnings: [], total: 1 },
+  });
+});
+
+test("error envelopes expose documented freshness, warnings, and stable error codes", () => {
+  assert.deepEqual(errorEnvelope(null, {
+    updatedAt: "2026-06-03T00:00:00.000Z",
+    message: "番剧不存在",
+    errorCode: "subject_not_found",
+  }), {
+    data: null,
+    updatedAt: "2026-06-03T00:00:00.000Z",
+    meta: {
+      freshness: "error",
+      warnings: ["番剧不存在"],
+      error: "subject_not_found",
+    },
+  });
+
+  assert.deepEqual(serverErrorEnvelope([], new Error("boom"), {
+    updatedAt: "2026-06-03T00:00:00.000Z",
+  }), {
+    data: [],
+    updatedAt: "2026-06-03T00:00:00.000Z",
+    meta: {
+      freshness: "error",
+      warnings: ["boom"],
+      error: "server_error",
+    },
   });
 });

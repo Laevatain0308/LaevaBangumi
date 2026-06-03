@@ -1,6 +1,7 @@
 import * as cstation from "../clients/resourceClient.js";
 import { log, error } from "../lib/logger.js";
-import { upsertResourceItem } from "../repositories/resourceRepository.js";
+import { upsertResourceItem, upsertResourceSource } from "../repositories/resourceRepository.js";
+import { getSourceConfig } from "../lib/cstationConfig.js";
 import {
   findResourceSyncState,
   markResourceSyncFailed,
@@ -11,6 +12,21 @@ import { normalizeResourceItem } from "../normalizers/resourceItemNormalizer.js"
 
 function now() {
   return new Date().toISOString().replace("T", " ").slice(0, 19);
+}
+
+function resolveSourceConfig(source, explicitConfig) {
+  if (explicitConfig) return explicitConfig;
+  try {
+    return getSourceConfig(source);
+  } catch {
+    return {
+      key: source,
+      name: source,
+      enabled: true,
+      apiEndpoint: null,
+      priority: 100,
+    };
+  }
 }
 
 export async function saveCatalog(catalog, { source } = {}) {
@@ -39,9 +55,18 @@ export async function syncCatalogCategory({
   hydrateDetails = true,
   fetchCatalog = cstation.fetchCatalog,
   fetchCatalogIncremental = cstation.fetchCatalogIncremental,
+  sourceConfig = null,
 } = {}) {
   if (!source) throw new Error("syncCatalogCategory requires source");
   if (!t) throw new Error("syncCatalogCategory requires t");
+  const normalizedSourceConfig = resolveSourceConfig(source, sourceConfig);
+  upsertResourceSource({
+    source,
+    name: normalizedSourceConfig.name,
+    enabled: normalizedSourceConfig.enabled !== false ? 1 : 0,
+    baseUrl: normalizedSourceConfig.apiEndpoint,
+    priority: normalizedSourceConfig.priority ?? 100,
+  });
   log("catalog", "category sync started", { source, category: t, incremental, hydrateDetails });
   const startedAt = markResourceSyncStarted({ source, scope: t });
   const state = findResourceSyncState({ source, scope: t });

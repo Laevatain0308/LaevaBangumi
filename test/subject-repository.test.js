@@ -66,6 +66,37 @@ test("subject repository searches by keyword alias and tag", () => {
   assert.equal(searchSubjectsByTag("").length, 0);
 });
 
+test("subject repository sorts tag search by tag count, rating, then air date", () => {
+  initDb();
+  const ids = [REPOSITORY_SUBJECT_ID + 10, REPOSITORY_SUBJECT_ID + 11, REPOSITORY_SUBJECT_ID + 12];
+  sqlite.exec(`
+    DELETE FROM subject_tags WHERE bangumi_id IN (${ids.join(", ")});
+    DELETE FROM subject_aliases WHERE bangumi_id IN (${ids.join(", ")});
+    DELETE FROM subjects WHERE bangumi_id IN (${ids.join(", ")});
+    DELETE FROM tags WHERE name = '排序Tag';
+
+    INSERT INTO tags (name) VALUES ('排序Tag');
+    INSERT INTO subjects (
+      bangumi_id, name, name_cn, air_date, rating_score, rating_distribution_json, updated_at
+    ) VALUES
+      (${ids[0]}, 'Tag Sort A', '排序 A', '2026-04-01', 7.0, '[]', '2026-06-03 01:00:00'),
+      (${ids[1]}, 'Tag Sort B', '排序 B', '2026-04-02', 8.5, '[]', '2026-06-03 01:00:00'),
+      (${ids[2]}, 'Tag Sort C', '排序 C', '2026-04-03', 8.5, '[]', '2026-06-03 01:00:00');
+    INSERT INTO subject_tags (bangumi_id, tag_id, count, total_count)
+      SELECT ${ids[0]}, tag_id, 10, 10 FROM tags WHERE name = '排序Tag';
+    INSERT INTO subject_tags (bangumi_id, tag_id, count, total_count)
+      SELECT ${ids[1]}, tag_id, 20, 20 FROM tags WHERE name = '排序Tag';
+    INSERT INTO subject_tags (bangumi_id, tag_id, count, total_count)
+      SELECT ${ids[2]}, tag_id, 20, 20 FROM tags WHERE name = '排序Tag';
+  `);
+
+  assert.deepEqual(searchSubjectsByTag("排序Tag").map((row) => row.bangumi_id), [
+    ids[2],
+    ids[1],
+    ids[0],
+  ]);
+});
+
 test("subject repository upserts normalized subject aliases and tags", () => {
   const id = REPOSITORY_SUBJECT_ID + 1;
   sqlite.prepare("DELETE FROM episodes WHERE bangumi_id = ?").run(id);

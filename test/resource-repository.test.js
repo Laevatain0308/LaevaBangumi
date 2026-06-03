@@ -250,8 +250,8 @@ test("resource repository upserts and deletes resource mappings", () => {
     sourceEpEnd: 12,
     displayEpOffset: 0,
     score: 0.91,
-    matchedBgName: "番剧标题",
-    matchedResourceName: "资源站标题",
+    matchedSubjectTitle: "番剧标题",
+    matchedResourceTitle: "资源站标题",
   });
 
   let mapping = sqlite.prepare(`
@@ -263,8 +263,8 @@ test("resource repository upserts and deletes resource mappings", () => {
   assert.equal(mapping.source_ep_end, 12);
   assert.equal(mapping.display_ep_offset, 0);
   assert.equal(mapping.score, 0.91);
-  assert.equal(mapping.matched_bg_name, "番剧标题");
-  assert.equal(mapping.matched_resource_name, "资源站标题");
+  assert.equal(mapping.matched_subject_title, "番剧标题");
+  assert.equal(mapping.matched_resource_title, "资源站标题");
   assert.equal(mapping.status, "matched");
   assert.equal(mapping.note, null);
   assert.ok(mapping.matched_at);
@@ -279,8 +279,8 @@ test("resource repository upserts and deletes resource mappings", () => {
     sourceEpEnd: null,
     displayEpOffset: 2,
     score: null,
-    matchedBgName: "手动番剧标题",
-    matchedResourceName: "手动资源站标题",
+    matchedSubjectTitle: "手动番剧标题",
+    matchedResourceTitle: "手动资源站标题",
     note: "manual range",
   });
 
@@ -293,8 +293,8 @@ test("resource repository upserts and deletes resource mappings", () => {
   assert.equal(mapping.source_ep_end, null);
   assert.equal(mapping.display_ep_offset, 2);
   assert.equal(mapping.score, null);
-  assert.equal(mapping.matched_bg_name, "手动番剧标题");
-  assert.equal(mapping.matched_resource_name, "手动资源站标题");
+  assert.equal(mapping.matched_subject_title, "手动番剧标题");
+  assert.equal(mapping.matched_resource_title, "手动资源站标题");
   assert.equal(mapping.status, "matched");
   assert.equal(mapping.note, "manual range");
 
@@ -370,10 +370,14 @@ test("resource repository upserts resource items without erasing existing option
   assert.equal(item.year, "2026");
   assert.equal(item.latest_text, "第01集");
   assert.equal(item.detail_fetched_at, "2026-06-03 02:00:00");
+  assert.ok(item.created_at);
+  assert.ok(item.updated_at);
 
   const sourceRow = sqlite.prepare("SELECT * FROM resource_sources WHERE source = ?").get(source);
   assert.equal(sourceRow.name, source);
   assert.equal(sourceRow.enabled, 1);
+  assert.ok(sourceRow.created_at);
+  assert.ok(sourceRow.updated_at);
 });
 
 test("resource repository upserts normalized sync state rows", () => {

@@ -61,8 +61,8 @@ const MAPPED_REVIEW_COLUMNS = [
   "source_ep_end",
   "display_ep_offset",
   "match_score",
-  "matched_bg_name",
-  "matched_source_name",
+  "matched_subject_title",
+  "matched_resource_title",
   "matched_at",
   "episode_count",
   "source_ep_min",
@@ -126,8 +126,8 @@ function normalizedMappingRow(row) {
     sourceEpEnd: row.source_ep_end,
     displayEpOffset: row.display_ep_offset,
     score: row.score,
-    matchedBgName: row.matched_bg_name,
-    matchedResourceName: row.matched_resource_name,
+    matchedSubjectTitle: row.matched_subject_title,
+    matchedResourceTitle: row.matched_resource_title,
     matchedAt: row.matched_at,
   };
 }
@@ -327,17 +327,17 @@ function allMappingRows() {
 function mappedRowForReview(mapping, animeRow, sourceItem, episodeStats) {
   return {
     anime_id: mapping.animeId,
-    bg_title: animeRow?.nameCn || animeRow?.name || mapping.matchedBgName || "",
+    bg_title: animeRow?.nameCn || animeRow?.name || mapping.matchedSubjectTitle || "",
     source: mapping.source,
     decision: "",
     source_aid: mapping.sourceAid,
-    source_title: sourceItem?.name || mapping.matchedResourceName || "",
+    source_title: sourceItem?.name || mapping.matchedResourceTitle || "",
     source_ep_start: mapping.sourceEpStart ?? "",
     source_ep_end: mapping.sourceEpEnd ?? "",
     display_ep_offset: mapping.displayEpOffset ?? 0,
     match_score: mapping.score == null ? "" : Number(mapping.score).toFixed(4),
-    matched_bg_name: mapping.matchedBgName || "",
-    matched_source_name: mapping.matchedResourceName || "",
+    matched_subject_title: mapping.matchedSubjectTitle || "",
+    matched_resource_title: mapping.matchedResourceTitle || "",
     matched_at: mapping.matchedAt || "",
     episode_count: episodeStats.episodeCount,
     source_ep_min: episodeStats.sourceEpMin,
@@ -358,8 +358,8 @@ function rowMatchesQuery(row, query) {
     row.bg_aliases,
     row.source_title,
     row.source_subname,
-    row.matched_bg_name,
-    row.matched_source_name,
+    row.matched_subject_title,
+    row.matched_resource_title,
   ].some((value) => String(value || "").toLowerCase().includes(q));
 }
 
@@ -541,8 +541,8 @@ function deleteMappingArtifacts(animeId, source) {
 
 function applyManualMapping({ animeRow, source, sourceItem, sourceAid, episodeRange }) {
   deleteMappingArtifacts(animeRow.id, source);
-  const matchedBgName = animeRow.nameCn || animeRow.name;
-  const matchedResourceName = sourceItem.name;
+  const matchedSubjectTitle = animeRow.nameCn || animeRow.name;
+  const matchedResourceTitle = sourceItem.name;
 
   ensureSubjectFromAnime(animeRow.id);
   upsertResourceMapping({
@@ -553,8 +553,8 @@ function applyManualMapping({ animeRow, source, sourceItem, sourceAid, episodeRa
     sourceEpEnd: episodeRange.sourceEpEnd,
     displayEpOffset: episodeRange.displayEpOffset,
     score: null,
-    matchedBgName,
-    matchedResourceName,
+    matchedSubjectTitle,
+    matchedResourceTitle,
   });
 
   clearRetryState(animeRow.id, source);

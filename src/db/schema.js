@@ -86,6 +86,7 @@ export const resourceSources = sqliteTable("resource_sources", {
   enabled: integer("enabled").notNull().default(1),
   baseUrl: text("base_url"),
   priority: integer("priority").notNull().default(100),
+  createdAt: text("created_at").default("(datetime('now'))").notNull(),
   updatedAt: text("updated_at").default("(datetime('now'))").notNull(),
 });
 
@@ -98,6 +99,7 @@ export const resourceItems = sqliteTable("resource_items", {
   year: text("year"),
   latestText: text("latest_text"),
   detailFetchedAt: text("detail_fetched_at"),
+  createdAt: text("created_at").default("(datetime('now'))").notNull(),
   updatedAt: text("updated_at").default("(datetime('now'))").notNull(),
 }, (table) => ({
   pk: uniqueIndex("idx_resource_items_unique").on(table.source, table.sourceAid),
@@ -111,8 +113,8 @@ export const resourceMappings = sqliteTable("resource_mappings", {
   sourceEpEnd: integer("source_ep_end"),
   displayEpOffset: integer("display_ep_offset").notNull().default(0),
   score: real("score"),
-  matchedBgName: text("matched_bg_name"),
-  matchedResourceName: text("matched_resource_name"),
+  matchedSubjectTitle: text("matched_subject_title"),
+  matchedResourceTitle: text("matched_resource_title"),
   status: text("status").notNull().default("matched"),
   note: text("note"),
   matchedAt: text("matched_at").default("(datetime('now'))").notNull(),

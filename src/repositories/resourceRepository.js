@@ -5,14 +5,14 @@ function assertResourceStateKey({ bangumiId, source }) {
   if (!source) throw new Error("resource state write requires source");
 }
 
-function ensureResourceSource({ source, name = null, enabled = 1 }) {
+function ensureResourceSource({ source, name = null, enabled = 1, baseUrl = null, priority = null }) {
   if (!source) throw new Error("resource source write requires source");
 
   sqlite.prepare(`
-    INSERT INTO resource_sources (source, name, enabled)
-    VALUES (@source, @name, @enabled)
+    INSERT INTO resource_sources (source, name, enabled, base_url, priority, updated_at)
+    VALUES (@source, @name, @enabled, @baseUrl, @priority, datetime('now'))
     ON CONFLICT(source) DO NOTHING
-  `).run({ source, name: name ?? source, enabled });
+  `).run({ source, name: name ?? source, enabled, baseUrl, priority: priority ?? 100 });
 
   if (name == null) {
     sqlite.prepare(`
@@ -25,9 +25,17 @@ function ensureResourceSource({ source, name = null, enabled = 1 }) {
 
   sqlite.prepare(`
     UPDATE resource_sources
-    SET name = @name, enabled = @enabled, updated_at = datetime('now')
+    SET name = @name,
+        enabled = @enabled,
+        base_url = COALESCE(@baseUrl, base_url),
+        priority = COALESCE(@priority, priority),
+        updated_at = datetime('now')
     WHERE source = @source
-  `).run({ source, name, enabled });
+  `).run({ source, name, enabled, baseUrl, priority });
+}
+
+export function upsertResourceSource({ source, name = null, enabled = 1, baseUrl = null, priority = null }) {
+  ensureResourceSource({ source, name, enabled, baseUrl, priority });
 }
 
 export function listResourceMappingsWithEpisodePresenceForSubject(bangumiId) {
@@ -74,8 +82,8 @@ export function findResourceMapping({ bangumiId, source }) {
       source_ep_end,
       display_ep_offset,
       score,
-      matched_bg_name,
-      matched_resource_name,
+      matched_subject_title,
+      matched_resource_title,
       matched_at
     FROM resource_mappings
     WHERE bangumi_id = @bangumiId AND source = @source
@@ -110,8 +118,8 @@ export function listResourceMappings({ sourceKeys = null } = {}) {
       source_ep_end,
       display_ep_offset,
       score,
-      matched_bg_name,
-      matched_resource_name,
+      matched_subject_title,
+      matched_resource_title,
       matched_at
     FROM resource_mappings
     ${sourceFilter}
@@ -334,8 +342,8 @@ export function upsertResourceMapping({
   sourceEpEnd = null,
   displayEpOffset = 0,
   score = null,
-  matchedBgName = null,
-  matchedResourceName = null,
+  matchedSubjectTitle = null,
+  matchedResourceTitle = null,
   status = "matched",
   note = null,
   matchedAt = null,
@@ -348,12 +356,12 @@ export function upsertResourceMapping({
     sqlite.prepare(`
       INSERT INTO resource_mappings (
         bangumi_id, source, source_aid, source_ep_start, source_ep_end,
-        display_ep_offset, score, matched_bg_name, matched_resource_name,
+        display_ep_offset, score, matched_subject_title, matched_resource_title,
         status, note, matched_at, updated_at
       )
       VALUES (
         @bangumiId, @source, @sourceAid, @sourceEpStart, @sourceEpEnd,
-        @displayEpOffset, @score, @matchedBgName, @matchedResourceName,
+        @displayEpOffset, @score, @matchedSubjectTitle, @matchedResourceTitle,
         @status, @note, COALESCE(@matchedAt, datetime('now')), datetime('now')
       )
       ON CONFLICT(bangumi_id, source) DO UPDATE SET
@@ -362,8 +370,8 @@ export function upsertResourceMapping({
         source_ep_end = excluded.source_ep_end,
         display_ep_offset = excluded.display_ep_offset,
         score = excluded.score,
-        matched_bg_name = excluded.matched_bg_name,
-        matched_resource_name = excluded.matched_resource_name,
+        matched_subject_title = excluded.matched_subject_title,
+        matched_resource_title = excluded.matched_resource_title,
         status = excluded.status,
         note = excluded.note,
         matched_at = excluded.matched_at,
@@ -376,8 +384,8 @@ export function upsertResourceMapping({
       sourceEpEnd,
       displayEpOffset,
       score,
-      matchedBgName,
-      matchedResourceName,
+      matchedSubjectTitle,
+      matchedResourceTitle,
       status,
       note,
       matchedAt,

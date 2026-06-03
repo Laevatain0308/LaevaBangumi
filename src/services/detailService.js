@@ -10,14 +10,12 @@ import { formatSubjectDetailDto } from "../dto/subjectDto.js";
 import { formatDetailEpisodeDto } from "../dto/resourceDto.js";
 import {
   DETAIL_FRESH_MS,
-  DETAIL_SHORT_TIMEOUT_MS,
   aggregateResourceStatus,
   isFresh,
   proxyCover,
 } from "./animeShared.js";
-import { refreshSubjectMetadata } from "./metadataRefreshService.js";
+import { enqueueMetadataRefresh } from "./metadataRefreshService.js";
 import { enabledSourceSet, resourceSourceStatuses } from "./resourceMatchService.js";
-import { error } from "../lib/logger.js";
 
 export function collectEpisodeChannels(id) {
   const enabledSources = enabledSourceSet();
@@ -70,14 +68,8 @@ function getCachedAnimeDetail(id) {
 
 export async function getAnimeDetail(id) {
   const normalized = getCachedAnimeDetail(id);
-  if (normalized) return normalized;
-
-  try {
-    await refreshSubjectMetadata(id, { timeoutMs: DETAIL_SHORT_TIMEOUT_MS });
-  } catch (err) {
-    error("detail", `initial subject fetch failed for ${id}`, err);
-    return null;
+  if (normalized?.freshness === "stale") {
+    enqueueMetadataRefresh(id);
   }
-
-  return getCachedAnimeDetail(id);
+  return normalized;
 }

@@ -104,7 +104,7 @@ function clearSourceAlreadyMapped(animeId, source) {
   clearManualStateByStatus(animeId, source, "source_already_mapped");
 }
 
-export async function upsertMap(animeId, source, sourceAid, score, matchedBgName, matchedResourceName, range = {}) {
+export async function upsertMap(animeId, source, sourceAid, score, matchedSubjectTitle, matchedResourceTitle, range = {}) {
   upsertResourceMapping({
     bangumiId: animeId,
     source,
@@ -113,8 +113,8 @@ export async function upsertMap(animeId, source, sourceAid, score, matchedBgName
     sourceEpEnd: range.sourceEpEnd ?? null,
     displayEpOffset: range.displayEpOffset ?? 0,
     score,
-    matchedBgName,
-    matchedResourceName,
+    matchedSubjectTitle,
+    matchedResourceTitle,
   });
 }
 
@@ -129,8 +129,8 @@ export function getMap(animeId, source) {
     sourceEpEnd: normalized.source_ep_end,
     displayEpOffset: normalized.display_ep_offset,
     score: normalized.score,
-    matchedBgName: normalized.matched_bg_name,
-    matchedResourceName: normalized.matched_resource_name,
+    matchedSubjectTitle: normalized.matched_subject_title,
+    matchedResourceTitle: normalized.matched_resource_title,
     matchedAt: normalized.matched_at,
   };
 }

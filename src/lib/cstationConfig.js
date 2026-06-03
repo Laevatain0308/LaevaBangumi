@@ -24,6 +24,7 @@ function normalizeSource(source) {
     name: source.name || source.key,
     enabled: source.enabled !== false,
     apiEndpoint: String(source.apiEndpoint),
+    priority: Number(source.priority) || 100,
     mediaFlag: source.mediaFlag || "ffm3u8",
     timeoutMs: Number(source.timeoutMs) || 15000,
     catalogTimeoutMs: Number(source.catalogTimeoutMs) || 20000,

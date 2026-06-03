@@ -165,7 +165,7 @@ export function searchSubjectsByTag(tag, { limit = 60 } = {}) {
     JOIN subject_tags st ON st.bangumi_id = s.bangumi_id
     JOIN tags t ON t.tag_id = st.tag_id
     WHERE t.name = @tag
-    ORDER BY st.count DESC, s.updated_at DESC
+    ORDER BY st.count DESC, s.rating_score DESC, s.air_date DESC
     LIMIT @limit
   `).all({ tag, limit: boundedLimit(limit) });
 }

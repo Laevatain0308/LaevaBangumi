@@ -297,7 +297,13 @@ test("initDb creates the normalized schema tables", () => {
 
   const sourceColumns = new Set(sqlite.prepare("PRAGMA table_info(resource_sources)").all().map((row) => row.name));
   assert.equal(sourceColumns.has("priority"), true, "resource_sources.priority column should exist");
+  assert.equal(sourceColumns.has("created_at"), true, "resource_sources.created_at column should exist");
+  assert.equal(sourceColumns.has("updated_at"), true, "resource_sources.updated_at column should exist");
   assert.equal(sqlite.prepare("SELECT priority FROM resource_sources WHERE source = 'ffzy'").get().priority, 100);
+
+  const itemColumns = new Set(sqlite.prepare("PRAGMA table_info(resource_items)").all().map((row) => row.name));
+  assert.equal(itemColumns.has("created_at"), true, "resource_items.created_at column should exist");
+  assert.equal(itemColumns.has("updated_at"), true, "resource_items.updated_at column should exist");
 
   const retryColumns = new Set(sqlite.prepare("PRAGMA table_info(retry_state)").all().map((row) => row.name));
   assert.equal(retryColumns.has("last_error"), true, "retry_state.last_error column should exist");
@@ -305,6 +311,10 @@ test("initDb creates the normalized schema tables", () => {
   const mappingColumns = new Set(sqlite.prepare("PRAGMA table_info(resource_mappings)").all().map((row) => row.name));
   assert.equal(mappingColumns.has("status"), true, "resource_mappings.status column should exist");
   assert.equal(mappingColumns.has("note"), true, "resource_mappings.note column should exist");
+  assert.equal(mappingColumns.has("matched_subject_title"), true, "resource_mappings.matched_subject_title column should exist");
+  assert.equal(mappingColumns.has("matched_resource_title"), true, "resource_mappings.matched_resource_title column should exist");
+  assert.equal(mappingColumns.has("matched_bg_name"), false, "resource_mappings.matched_bg_name column should not exist");
+  assert.equal(mappingColumns.has("matched_resource_name"), false, "resource_mappings.matched_resource_name column should not exist");
 
   const syncColumns = new Set(sqlite.prepare("PRAGMA table_info(sync_state)").all().map((row) => row.name));
   assert.equal(syncColumns.has("key"), true, "sync_state.key column should exist");
@@ -313,6 +323,23 @@ test("initDb creates the normalized schema tables", () => {
   assert.equal(syncColumns.has("status"), true, "sync_state.status column should exist");
   assert.equal(syncColumns.has("last_started_at"), true, "sync_state.last_started_at column should exist");
   assert.equal(syncColumns.has("last_error"), true, "sync_state.last_error column should exist");
+
+  const indexes = new Set(sqlite
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
+    .all()
+    .map((row) => row.name));
+  for (const indexName of [
+    "idx_subjects_calendar_weekday",
+    "idx_subjects_updated_at",
+    "idx_subjects_rating_score",
+    "idx_subject_aliases_alias",
+    "idx_subject_tags_tag_id",
+    "idx_episodes_bangumi_source",
+    "idx_resource_items_title",
+    "idx_retry_state_retry_at",
+  ]) {
+    assert.equal(indexes.has(indexName), true, `${indexName} index should exist`);
+  }
 });
 
 test("initDb migrates legacy rows into normalized tables idempotently", () => {
@@ -370,7 +397,7 @@ test("initDb migrates legacy rows into normalized tables idempotently", () => {
 
   assert.deepEqual(sqlite.prepare(`
     SELECT bangumi_id, source, source_aid, source_ep_start, source_ep_end,
-      display_ep_offset, score, matched_bg_name, matched_resource_name, matched_at
+      display_ep_offset, score, matched_subject_title, matched_resource_title, matched_at
     FROM resource_mappings
     WHERE bangumi_id = ? AND source = ?
   `).get(MIGRATION_SUBJECT_ID, MIGRATION_SOURCE), {
@@ -381,8 +408,8 @@ test("initDb migrates legacy rows into normalized tables idempotently", () => {
     source_ep_end: 13,
     display_ep_offset: 0,
     score: 0.93,
-    matched_bg_name: "迁移中文名",
-    matched_resource_name: "迁移资源站标题",
+    matched_subject_title: "迁移中文名",
+    matched_resource_title: "迁移资源站标题",
     matched_at: "2026-06-03 03:00:00",
   });
 

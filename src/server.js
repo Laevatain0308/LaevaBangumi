@@ -50,10 +50,10 @@ export function createServer() {
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     const tag = typeof req.query.tag === "string" ? req.query.tag.trim() : "";
     if (q && tag) {
-      return res.status(400).json(errorEnvelope([], { updatedAt: ts(), message: "q 和 tag 不能同时使用", meta: { total: 0 } }));
+      return res.status(400).json(errorEnvelope([], { updatedAt: ts(), message: "q 和 tag 不能同时使用", errorCode: "invalid_query", meta: { total: 0 } }));
     }
     if (!tag && (!q || q.length < 2)) {
-      return res.status(400).json(errorEnvelope([], { updatedAt: ts(), message: "关键词至少需要 2 个字符", meta: { total: 0 } }));
+      return res.status(400).json(errorEnvelope([], { updatedAt: ts(), message: "关键词至少需要 2 个字符", errorCode: "invalid_query", meta: { total: 0 } }));
     }
     try {
       log("api", "search requested", tag ? { tag } : { q });
@@ -77,11 +77,11 @@ export function createServer() {
   // ── /api/detail ────────────────────────────────────────
   app.get("/api/detail", async (req, res) => {
     const id = parseInt(req.query.id, 10);
-    if (!id) return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "缺少 id 参数" }));
+    if (!id) return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "缺少 id 参数", errorCode: "invalid_query" }));
     try {
       log("api", "detail requested", { id });
       const result = await animeService.getAnimeDetail(id);
-      if (!result) return res.status(404).json(errorEnvelope(null, { updatedAt: ts(), message: "番剧不存在" }));
+      if (!result) return res.status(404).json(errorEnvelope(null, { updatedAt: ts(), message: "番剧不存在", errorCode: "subject_not_found" }));
       res.json(envelope(result.data, {
         updatedAt: ts(),
         meta: {
@@ -102,12 +102,12 @@ export function createServer() {
     const ch = parseInt(req.query.ch, 10);
     const ep = parseInt(req.query.ep, 10);
     if (!id || !ch || !ep || ep < 1 || ch < 1) {
-      return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "缺少 id / ch / ep 参数" }));
+      return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "缺少 id / ch / ep 参数", errorCode: "invalid_query" }));
     }
     try {
       log("api", "play requested", { id, ch, ep });
       const result = await animeService.getPlayUrl(id, ch, ep);
-      if (!result) return res.status(404).json(errorEnvelope(null, { updatedAt: ts(), message: "剧集不存在或无播放地址" }));
+      if (!result) return res.status(404).json(errorEnvelope(null, { updatedAt: ts(), message: "剧集不存在或无播放地址", errorCode: "episode_not_found" }));
       res.json(envelope(result, { updatedAt: ts(), meta: { freshness: "cache" } }));
     } catch (err) {
       error("api", "/api/play error", err);
