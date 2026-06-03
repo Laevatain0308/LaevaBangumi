@@ -228,6 +228,11 @@ test("initDb creates the normalized schema tables", () => {
   const mappingColumns = new Set(sqlite.prepare("PRAGMA table_info(resource_mappings)").all().map((row) => row.name));
   assert.equal(mappingColumns.has("status"), true, "resource_mappings.status column should exist");
   assert.equal(mappingColumns.has("note"), true, "resource_mappings.note column should exist");
+
+  const syncColumns = new Set(sqlite.prepare("PRAGMA table_info(sync_state)").all().map((row) => row.name));
+  assert.equal(syncColumns.has("status"), true, "sync_state.status column should exist");
+  assert.equal(syncColumns.has("last_started_at"), true, "sync_state.last_started_at column should exist");
+  assert.equal(syncColumns.has("last_error"), true, "sync_state.last_error column should exist");
 });
 
 test("initDb migrates legacy rows into normalized tables idempotently", () => {
@@ -365,14 +370,17 @@ test("initDb migrates legacy rows into normalized tables idempotently", () => {
   });
 
   assert.deepEqual(sqlite.prepare(`
-    SELECT source, scope, last_seen_at, last_success_at, updated_at
+    SELECT source, scope, status, last_started_at, last_seen_at, last_success_at, last_error, updated_at
     FROM sync_state
     WHERE source = ? AND scope = ?
   `).get(MIGRATION_SOURCE, MIGRATION_SCOPE), {
     source: MIGRATION_SOURCE,
     scope: MIGRATION_SCOPE,
+    status: "success",
+    last_started_at: null,
     last_seen_at: "2026-06-03 07:00:00",
     last_success_at: "2026-06-03 07:10:00",
+    last_error: null,
     updated_at: "2026-06-03 07:20:00",
   });
 });
@@ -438,12 +446,15 @@ test("initDb does not overwrite existing normalized state with legacy state", ()
   });
 
   assert.deepEqual(sqlite.prepare(`
-    SELECT last_seen_at, last_success_at, updated_at
+    SELECT status, last_started_at, last_seen_at, last_success_at, last_error, updated_at
     FROM sync_state
     WHERE source = ? AND scope = ?
   `).get(MIGRATION_SOURCE, MIGRATION_SCOPE), {
+    status: "success",
+    last_started_at: null,
     last_seen_at: "2026-06-03 09:30:00",
     last_success_at: "2026-06-03 09:40:00",
+    last_error: null,
     updated_at: "2026-06-03 09:50:00",
   });
 });

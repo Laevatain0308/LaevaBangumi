@@ -386,8 +386,11 @@ export function initDb() {
     CREATE TABLE IF NOT EXISTS sync_state (
       source TEXT NOT NULL,
       scope TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'success',
+      last_started_at TEXT,
       last_seen_at TEXT,
       last_success_at TEXT,
+      last_error TEXT,
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (source, scope)
     );
@@ -424,7 +427,15 @@ export function initDb() {
   addColumnIfMissing("retry_state", "last_error", "TEXT");
   addColumnIfMissing("resource_mappings", "status", "TEXT NOT NULL DEFAULT 'matched'");
   addColumnIfMissing("resource_mappings", "note", "TEXT");
+  addColumnIfMissing("sync_state", "status", "TEXT NOT NULL DEFAULT 'success'");
+  addColumnIfMissing("sync_state", "last_started_at", "TEXT");
+  addColumnIfMissing("sync_state", "last_error", "TEXT");
   addColumnIfMissing("resource_mappings", "updated_at", "TEXT");
+  sqlite.exec(`
+    UPDATE sync_state
+    SET status = COALESCE(status, 'success')
+    WHERE status IS NULL;
+  `);
   sqlite.exec(`
     UPDATE resource_mappings
     SET updated_at = COALESCE(updated_at, matched_at, datetime('now'))

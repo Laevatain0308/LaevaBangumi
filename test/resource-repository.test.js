@@ -389,17 +389,23 @@ test("resource repository upserts normalized sync state rows", () => {
     scope,
     lastSeenAt: "2026-06-03 02:00:00",
     lastSuccessAt: "2026-06-03 02:10:00",
+    status: "success",
+    lastStartedAt: "2026-06-03 02:05:00",
+    lastError: null,
   });
 
   assert.deepEqual(sqlite.prepare(`
-    SELECT source, scope, last_seen_at, last_success_at
+    SELECT source, scope, status, last_started_at, last_seen_at, last_success_at, last_error
     FROM sync_state
     WHERE source = ? AND scope = ?
   `).get(source, scope), {
     source,
     scope,
+    status: "success",
+    last_started_at: "2026-06-03 02:05:00",
     last_seen_at: "2026-06-03 02:00:00",
     last_success_at: "2026-06-03 02:10:00",
+    last_error: null,
   });
 });
 

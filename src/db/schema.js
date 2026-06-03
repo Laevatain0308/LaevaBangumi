@@ -218,8 +218,11 @@ export const resourceMappings = sqliteTable("resource_mappings", {
 export const syncState = sqliteTable("sync_state", {
   source: text("source").notNull(),
   scope: text("scope").notNull(),
+  status: text("status").notNull().default("success"),
+  lastStartedAt: text("last_started_at"),
   lastSeenAt: text("last_seen_at"),
   lastSuccessAt: text("last_success_at"),
+  lastError: text("last_error"),
   updatedAt: text("updated_at").default("(datetime('now'))").notNull(),
 }, (table) => ({
   pk: uniqueIndex("idx_sync_state_unique").on(table.source, table.scope),

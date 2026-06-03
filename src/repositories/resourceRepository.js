@@ -147,19 +147,30 @@ export function upsertResourceSyncState({
   scope,
   lastSeenAt,
   lastSuccessAt = null,
+  status = "success",
+  lastStartedAt = null,
+  lastError = null,
 }) {
   if (!source) throw new Error("resource sync state write requires source");
   if (!scope) throw new Error("resource sync state write requires scope");
   if (!lastSeenAt) throw new Error("resource sync state write requires lastSeenAt");
 
   sqlite.prepare(`
-    INSERT INTO sync_state (source, scope, last_seen_at, last_success_at, updated_at)
-    VALUES (@source, @scope, @lastSeenAt, COALESCE(@lastSuccessAt, datetime('now')), datetime('now'))
+    INSERT INTO sync_state (
+      source, scope, status, last_started_at, last_seen_at, last_success_at, last_error, updated_at
+    )
+    VALUES (
+      @source, @scope, @status, @lastStartedAt, @lastSeenAt,
+      COALESCE(@lastSuccessAt, datetime('now')), @lastError, datetime('now')
+    )
     ON CONFLICT(source, scope) DO UPDATE SET
+      status = excluded.status,
+      last_started_at = excluded.last_started_at,
       last_seen_at = excluded.last_seen_at,
       last_success_at = excluded.last_success_at,
+      last_error = excluded.last_error,
       updated_at = excluded.updated_at
-  `).run({ source, scope, lastSeenAt, lastSuccessAt });
+  `).run({ source, scope, lastSeenAt, lastSuccessAt, status, lastStartedAt, lastError });
 }
 
 export function upsertResourceEpisode({
