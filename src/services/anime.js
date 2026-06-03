@@ -29,6 +29,12 @@ export {
 } from "./playService.js";
 
 export {
+  enqueueMetadataRefresh,
+  refreshSubjectMetadata,
+  registerMetadataRefreshJob,
+} from "./metadataRefreshService.js";
+
+export {
   getCalendarView,
   syncCalendar,
 } from "./calendarService.js";

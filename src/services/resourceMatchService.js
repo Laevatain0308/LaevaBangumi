@@ -35,8 +35,8 @@ import {
   listAnimeFacades,
   titleNamesForAnime,
   upsertAnime,
-  enrichFromSubject,
 } from "./subjectSyncService.js";
+import { enqueueMetadataRefresh } from "./metadataRefreshService.js";
 import { error, log, warn } from "../lib/logger.js";
 
 export { refreshEpisodesForAnime } from "./episodeRefreshService.js";
@@ -124,13 +124,13 @@ export function getMap(animeId, source) {
   return {
     animeId: normalized.bangumi_id,
     source: normalized.source,
-    cstationId: normalized.source_aid,
+    sourceAid: normalized.source_aid,
     sourceEpStart: normalized.source_ep_start,
     sourceEpEnd: normalized.source_ep_end,
     displayEpOffset: normalized.display_ep_offset,
     score: normalized.score,
     matchedBgName: normalized.matched_bg_name,
-    matchedCsName: normalized.matched_resource_name,
+    matchedResourceName: normalized.matched_resource_name,
     matchedAt: normalized.matched_at,
   };
 }
@@ -141,7 +141,7 @@ function getAutoExclusiveSourceOwner(source, sourceAid, animeId) {
   return {
     animeId: normalizedOwner.bangumi_id,
     source: normalizedOwner.source,
-    cstationId: normalizedOwner.source_aid,
+    sourceAid: normalizedOwner.source_aid,
   };
 }
 
@@ -207,8 +207,8 @@ export async function ensureMappingForAnime(animeId, { source, refresh = false }
 
   const existing = getMap(animeId, source);
   if (existing && !refresh) {
-    log("match", "mapping exists", { animeId, source, cstationId: existing.cstationId });
-    return { animeId, matched: true, cstationId: existing.cstationId, reason: "already-mapped" };
+    log("match", "mapping exists", { animeId, source, sourceAid: existing.sourceAid });
+    return { animeId, matched: true, sourceAid: existing.sourceAid, reason: "already-mapped" };
   }
 
   const manualBlock = getManualBlockingState(animeId, source);
@@ -235,7 +235,7 @@ export async function ensureMappingForAnime(animeId, { source, refresh = false }
       warn("match", "source id already mapped by another Bangumi subject", {
         animeId,
         source,
-        cstationId: top.video.id,
+        sourceAid: top.video.id,
         ownerAnimeId: sourceOwner.animeId,
         retryCount: MAX_RETRIES,
       });
@@ -258,7 +258,7 @@ export async function ensureMappingForAnime(animeId, { source, refresh = false }
     warn("match", "source id already mapped by another Bangumi subject", {
       animeId,
       source,
-      cstationId: best.video.id,
+      sourceAid: best.video.id,
       ownerAnimeId: sourceOwner.animeId,
       retryCount: MAX_RETRIES,
     });
@@ -272,25 +272,19 @@ export async function ensureMappingForAnime(animeId, { source, refresh = false }
     animeId,
     title: a.nameCn || a.name,
     source,
-    cstationId: best.video.id,
+    sourceAid: best.video.id,
     score: Number(best.score.toFixed(3)),
     bgTitle: best.matchedName,
     sourceTitle: best.matchedSourceName || best.video.name,
   });
-  return { animeId, matched: true, cstationId: best.video.id, score: best.score, matchedName: best.matchedName };
+  return { animeId, matched: true, sourceAid: best.video.id, score: best.score, matchedName: best.matchedName };
 }
 
 export async function matchAndPersist(item, weekday) {
   const a = await upsertAnime(item, weekday);
   if (!a) return { animeId: item.id, matched: false, reason: "non-anime" };
 
-  if (!a.detailFetchedAt) {
-    try {
-      await enrichFromSubject(item.id, weekday);
-    } catch (err) {
-      console.error(`enrich subject ${item.id} failed:`, err.message);
-    }
-  }
+  const queuedMetadata = !a.detailFetchedAt && enqueueMetadataRefresh(item.id, { weekday });
 
   let lastMapping = null;
   for (const source of getEnabledSourceKeys()) {
@@ -298,7 +292,10 @@ export async function matchAndPersist(item, weekday) {
     lastMapping = mapping;
     if (mapping.matched) await refreshEpisodesForAnime(item.id, { source });
   }
-  return lastMapping || { animeId: item.id, matched: false, reason: "no-source" };
+  return {
+    ...(lastMapping || { animeId: item.id, matched: false, reason: "no-source" }),
+    queuedMetadata,
+  };
 }
 
 export async function batchMatch({ refreshEpisodes = true, includeCoolingDown = false, sourceKeys: explicitSourceKeys = null, animeIds = null } = {}) {

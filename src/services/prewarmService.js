@@ -147,12 +147,12 @@ export async function prewarmAnime({
         }
 
         const mapping = existing
-          ? { animeId: animeRow.id, matched: true, cstationId: existing.cstationId, reason: "already-mapped" }
+          ? { animeId: animeRow.id, matched: true, sourceAid: existing.sourceAid, reason: "already-mapped" }
           : await ensureMapping(animeRow.id, { source });
 
         sourceItem.mapping = mapping.matched ? "matched" : "skipped";
         sourceItem.reason = mapping.reason || "";
-        if (mapping.cstationId) sourceItem.cstationId = mapping.cstationId;
+        if (mapping.sourceAid) sourceItem.sourceAid = mapping.sourceAid;
 
         if (!mapping.matched) {
           stats.skipped++;
@@ -169,7 +169,7 @@ export async function prewarmAnime({
         const refresh = await refreshEpisodeList(animeRow.id, { source });
         sourceItem.episodes = refresh.refreshed ? "refreshed" : "skipped";
         sourceItem.episodeReason = refresh.reason || "";
-        if (refresh.cstationId) sourceItem.cstationId = refresh.cstationId;
+        if (refresh.sourceAid) sourceItem.sourceAid = refresh.sourceAid;
         if (refresh.epCount != null) sourceItem.epCount = refresh.epCount;
         if (refresh.refreshed) {
           stats.refreshed++;

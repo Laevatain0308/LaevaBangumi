@@ -3,13 +3,14 @@ import { normalizeBangumiCalendar } from "../normalizers/bangumiCalendarNormaliz
 import {
   clearStaleCalendarSubjects,
   listCalendarSubjectRows,
-  listSubjectTags,
   markSubjectCalendarSynced,
 } from "../repositories/subjectRepository.js";
-import { listLatestEpisodeStatsBySubject } from "../repositories/resourceRepository.js";
+import { listSubjectTags } from "../repositories/tagRepository.js";
+import { listLatestEpisodeStatsBySubject } from "../repositories/episodeRepository.js";
 import { formatSubjectSearchDto } from "../dto/subjectDto.js";
 import { proxyCover } from "./animeShared.js";
-import { upsertAnime, enrichFromSubject } from "./subjectSyncService.js";
+import { upsertAnime } from "./subjectSyncService.js";
+import { enqueueMetadataRefresh } from "./metadataRefreshService.js";
 import {
   enqueueEpisodeRefresh,
   ensureMappingForAnime,
@@ -58,7 +59,7 @@ function groupByWeekday(list, epMap) {
 export async function syncCalendar({ enqueueEpisodes = true, matchSources = true, calendar: calendarOverride = null } = {}) {
   log("calendar", "sync started", { enqueueEpisodes, matchSources });
   const calendar = normalizeBangumiCalendar(calendarOverride ?? await bangumi.getCalendar());
-  const stats = { upserted: 0, mapped: 0, queuedEpisodes: 0, staleCleared: 0, errors: 0 };
+  const stats = { upserted: 0, mapped: 0, queuedMetadata: 0, queuedEpisodes: 0, staleCleared: 0, errors: 0 };
   const activeAnimeIds = new Set();
 
   for (const day of calendar) {
@@ -71,12 +72,8 @@ export async function syncCalendar({ enqueueEpisodes = true, matchSources = true
         activeAnimeIds.add(item.id);
         stats.upserted++;
 
-        if (!a.detailFetchedAt) {
-          try {
-            await enrichFromSubject(item.id, day.weekday?.id);
-          } catch (err) {
-            error("calendar", `enrich failed for ${item.id}`, err);
-          }
+        if (!a.detailFetchedAt && enqueueMetadataRefresh(item.id, { weekday: day.weekday?.id })) {
+          stats.queuedMetadata++;
         }
 
         if (matchSources) {

@@ -1,12 +1,13 @@
 import * as bangumi from "../clients/bangumiClient.js";
 import {
-  listSubjectTags,
   searchSubjectsByKeyword,
   searchSubjectsByTag,
 } from "../repositories/subjectRepository.js";
+import { listSubjectTags } from "../repositories/tagRepository.js";
 import { formatSubjectSearchDto } from "../dto/subjectDto.js";
 import { proxyCover } from "./animeShared.js";
-import { upsertAnime, enrichFromSubject } from "./subjectSyncService.js";
+import { upsertAnime } from "./subjectSyncService.js";
+import { enqueueMetadataRefresh } from "./metadataRefreshService.js";
 import { ensureMappingForAnime, enqueueEpisodeRefresh, getEnabledSourceKeys } from "./resourceMatchService.js";
 import { log, error } from "../lib/logger.js";
 
@@ -44,10 +45,10 @@ export async function enrichFromBangumiSearch(keyword) {
     subjects = bgResult?.data || [];
   } catch (err) {
     error("search", "bangumi search failed", err);
-    return { upserted: 0, matched: 0, queuedEpisodes: 0, errors: 1 };
+    return { upserted: 0, queuedMetadata: 0, matched: 0, queuedEpisodes: 0, errors: 1 };
   }
 
-  const stats = { upserted: 0, matched: 0, queuedEpisodes: 0, errors: 0 };
+  const stats = { upserted: 0, queuedMetadata: 0, matched: 0, queuedEpisodes: 0, errors: 0 };
   log("search", "bangumi search returned", { keyword, total: subjects.length });
   for (const item of subjects) {
     try {
@@ -55,13 +56,7 @@ export async function enrichFromBangumiSearch(keyword) {
       if (!a) continue;
       stats.upserted++;
 
-      if (!a.detailFetchedAt) {
-        try {
-          await enrichFromSubject(item.id);
-        } catch (err) {
-          error("search", `subject enrich failed for ${item.id}`, err);
-        }
-      }
+      if (!a.detailFetchedAt && enqueueMetadataRefresh(item.id)) stats.queuedMetadata++;
 
       for (const source of getEnabledSourceKeys()) {
         const mapping = await ensureMappingForAnime(item.id, { source });

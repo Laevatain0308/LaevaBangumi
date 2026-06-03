@@ -32,7 +32,7 @@ prewarmAnime({
     for (const item of stats.items) {
       const sourceSummary = item.sources
         .map((sourceItem) => {
-          const aid = sourceItem.cstationId ? `#${sourceItem.cstationId}` : "";
+          const aid = sourceItem.sourceAid ? `#${sourceItem.sourceAid}` : "";
           const ep = sourceItem.epCount != null ? ` eps=${sourceItem.epCount}` : "";
           const reason = sourceItem.reason ? ` reason=${sourceItem.reason}` : "";
           return `${sourceItem.source}:${sourceItem.mapping}/${sourceItem.episodes}${aid}${ep}${reason}`;

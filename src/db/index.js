@@ -136,11 +136,11 @@ function migrateLegacyStateRows() {
 
   if (tableExists("source_sync_state")) {
     sqlite.exec(`
-      INSERT INTO sync_state (source, scope, last_seen_at, last_success_at, updated_at)
-      SELECT source, category, last_seen_at, last_success_at, updated_at
+      INSERT INTO sync_state (key, status, last_seen_at, last_success_at, updated_at)
+      SELECT 'resource:' || source || ':' || category, 'success', last_seen_at, last_success_at, updated_at
       FROM source_sync_state
       WHERE true
-      ON CONFLICT(source, scope) DO NOTHING;
+      ON CONFLICT(key) DO NOTHING;
     `);
   }
 }
@@ -149,6 +149,7 @@ function dropLegacyRuntimeTables() {
   sqlite.exec(`
     DROP TABLE IF EXISTS episodes_legacy_before_subjects;
     DROP TABLE IF EXISTS episodes_legacy_before_terminal;
+    DROP TABLE IF EXISTS sync_state_legacy_before_key;
     DROP TABLE IF EXISTS bangumi_cstation_map;
     DROP TABLE IF EXISTS cstation_catalog;
     DROP TABLE IF EXISTS match_retry_state;
@@ -156,6 +157,67 @@ function dropLegacyRuntimeTables() {
     DROP TABLE IF EXISTS manual_match_state;
     DROP TABLE IF EXISTS source_sync_state;
     DROP TABLE IF EXISTS anime;
+  `);
+}
+
+function createSyncStateTable() {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS sync_state (
+      key TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'success',
+      last_started_at TEXT,
+      last_seen_at TEXT,
+      last_success_at TEXT,
+      last_error TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+function migrateSyncStateTableIfNeeded() {
+  const columns = tableColumns("sync_state");
+  const isTerminal =
+    columns.has("key")
+    && !columns.has("source")
+    && !columns.has("scope");
+
+  if (columns.size === 0 || isTerminal) {
+    createSyncStateTable();
+  } else {
+    const legacyName = "sync_state_legacy_before_key";
+    if (!tableExists(legacyName)) {
+      sqlite.exec(`ALTER TABLE sync_state RENAME TO ${legacyName};`);
+    } else {
+      sqlite.exec("DROP TABLE sync_state;");
+    }
+    createSyncStateTable();
+  }
+
+  const legacyName = "sync_state_legacy_before_key";
+  if (!tableExists(legacyName)) return;
+  const legacyColumns = tableColumns(legacyName);
+  const keyExpr = legacyColumns.has("key")
+    ? "key"
+    : "'resource:' || source || ':' || scope";
+  const statusExpr = legacyColumns.has("status") ? "status" : "'success'";
+  const lastStartedExpr = legacyColumns.has("last_started_at") ? "last_started_at" : "NULL";
+  const lastErrorExpr = legacyColumns.has("last_error") ? "last_error" : "NULL";
+
+  sqlite.exec(`
+    INSERT INTO sync_state (
+      key, status, last_started_at, last_seen_at, last_success_at, last_error, updated_at
+    )
+    SELECT
+      ${keyExpr},
+      COALESCE(${statusExpr}, 'success'),
+      ${lastStartedExpr},
+      last_seen_at,
+      last_success_at,
+      ${lastErrorExpr},
+      COALESCE(updated_at, datetime('now'))
+    FROM ${legacyName}
+    WHERE ${keyExpr} IS NOT NULL
+    ON CONFLICT(key) DO NOTHING;
   `);
 }
 
@@ -472,18 +534,6 @@ export function initDb() {
       PRIMARY KEY (bangumi_id, source)
     );
 
-    CREATE TABLE IF NOT EXISTS sync_state (
-      source TEXT NOT NULL,
-      scope TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'success',
-      last_started_at TEXT,
-      last_seen_at TEXT,
-      last_success_at TEXT,
-      last_error TEXT,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      PRIMARY KEY (source, scope)
-    );
-
     CREATE TABLE IF NOT EXISTS retry_state (
       bangumi_id INTEGER NOT NULL REFERENCES subjects(bangumi_id) ON DELETE CASCADE,
       source TEXT NOT NULL,
@@ -515,15 +565,7 @@ export function initDb() {
   addColumnIfMissing("retry_state", "last_error", "TEXT");
   addColumnIfMissing("resource_mappings", "status", "TEXT NOT NULL DEFAULT 'matched'");
   addColumnIfMissing("resource_mappings", "note", "TEXT");
-  addColumnIfMissing("sync_state", "status", "TEXT NOT NULL DEFAULT 'success'");
-  addColumnIfMissing("sync_state", "last_started_at", "TEXT");
-  addColumnIfMissing("sync_state", "last_error", "TEXT");
   addColumnIfMissing("resource_mappings", "updated_at", "TEXT");
-  sqlite.exec(`
-    UPDATE sync_state
-    SET status = COALESCE(status, 'success')
-    WHERE status IS NULL;
-  `);
   sqlite.exec(`
     UPDATE resource_mappings
     SET updated_at = COALESCE(updated_at, matched_at, datetime('now'))
@@ -552,6 +594,7 @@ export function initDb() {
   migrateLegacyResourceMappings();
   dedupeResourceMappingsAndEnsureIndex();
   migrateEpisodesTableIfNeeded();
+  migrateSyncStateTableIfNeeded();
   migrateLegacyStateRows();
   dropLegacyRuntimeTables();
 }

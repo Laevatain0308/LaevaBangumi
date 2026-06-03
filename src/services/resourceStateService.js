@@ -1,6 +1,5 @@
 import { getEnabledSources } from "../lib/cstationConfig.js";
 import {
-  listEpisodeSubjectSourceRows,
   listManualResourceStates,
   listManualResourceStatesForSubject,
   listResourceMappings,
@@ -8,6 +7,7 @@ import {
   listRetryStateForSubject,
   listRetryStatesByKind,
 } from "../repositories/resourceRepository.js";
+import { listEpisodeSubjectSourceRows } from "../repositories/episodeRepository.js";
 import {
   MANUAL_MATCH_BLOCKING_STATUSES,
   MANUAL_NO_DATA_STATUSES,

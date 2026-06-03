@@ -6,6 +6,7 @@ const MIGRATION_SUBJECT_ID = 990547920;
 const MIGRATION_SOURCE = "ffzy";
 const MIGRATION_SOURCE_AID = 990547920;
 const MIGRATION_SCOPE = "migration_scope_990547920";
+const MIGRATION_SYNC_KEY = `resource:${MIGRATION_SOURCE}:${MIGRATION_SCOPE}`;
 const MIGRATION_TAGS = ["迁移Tag", "Legacy String Tag"];
 
 function cleanupMigrationFixture() {
@@ -19,7 +20,7 @@ function cleanupMigrationFixture() {
        OR (source = '${MIGRATION_SOURCE}' AND source_aid = ${MIGRATION_SOURCE_AID});
     DELETE FROM retry_state WHERE bangumi_id = ${MIGRATION_SUBJECT_ID};
     DELETE FROM manual_resource_state WHERE bangumi_id = ${MIGRATION_SUBJECT_ID};
-    DELETE FROM sync_state WHERE source = '${MIGRATION_SOURCE}' AND scope = '${MIGRATION_SCOPE}';
+    DELETE FROM sync_state WHERE key = '${MIGRATION_SYNC_KEY}';
     DELETE FROM subject_tags WHERE bangumi_id = ${MIGRATION_SUBJECT_ID};
     DELETE FROM subject_aliases WHERE bangumi_id = ${MIGRATION_SUBJECT_ID};
     DELETE FROM subjects WHERE bangumi_id = ${MIGRATION_SUBJECT_ID};
@@ -251,7 +252,7 @@ function seedLegacyRowsThenClearNormalizedRows() {
     DELETE FROM resource_mappings WHERE bangumi_id = ${MIGRATION_SUBJECT_ID};
     DELETE FROM retry_state WHERE bangumi_id = ${MIGRATION_SUBJECT_ID};
     DELETE FROM manual_resource_state WHERE bangumi_id = ${MIGRATION_SUBJECT_ID};
-    DELETE FROM sync_state WHERE source = '${MIGRATION_SOURCE}' AND scope = '${MIGRATION_SCOPE}';
+    DELETE FROM sync_state WHERE key = '${MIGRATION_SYNC_KEY}';
     DELETE FROM subject_tags WHERE bangumi_id = ${MIGRATION_SUBJECT_ID};
     DELETE FROM subject_aliases WHERE bangumi_id = ${MIGRATION_SUBJECT_ID};
     DELETE FROM resource_items
@@ -306,6 +307,9 @@ test("initDb creates the normalized schema tables", () => {
   assert.equal(mappingColumns.has("note"), true, "resource_mappings.note column should exist");
 
   const syncColumns = new Set(sqlite.prepare("PRAGMA table_info(sync_state)").all().map((row) => row.name));
+  assert.equal(syncColumns.has("key"), true, "sync_state.key column should exist");
+  assert.equal(syncColumns.has("source"), false, "sync_state.source column should not exist");
+  assert.equal(syncColumns.has("scope"), false, "sync_state.scope column should not exist");
   assert.equal(syncColumns.has("status"), true, "sync_state.status column should exist");
   assert.equal(syncColumns.has("last_started_at"), true, "sync_state.last_started_at column should exist");
   assert.equal(syncColumns.has("last_error"), true, "sync_state.last_error column should exist");
@@ -446,12 +450,11 @@ test("initDb migrates legacy rows into normalized tables idempotently", () => {
   });
 
   assert.deepEqual(sqlite.prepare(`
-    SELECT source, scope, status, last_started_at, last_seen_at, last_success_at, last_error, updated_at
+    SELECT key, status, last_started_at, last_seen_at, last_success_at, last_error, updated_at
     FROM sync_state
-    WHERE source = ? AND scope = ?
-  `).get(MIGRATION_SOURCE, MIGRATION_SCOPE), {
-    source: MIGRATION_SOURCE,
-    scope: MIGRATION_SCOPE,
+    WHERE key = ?
+  `).get(MIGRATION_SYNC_KEY), {
+    key: MIGRATION_SYNC_KEY,
     status: "success",
     last_started_at: null,
     last_seen_at: "2026-06-03 07:00:00",
@@ -489,10 +492,9 @@ test("initDb does not overwrite existing normalized state with legacy state", ()
     );
 
     INSERT INTO sync_state (
-      source, scope, last_seen_at, last_success_at, updated_at
+      key, last_seen_at, last_success_at, updated_at
     ) VALUES (
-      '${MIGRATION_SOURCE}',
-      '${MIGRATION_SCOPE}',
+      '${MIGRATION_SYNC_KEY}',
       '2026-06-03 09:30:00',
       '2026-06-03 09:40:00',
       '2026-06-03 09:50:00'
@@ -524,8 +526,8 @@ test("initDb does not overwrite existing normalized state with legacy state", ()
   assert.deepEqual(sqlite.prepare(`
     SELECT status, last_started_at, last_seen_at, last_success_at, last_error, updated_at
     FROM sync_state
-    WHERE source = ? AND scope = ?
-  `).get(MIGRATION_SOURCE, MIGRATION_SCOPE), {
+    WHERE key = ?
+  `).get(MIGRATION_SYNC_KEY), {
     status: "success",
     last_started_at: null,
     last_seen_at: "2026-06-03 09:30:00",

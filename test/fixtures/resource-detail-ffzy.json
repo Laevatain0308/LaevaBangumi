@@ -1,0 +1,22 @@
+{
+  "id": 1001,
+  "name": "资源站标题",
+  "subname": "副标题",
+  "type": "TV",
+  "year": "2026",
+  "note": "更新至第04集",
+  "last": "2026-06-03 02:00:00",
+  "episodes": [
+    {
+      "epIndex": "1",
+      "sourceEpIndex": "3",
+      "epName": "第03集",
+      "videoUrl": "https://example.invalid/3.m3u8"
+    },
+    {
+      "index": 2,
+      "name": "第04集",
+      "url": "https://example.invalid/4.m3u8"
+    }
+  ]
+}

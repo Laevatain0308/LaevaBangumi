@@ -5,6 +5,7 @@ import { createServer } from "../src/server.js";
 import { initDb, sqlite } from "../src/db/index.js";
 
 const CONTRACT_SUBJECT_ID = 990547888;
+const EPISODE_UPDATE_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1000;
 
 function getJson(server, path) {
   return new Promise((resolve, reject) => {
@@ -260,6 +261,49 @@ test("updates read normalized resource mappings and items", async () => {
     assert.deepEqual(item.tags, [{ name: "原创", count: 10, totalCount: 20 }]);
     assert.equal(Object.hasOwn(item, "sourceUpdates"), false);
     assert.equal(Object.hasOwn(item, "bangumiId"), false);
+  } finally {
+    server.close();
+  }
+});
+
+test("updates use episode update time when it is newer than catalog time", async () => {
+  seedContractSubject();
+  sqlite.exec(`
+    DELETE FROM episodes WHERE bangumi_id = ${EPISODE_UPDATE_SUBJECT_ID};
+    DELETE FROM resource_mappings WHERE bangumi_id = ${EPISODE_UPDATE_SUBJECT_ID};
+    DELETE FROM resource_items WHERE source = 'ffzy' AND source_aid = 124;
+    DELETE FROM subjects WHERE bangumi_id = ${EPISODE_UPDATE_SUBJECT_ID};
+
+    INSERT INTO subjects (
+      bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
+      eps, total_episodes, rating_distribution_json, metadata_fetched_at
+    ) VALUES (
+      ${EPISODE_UPDATE_SUBJECT_ID}, 'Episode update raw', '剧集更新时间标题',
+      'episode update summary', 'TV', '2026-04-02', 4, 12, 12, '[]', datetime('now')
+    );
+    INSERT INTO resource_items (source, source_aid, title, latest_text, detail_fetched_at)
+      VALUES ('ffzy', 124, '剧集更新时间资源站', '2026-05-01 00:00:00', datetime('now'))
+      ON CONFLICT(source, source_aid) DO UPDATE SET
+        title = excluded.title,
+        latest_text = excluded.latest_text,
+        detail_fetched_at = excluded.detail_fetched_at;
+    INSERT INTO resource_mappings (bangumi_id, source, source_aid, score, matched_at)
+      VALUES (${EPISODE_UPDATE_SUBJECT_ID}, 'ffzy', 124, 0.91, datetime('now'))
+      ON CONFLICT(bangumi_id, source) DO UPDATE SET source_aid = excluded.source_aid;
+    INSERT INTO episodes (bangumi_id, source, source_aid, ep_index, source_ep_index, title, raw_video_url, updated_at)
+      VALUES (${EPISODE_UPDATE_SUBJECT_ID}, 'ffzy', 124, 7, 7, '第07集', 'https://example.invalid/7.m3u8', '2026-06-03 11:00:00')
+      ON CONFLICT(bangumi_id, source, source_aid, ep_index) DO UPDATE SET updated_at = excluded.updated_at;
+  `);
+
+  const server = createServer().listen(0);
+  try {
+    const response = await getJson(server, "/api/updates?days=1&limit=10&today=2026-06-03");
+    assert.equal(response.status, 200);
+    const item = response.body.data.find((row) => row.id === EPISODE_UPDATE_SUBJECT_ID);
+    assert.ok(item);
+    assert.equal(item.latestEp, 7);
+    assert.equal(item.latestEpisode, "更新至第07集");
+    assert.equal(item.updatedAt, "2026-06-03T03:00:00.000Z");
   } finally {
     server.close();
   }

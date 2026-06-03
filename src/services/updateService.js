@@ -1,4 +1,4 @@
-import { listSubjectTags } from "../repositories/subjectRepository.js";
+import { listSubjectTags } from "../repositories/tagRepository.js";
 import { listUpdateCandidateRows } from "../repositories/resourceRepository.js";
 import { formatSubjectSearchDto } from "../dto/subjectDto.js";
 import {
@@ -23,7 +23,9 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
   for (const row of rows) {
     if (!enabledSourcesSet.has(row.source)) continue;
     const sourceUpdatedMs = parseTimestamp(row.sourceUpdatedAt);
-    if (sourceUpdatedMs == null || sourceUpdatedMs < cutoffMs || sourceUpdatedMs > nowMs) continue;
+    const episodeUpdatedMs = parseTimestamp(row.episodeUpdatedAt);
+    const primaryUpdatedMs = Math.max(sourceUpdatedMs ?? -Infinity, episodeUpdatedMs ?? -Infinity);
+    if (!Number.isFinite(primaryUpdatedMs) || primaryUpdatedMs < cutoffMs || primaryUpdatedMs > nowMs) continue;
 
     const isClosedRange = row.sourceEpEnd != null;
     if (isClosedRange) continue;
@@ -32,7 +34,7 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
     const sourceUpdate = {
       source: row.source,
       sourceAid: row.sourceAid,
-      updatedAt: normalizeTimestamp(row.sourceUpdatedAt),
+      updatedAt: new Date(primaryUpdatedMs).toISOString(),
       latestEp: row.latestEp ?? null,
       sourceEpStart: row.sourceEpStart ?? null,
       sourceEpEnd: row.sourceEpEnd ?? null,
@@ -46,8 +48,8 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
 
     const shouldReplace =
       !existing ||
-      sourceUpdatedMs > existingMs ||
-      (sourceUpdatedMs === existingMs && sourceRank < existingRank);
+      primaryUpdatedMs > existingMs ||
+      (primaryUpdatedMs === existingMs && sourceRank < existingRank);
 
     if (shouldReplace) {
       const sourceUpdates = existing?.sourceUpdates ? [...existing.sourceUpdates, sourceUpdate] : [sourceUpdate];

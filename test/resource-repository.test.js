@@ -3,24 +3,26 @@ import assert from "node:assert/strict";
 import { initDb, sqlite } from "../src/db/index.js";
 import {
   deleteManualResourceState,
-  deleteResourceEpisodesForSubjectSource,
   deleteResourceMapping,
   deleteResourceRowsForSubject,
-  deleteStaleResourceEpisodes,
   deleteManualResourceStateByStatus,
   deleteRetryState,
-  findEpisodeRawVideoUrl,
-  listEpisodeChannelRowsForSubject,
   listManualResourceStatesForSubject,
   listResourceMappingsWithEpisodePresenceForSubject,
   listRetryStateForSubject,
   upsertManualResourceState,
-  upsertResourceEpisode,
   upsertResourceItem,
   upsertResourceMapping,
-  upsertResourceSyncState,
   upsertRetryState,
 } from "../src/repositories/resourceRepository.js";
+import {
+  deleteResourceEpisodesForSubjectSource,
+  deleteStaleResourceEpisodes,
+  findEpisodeRawVideoUrl,
+  listEpisodeChannelRowsForSubject,
+  upsertResourceEpisode,
+} from "../src/repositories/episodeRepository.js";
+import { upsertResourceSyncState } from "../src/repositories/syncRepository.js";
 
 const RESOURCE_SUBJECT_ID = 990547891;
 const RESOURCE_STATE_SUBJECT_ID = 990547892;
@@ -378,7 +380,8 @@ test("resource repository upserts normalized sync state rows", () => {
   initDb();
   const source = `${RESOURCE_SOURCE}_sync`;
   const scope = "2";
-  sqlite.prepare("DELETE FROM sync_state WHERE source = ? AND scope = ?").run(source, scope);
+  const key = `resource:${source}:${scope}`;
+  sqlite.prepare("DELETE FROM sync_state WHERE key = ?").run(key);
 
   upsertResourceSyncState({
     source,
@@ -397,12 +400,11 @@ test("resource repository upserts normalized sync state rows", () => {
   });
 
   assert.deepEqual(sqlite.prepare(`
-    SELECT source, scope, status, last_started_at, last_seen_at, last_success_at, last_error
+    SELECT key, status, last_started_at, last_seen_at, last_success_at, last_error
     FROM sync_state
-    WHERE source = ? AND scope = ?
-  `).get(source, scope), {
-    source,
-    scope,
+    WHERE key = ?
+  `).get(key), {
+    key,
     status: "success",
     last_started_at: "2026-06-03 02:05:00",
     last_seen_at: "2026-06-03 02:00:00",

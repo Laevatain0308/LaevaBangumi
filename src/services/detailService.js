@@ -1,11 +1,11 @@
 import {
   findSubjectById,
   listSubjectAliases,
-  listSubjectTags,
 } from "../repositories/subjectRepository.js";
+import { listSubjectTags } from "../repositories/tagRepository.js";
 import {
   listEpisodeChannelRowsForSubject,
-} from "../repositories/resourceRepository.js";
+} from "../repositories/episodeRepository.js";
 import { formatSubjectDetailDto } from "../dto/subjectDto.js";
 import { formatDetailEpisodeDto } from "../dto/resourceDto.js";
 import {
@@ -15,7 +15,7 @@ import {
   isFresh,
   proxyCover,
 } from "./animeShared.js";
-import { enrichFromSubject } from "./subjectSyncService.js";
+import { refreshSubjectMetadata } from "./metadataRefreshService.js";
 import { enabledSourceSet, resourceSourceStatuses } from "./resourceMatchService.js";
 import { error } from "../lib/logger.js";
 
@@ -73,7 +73,7 @@ export async function getAnimeDetail(id) {
   if (normalized) return normalized;
 
   try {
-    await enrichFromSubject(id, undefined, { timeoutMs: DETAIL_SHORT_TIMEOUT_MS });
+    await refreshSubjectMetadata(id, { timeoutMs: DETAIL_SHORT_TIMEOUT_MS });
   } catch (err) {
     error("detail", `initial subject fetch failed for ${id}`, err);
     return null;

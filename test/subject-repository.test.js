@@ -4,11 +4,11 @@ import { initDb, sqlite } from "../src/db/index.js";
 import {
   findSubjectById,
   listSubjectAliases,
-  listSubjectTags,
   searchSubjectsByKeyword,
   searchSubjectsByTag,
   upsertSubjectMetadata,
 } from "../src/repositories/subjectRepository.js";
+import { listSubjectTags } from "../src/repositories/tagRepository.js";
 
 const REPOSITORY_SUBJECT_ID = 990547890;
 

@@ -2,10 +2,12 @@ import * as resourceClient from "../clients/resourceClient.js";
 import { normalizeResourceEpisodes, normalizeResourceItem } from "../normalizers/resourceItemNormalizer.js";
 import {
   deleteRetryState,
-  deleteStaleResourceEpisodes,
-  upsertResourceEpisode,
   upsertRetryState,
 } from "../repositories/resourceRepository.js";
+import {
+  deleteStaleResourceEpisodes,
+  upsertResourceEpisode,
+} from "../repositories/episodeRepository.js";
 import { fromNow, MAX_RETRIES, now, RETRY_DELAYS } from "./animeShared.js";
 import {
   ensureMappingForAnime,
@@ -76,17 +78,17 @@ export async function refreshEpisodesForAnime(animeId, { source } = {}) {
     if (!mapping.matched) return { animeId, refreshed: false, reason: mapping.reason };
     mapped = getMap(animeId, source);
   }
-  await upsertMap(animeId, source, mapped.cstationId, mapped.score, mapped.matchedBgName, mapped.matchedCsName, {
+  await upsertMap(animeId, source, mapped.sourceAid, mapped.score, mapped.matchedBgName, mapped.matchedResourceName, {
     sourceEpStart: mapped.sourceEpStart,
     sourceEpEnd: mapped.sourceEpEnd,
     displayEpOffset: mapped.displayEpOffset,
   });
 
-  const detail = await resourceClient.fetchById(mapped.cstationId, { source });
+  const detail = await resourceClient.fetchById(mapped.sourceAid, { source });
   if (!detail) {
     const retry = getEpisodeFetchRetryState(animeId, source);
     scheduleEpisodeFetchRetry(animeId, source, (retry?.retryCount ?? 0) + 1);
-    warn("episodes", "fetch detail failed", { animeId, source, cstationId: mapped.cstationId });
+    warn("episodes", "fetch detail failed", { animeId, source, sourceAid: mapped.sourceAid });
     return { animeId, refreshed: false, reason: "fetch-detail-failed" };
   }
 
@@ -102,6 +104,6 @@ export async function refreshEpisodesForAnime(animeId, { source } = {}) {
   });
   clearMappingRetry(animeId, source);
   clearEpisodeFetchRetry(animeId, source);
-  log("episodes", "refresh completed", { animeId, source, cstationId: detail.id, epCount: rangedEpisodes.length, sourceEpCount: detail.epCount });
-  return { animeId, refreshed: true, cstationId: detail.id, epCount: rangedEpisodes.length, sourceEpCount: detail.epCount };
+  log("episodes", "refresh completed", { animeId, source, sourceAid: detail.id, epCount: rangedEpisodes.length, sourceEpCount: detail.epCount });
+  return { animeId, refreshed: true, sourceAid: detail.id, epCount: rangedEpisodes.length, sourceEpCount: detail.epCount };
 }

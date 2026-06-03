@@ -5,7 +5,7 @@ import {
   findEpisodeRawVideoUrl,
   listEpisodeChannelRowsForSubject,
   upsertResourceEpisode,
-} from "../src/repositories/resourceRepository.js";
+} from "../src/repositories/episodeRepository.js";
 
 const SUBJECT_ID = 990548101;
 const SOURCE = "normalized_arch_source";

@@ -3,7 +3,7 @@ import { initDb } from "./db/index.js";
 import { db } from "./db/index.js";
 import { subjects } from "./db/schema.js";
 import { createServer } from "./server.js";
-import { syncCalendar, retryPending, enrichFromBangumiSearch, registerAnimeJobs, batchMatch, enqueueEpisodeRefreshesBySourceIds } from "./services/anime.js";
+import { syncCalendar, retryPending, enrichFromBangumiSearch, registerAnimeJobs, registerMetadataRefreshJob, batchMatch, enqueueEpisodeRefreshesBySourceIds } from "./services/anime.js";
 import { onSearchFlush } from "./services/queue.js";
 import { syncCatalogCategory } from "./services/catalog.js";
 import { createTaskCoordinator, RETRY_CRON_EXPRESSION, SYNC_CRON_EXPRESSION } from "./services/scheduler.js";
@@ -19,6 +19,7 @@ log("boot", "Bangumi proxy status", getProxyStatus());
 
 // 队列回调：异步搜索由队列驱动
 registerAnimeJobs();
+registerMetadataRefreshJob();
 onSearchFlush(enrichFromBangumiSearch);
 
 const app = createServer();

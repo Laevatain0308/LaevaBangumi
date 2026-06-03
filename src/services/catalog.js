@@ -1,6 +1,12 @@
 import * as cstation from "../clients/resourceClient.js";
 import { log, error } from "../lib/logger.js";
-import { findResourceSyncState, upsertResourceItem, upsertResourceSyncState } from "../repositories/resourceRepository.js";
+import { upsertResourceItem } from "../repositories/resourceRepository.js";
+import {
+  findResourceSyncState,
+  markResourceSyncFailed,
+  markResourceSyncStarted,
+  markResourceSyncSucceeded,
+} from "../repositories/syncRepository.js";
 import { normalizeResourceItem } from "../normalizers/resourceItemNormalizer.js";
 
 function now() {
@@ -26,51 +32,64 @@ export async function saveCatalog(catalog, { source } = {}) {
   return count;
 }
 
-export async function syncCatalogCategory({ source, t, incremental = true, hydrateDetails = true } = {}) {
+export async function syncCatalogCategory({
+  source,
+  t,
+  incremental = true,
+  hydrateDetails = true,
+  fetchCatalog = cstation.fetchCatalog,
+  fetchCatalogIncremental = cstation.fetchCatalogIncremental,
+} = {}) {
   if (!source) throw new Error("syncCatalogCategory requires source");
   if (!t) throw new Error("syncCatalogCategory requires t");
   log("catalog", "category sync started", { source, category: t, incremental, hydrateDetails });
+  const startedAt = markResourceSyncStarted({ source, scope: t });
   const state = findResourceSyncState({ source, scope: t });
 
-  const shouldIncremental = incremental && state?.lastSeenAt;
-  const result = shouldIncremental
-    ? await cstation.fetchCatalogIncremental({ source, t, sinceLastSeenAt: state.lastSeenAt })
-    : { catalog: await cstation.fetchCatalog({ source, t }), maxLast: null, completed: true, pagesRead: null, pagecount: null };
+  try {
+    const shouldIncremental = incremental && state?.lastSeenAt;
+    const result = shouldIncremental
+      ? await fetchCatalogIncremental({ source, t, sinceLastSeenAt: state.lastSeenAt })
+      : { catalog: await fetchCatalog({ source, t }), maxLast: null, completed: true, pagesRead: null, pagecount: null };
 
-  const catalog = result.catalog || [];
-  const saved = await saveCatalog(catalog, { source });
-  log("catalog", "category page data saved", {
-    source,
-    category: t,
-    mode: shouldIncremental ? "incremental" : "full",
-    fetched: catalog.length,
-    saved,
-    pagesRead: result.pagesRead,
-    pagecount: result.pagecount,
-  });
+    const catalog = result.catalog || [];
+    const saved = await saveCatalog(catalog, { source });
+    log("catalog", "category page data saved", {
+      source,
+      category: t,
+      mode: shouldIncremental ? "incremental" : "full",
+      fetched: catalog.length,
+      saved,
+      pagesRead: result.pagesRead,
+      pagecount: result.pagecount,
+    });
 
-  let hydrated = 0;
-  if (hydrateDetails && shouldIncremental && catalog.length > 0) {
-    hydrated = await hydrateCatalogDetails(catalog.map((item) => item.id), { source });
+    let hydrated = 0;
+    if (hydrateDetails && shouldIncremental && catalog.length > 0) {
+      hydrated = await hydrateCatalogDetails(catalog.map((item) => item.id), { source });
+    }
+
+    const maxLast = result.maxLast || maxLastFromCatalog(catalog) || state?.lastSeenAt || null;
+    markResourceSyncSucceeded({ source, scope: t, lastSeenAt: maxLast, lastStartedAt: startedAt });
+
+    const stats = {
+      source,
+      category: t,
+      mode: shouldIncremental ? "incremental" : "full",
+      fetched: catalog.length,
+      saved,
+      hydrated,
+      changedIds: catalog.map((item) => item.id).filter(Boolean),
+      pagesRead: result.pagesRead,
+      pagecount: result.pagecount,
+      lastSeenAt: maxLast,
+    };
+    log("catalog", "category sync completed", stats);
+    return stats;
+  } catch (err) {
+    markResourceSyncFailed({ source, scope: t, error: err, lastStartedAt: startedAt });
+    throw err;
   }
-
-  const maxLast = result.maxLast || maxLastFromCatalog(catalog) || state?.lastSeenAt || null;
-  if (maxLast) upsertSyncState(source, t, maxLast);
-
-  const stats = {
-    source,
-    category: t,
-    mode: shouldIncremental ? "incremental" : "full",
-    fetched: catalog.length,
-    saved,
-    hydrated,
-    changedIds: catalog.map((item) => item.id).filter(Boolean),
-    pagesRead: result.pagesRead,
-    pagecount: result.pagecount,
-    lastSeenAt: maxLast,
-  };
-  log("catalog", "category sync completed", stats);
-  return stats;
 }
 
 export async function hydrateCatalogDetails(ids, { source } = {}) {
@@ -99,11 +118,6 @@ export async function hydrateCatalogDetails(ids, { source } = {}) {
 
   if (uniqueIds.length > 0) log("catalog", "hydrate details completed", { source, requested: uniqueIds.length, hydrated: count });
   return count;
-}
-
-function upsertSyncState(source, category, lastSeenAt) {
-  const lastSuccessAt = now();
-  upsertResourceSyncState({ source, scope: category, lastSeenAt, lastSuccessAt });
 }
 
 function maxLastFromCatalog(catalog) {

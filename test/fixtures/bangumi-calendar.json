@@ -1,0 +1,33 @@
+[
+  {
+    "weekday": {
+      "en": "Wed",
+      "cn": "星期三",
+      "ja": "水曜日",
+      "id": 3
+    },
+    "items": [
+      {
+        "id": 547888,
+        "type": 2,
+        "name": "Raw Title",
+        "name_cn": "中文标题",
+        "date": "2026-04-01",
+        "platform": "TV"
+      }
+    ]
+  },
+  {
+    "weekday": {
+      "en": "Invalid",
+      "cn": "无效",
+      "ja": "無効",
+      "id": null
+    },
+    "items": [
+      {
+        "name": "Missing ID"
+      }
+    ]
+  }
+]

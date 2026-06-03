@@ -1,4 +1,4 @@
-import { findEpisodeRawVideoUrl } from "../repositories/resourceRepository.js";
+import { findEpisodeRawVideoUrl } from "../repositories/episodeRepository.js";
 import { formatPlayDto } from "../dto/resourceDto.js";
 import { collectEpisodeChannels } from "./detailService.js";
 

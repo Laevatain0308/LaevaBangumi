@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   normalizeResourceEpisodes,
   normalizeResourceItem,
 } from "../src/normalizers/resourceItemNormalizer.js";
+
+const resourceDetailFixture = JSON.parse(readFileSync(new URL("./fixtures/resource-detail-ffzy.json", import.meta.url), "utf8"));
 
 test("normalizeResourceItem maps catalog rows into repository input", () => {
   assert.deepEqual(normalizeResourceItem({
@@ -45,19 +48,7 @@ test("normalizeResourceItem maps detail rows and caller supplied timestamps", ()
 });
 
 test("normalizeResourceEpisodes maps parsed source episodes into repository input", () => {
-  assert.deepEqual(normalizeResourceEpisodes([
-    {
-      epIndex: "1",
-      sourceEpIndex: "3",
-      epName: "第03集",
-      videoUrl: "https://example.invalid/3.m3u8",
-    },
-    {
-      index: 2,
-      name: "第04集",
-      url: "https://example.invalid/4.m3u8",
-    },
-  ], {
+  assert.deepEqual(normalizeResourceEpisodes(resourceDetailFixture.episodes, {
     bangumiId: 547888,
     source: "ffzy",
     sourceAid: "1001",

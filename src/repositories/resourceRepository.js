@@ -140,19 +140,6 @@ export function listResourceItems() {
   return sqlite.prepare("SELECT * FROM resource_items").all();
 }
 
-export function listEpisodeSubjectSourceRows({ sourceKeys = null } = {}) {
-  if (sourceKeys != null && sourceKeys.length === 0) return [];
-  const sourceFilter = sourceKeys && sourceKeys.length > 0
-    ? `AND source IN (${sourceKeys.map(() => "?").join(", ")})`
-    : "";
-  return sqlite.prepare(`
-    SELECT bangumi_id, source
-    FROM episodes
-    WHERE bangumi_id IS NOT NULL AND source IS NOT NULL
-    ${sourceFilter}
-  `).all(...(sourceKeys || []));
-}
-
 export function listRetryStatesByKind(kind, { sourceKeys = null } = {}) {
   if (!kind) throw new Error("retry state query requires kind");
   if (sourceKeys != null && sourceKeys.length === 0) return [];
@@ -228,52 +215,6 @@ export function listMappingSubjectIdsBySourceAid({ source, sourceAid }) {
   `).all({ source, sourceAid }).map((row) => row.bangumi_id);
 }
 
-export function listEpisodeChannelRowsForSubject(bangumiId) {
-  return sqlite.prepare(`
-    SELECT
-      e.source,
-      e.source_aid,
-      e.ep_index,
-      e.source_ep_index,
-      e.title,
-      e.updated_at,
-      rs.name AS source_label,
-      COALESCE(rs.priority, 100) AS source_priority,
-      ri.title AS resource_title
-    FROM episodes e
-    JOIN resource_mappings rm
-      ON rm.bangumi_id = e.bangumi_id
-      AND rm.source = e.source
-      AND rm.source_aid = e.source_aid
-    LEFT JOIN resource_sources rs ON rs.source = e.source
-    LEFT JOIN resource_items ri ON ri.source = e.source AND ri.source_aid = e.source_aid
-    WHERE e.bangumi_id = ?
-    ORDER BY COALESCE(rs.priority, 100) ASC, e.source ASC, e.source_aid ASC, e.ep_index ASC
-  `).all(bangumiId);
-}
-
-export function listEpisodeStatsForMapping({ bangumiId, source, sourceAid }) {
-  assertResourceStateKey({ bangumiId, source });
-  if (sourceAid == null) throw new Error("episode stats query requires sourceAid");
-  return sqlite.prepare(`
-    SELECT ep_index, source_ep_index
-    FROM episodes
-    WHERE bangumi_id = ? AND source = ? AND source_aid = ?
-  `).all(bangumiId, source, sourceAid);
-}
-
-export function listLatestEpisodeStatsBySubject() {
-  return sqlite.prepare(`
-    SELECT bangumi_id AS id, ep_index AS latestEp, updated_at AS lastUpdated
-    FROM episodes e1
-    WHERE updated_at = (
-      SELECT MAX(updated_at)
-      FROM episodes e2
-      WHERE e2.bangumi_id = e1.bangumi_id
-    )
-  `).all();
-}
-
 export function listUpdateCandidateRows() {
   return sqlite.prepare(`
     SELECT
@@ -313,16 +254,6 @@ export function listUpdateCandidateRows() {
       AND e.source_aid = rm.source_aid
     GROUP BY rm.bangumi_id, rm.source, rm.source_aid
   `).all();
-}
-
-export function findEpisodeRawVideoUrl({ bangumiId, source, sourceAid, epIndex }) {
-  return sqlite.prepare(`
-    SELECT raw_video_url FROM episodes
-    WHERE bangumi_id = @bangumiId
-      AND source = @source
-      AND source_aid = @sourceAid
-      AND ep_index = @epIndex
-  `).get({ bangumiId, source, sourceAid, epIndex });
 }
 
 export function findResourceItem({ source, sourceAid }) {
@@ -382,136 +313,6 @@ export function upsertResourceItem({
       detailFetchedAt,
     });
   })();
-}
-
-export function upsertResourceSyncState({
-  source,
-  scope,
-  lastSeenAt,
-  lastSuccessAt = null,
-  status = "success",
-  lastStartedAt = null,
-  lastError = null,
-}) {
-  if (!source) throw new Error("resource sync state write requires source");
-  if (!scope) throw new Error("resource sync state write requires scope");
-  if (!lastSeenAt) throw new Error("resource sync state write requires lastSeenAt");
-
-  sqlite.prepare(`
-    INSERT INTO sync_state (
-      source, scope, status, last_started_at, last_seen_at, last_success_at, last_error, updated_at
-    )
-    VALUES (
-      @source, @scope, @status, @lastStartedAt, @lastSeenAt,
-      COALESCE(@lastSuccessAt, datetime('now')), @lastError, datetime('now')
-    )
-    ON CONFLICT(source, scope) DO UPDATE SET
-      status = excluded.status,
-      last_started_at = excluded.last_started_at,
-      last_seen_at = excluded.last_seen_at,
-      last_success_at = excluded.last_success_at,
-      last_error = excluded.last_error,
-      updated_at = excluded.updated_at
-  `).run({ source, scope, lastSeenAt, lastSuccessAt, status, lastStartedAt, lastError });
-}
-
-export function findResourceSyncState({ source, scope }) {
-  if (!source) throw new Error("resource sync state query requires source");
-  if (!scope) throw new Error("resource sync state query requires scope");
-  return sqlite.prepare(`
-    SELECT source, scope, last_seen_at AS lastSeenAt, last_success_at AS lastSuccessAt
-    FROM sync_state
-    WHERE source = ? AND scope = ?
-  `).get(source, scope);
-}
-
-export function upsertResourceEpisode({
-  bangumiId,
-  source,
-  sourceAid,
-  epIndex,
-  sourceEpIndex = null,
-  title = null,
-  rawVideoUrl,
-}) {
-  assertResourceStateKey({ bangumiId, source });
-  if (sourceAid == null) throw new Error("resource episode write requires sourceAid");
-  if (epIndex == null) throw new Error("resource episode write requires epIndex");
-  if (!rawVideoUrl) throw new Error("resource episode write requires rawVideoUrl");
-
-  const existing = sqlite.prepare(`
-    SELECT episode_id FROM episodes
-    WHERE bangumi_id = @bangumiId
-      AND source = @source
-      AND source_aid = @sourceAid
-      AND ep_index = @epIndex
-    LIMIT 1
-  `).get({ bangumiId, source, sourceAid, epIndex });
-
-  const row = {
-    bangumiId,
-    source,
-    sourceAid,
-    epIndex,
-    sourceEpIndex,
-    title,
-    rawVideoUrl,
-  };
-
-  if (!existing) {
-    sqlite.prepare(`
-      INSERT INTO episodes (
-        bangumi_id, source, source_aid,
-        ep_index, source_ep_index, title, raw_video_url, updated_at
-      )
-      VALUES (
-        @bangumiId, @source, @sourceAid,
-        @epIndex, @sourceEpIndex, @title, @rawVideoUrl, datetime('now')
-      )
-    `).run(row);
-    return;
-  }
-
-  sqlite.prepare(`
-    UPDATE episodes
-    SET bangumi_id = @bangumiId,
-      source = @source,
-      source_aid = @sourceAid,
-      ep_index = @epIndex,
-      source_ep_index = @sourceEpIndex,
-      title = @title,
-      raw_video_url = @rawVideoUrl,
-      updated_at = datetime('now')
-    WHERE episode_id = @episodeId
-  `).run({ ...row, episodeId: existing.episode_id });
-}
-
-export function deleteStaleResourceEpisodes({ bangumiId, source, sourceAid, validEpIndexes }) {
-  assertResourceStateKey({ bangumiId, source });
-  if (sourceAid == null) throw new Error("resource episode prune requires sourceAid");
-  const validIndexes = new Set((validEpIndexes || []).map((value) => Number(value)));
-
-  const existing = sqlite.prepare(`
-    SELECT episode_id, source_aid, ep_index
-    FROM episodes
-    WHERE bangumi_id = @bangumiId AND source = @source
-  `).all({ bangumiId, source });
-
-  const deleteById = sqlite.prepare("DELETE FROM episodes WHERE episode_id = ?");
-  for (const episode of existing) {
-    if (episode.source_aid !== sourceAid || !validIndexes.has(episode.ep_index)) {
-      deleteById.run(episode.episode_id);
-    }
-  }
-}
-
-export function deleteResourceEpisodesForSubjectSource({ bangumiId, source }) {
-  assertResourceStateKey({ bangumiId, source });
-
-  sqlite.prepare(`
-    DELETE FROM episodes
-    WHERE bangumi_id = @bangumiId AND source = @source
-  `).run({ bangumiId, source });
 }
 
 export function deleteResourceRowsForSubject({ bangumiId }) {

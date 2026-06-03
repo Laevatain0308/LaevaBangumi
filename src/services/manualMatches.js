@@ -6,12 +6,10 @@ import { collectBangumiTitles } from "../lib/matcher.js";
 import { log } from "../lib/logger.js";
 import {
   deleteManualResourceState,
-  deleteResourceEpisodesForSubjectSource,
   deleteResourceMapping,
   deleteRetryState,
   findResourceItem,
   findResourceMapping,
-  listEpisodeStatsForMapping,
   listManualResourceStatesForSource,
   listResourceItems,
   listResourceMappings,
@@ -22,6 +20,10 @@ import {
   upsertResourceMapping,
   upsertRetryState,
 } from "../repositories/resourceRepository.js";
+import {
+  deleteResourceEpisodesForSubjectSource,
+  listEpisodeStatsForMapping,
+} from "../repositories/episodeRepository.js";
 import {
   findSubjectById,
   listManualReviewSubjectRows,
@@ -119,13 +121,13 @@ function normalizedMappingRow(row) {
   return {
     animeId: row.bangumi_id,
     source: row.source,
-    cstationId: row.source_aid,
+    sourceAid: row.source_aid,
     sourceEpStart: row.source_ep_start,
     sourceEpEnd: row.source_ep_end,
     displayEpOffset: row.display_ep_offset,
     score: row.score,
     matchedBgName: row.matched_bg_name,
-    matchedCsName: row.matched_resource_name,
+    matchedResourceName: row.matched_resource_name,
     matchedAt: row.matched_at,
   };
 }
@@ -294,7 +296,7 @@ function episodeStatsForMapping(mapping) {
   const rows = listEpisodeStatsForMapping({
     bangumiId: mapping.animeId,
     source: mapping.source,
-    sourceAid: mapping.cstationId,
+    sourceAid: mapping.sourceAid,
   });
   const sourceIndexes = rows
     .map((row) => row.sourceEpIndex ?? row.source_ep_index ?? row.epIndex ?? row.ep_index)
@@ -307,7 +309,7 @@ function episodeStatsForMapping(mapping) {
 }
 
 function mappingKey(row) {
-  return `${row.source}:${row.cstationId}`;
+  return `${row.source}:${row.sourceAid}`;
 }
 
 function allCatalogRows() {
@@ -328,14 +330,14 @@ function mappedRowForReview(mapping, animeRow, sourceItem, episodeStats) {
     bg_title: animeRow?.nameCn || animeRow?.name || mapping.matchedBgName || "",
     source: mapping.source,
     decision: "",
-    source_aid: mapping.cstationId,
-    source_title: sourceItem?.name || mapping.matchedCsName || "",
+    source_aid: mapping.sourceAid,
+    source_title: sourceItem?.name || mapping.matchedResourceName || "",
     source_ep_start: mapping.sourceEpStart ?? "",
     source_ep_end: mapping.sourceEpEnd ?? "",
     display_ep_offset: mapping.displayEpOffset ?? 0,
     match_score: mapping.score == null ? "" : Number(mapping.score).toFixed(4),
     matched_bg_name: mapping.matchedBgName || "",
-    matched_source_name: mapping.matchedCsName || "",
+    matched_source_name: mapping.matchedResourceName || "",
     matched_at: mapping.matchedAt || "",
     episode_count: episodeStats.episodeCount,
     source_ep_min: episodeStats.sourceEpMin,
@@ -397,7 +399,7 @@ export function analyzeMappedMappings({
 
   for (const mapping of mappings) {
     if (animeFilter && mapping.animeId !== animeFilter) continue;
-    if (sourceAidFilter && mapping.cstationId !== sourceAidFilter) continue;
+    if (sourceAidFilter && mapping.sourceAid !== sourceAidFilter) continue;
     const hasRange = mapping.sourceEpStart != null || mapping.sourceEpEnd != null || (mapping.displayEpOffset ?? 0) > 0;
     const isMultiMapped = (mappedCounts.get(mappingKey(mapping)) || 0) > 1;
     if (ranged && !hasRange) continue;
@@ -406,7 +408,7 @@ export function analyzeMappedMappings({
     const row = mappedRowForReview(
       mapping,
       animeById.get(mapping.animeId),
-      catalogByKey.get(`${mapping.source}:${mapping.cstationId}`),
+      catalogByKey.get(`${mapping.source}:${mapping.sourceAid}`),
       episodeStatsForMapping(mapping)
     );
     if (!rowMatchesQuery(row, query)) continue;
