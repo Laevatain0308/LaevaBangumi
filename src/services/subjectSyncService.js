@@ -1,16 +1,19 @@
-import { db, sqlite } from "../db/index.js";
-import { animeOther, ANIME_PLATFORMS } from "../db/schema.js";
+import { ANIME_PLATFORMS } from "../db/schema.js";
 import * as bangumi from "../clients/bangumiClient.js";
 import { downloadCover } from "../lib/cover.js";
 import { collectBangumiTitles } from "../lib/matcher.js";
 import { normalizeBangumiSubject, normalizeCoverUrl } from "../normalizers/bangumiSubjectNormalizer.js";
 import {
+  deleteSubjectById,
   findSubjectById,
+  insertNonAnimeSubject,
   listSubjectAliases,
+  listSubjects,
+  markSubjectHasCover,
   upsertSubjectMetadata as writeSubjectMetadata,
 } from "../repositories/subjectRepository.js";
 import { deleteResourceRowsForSubject } from "../repositories/resourceRepository.js";
-import { compactRow, now, safeJson } from "./animeShared.js";
+import { now, safeJson } from "./animeShared.js";
 import { debug, log } from "../lib/logger.js";
 
 export { normalizeCoverUrl };
@@ -44,19 +47,7 @@ export function findAnimeFacadeById(id) {
 }
 
 export function listAnimeFacades({ ids = null } = {}) {
-  const params = [];
-  let where = "";
-  if (ids) {
-    const normalizedIds = [...ids].map((id) => parseInt(id, 10)).filter(Boolean);
-    if (normalizedIds.length === 0) return [];
-    where = `WHERE bangumi_id IN (${normalizedIds.map(() => "?").join(", ")})`;
-    params.push(...normalizedIds);
-  }
-  return sqlite.prepare(`
-    SELECT * FROM subjects
-    ${where}
-    ORDER BY bangumi_id
-  `).all(...params).map(subjectRowToAnimeFacade);
+  return listSubjects({ ids }).map(subjectRowToAnimeFacade);
 }
 
 export function animeRowToBangumiLike(a) {
@@ -79,7 +70,7 @@ export function titleNamesForAnime(a) {
 
 function deleteAnimeDependencies(animeId) {
   deleteResourceRowsForSubject({ bangumiId: animeId });
-  sqlite.prepare("DELETE FROM subjects WHERE bangumi_id = ?").run(animeId);
+  deleteSubjectById(animeId);
 }
 
 export function ensureSubjectFromAnime(animeId) {
@@ -93,19 +84,16 @@ export async function upsertAnime(item, weekday = undefined, options = {}) {
   if (platform && !ANIME_PLATFORMS.has(platform)) {
     log("anime", "skip non-anime subject", { id: item.id, name: item.name, platform });
     deleteAnimeDependencies(item.id);
-    db.insert(animeOther)
-      .values(compactRow({
-        id: item.id,
-        name: item.name,
-        nameCn: normalized.subject.name_cn,
-        summary: normalized.subject.summary,
-        platform,
-        coverUrl: normalized.subject.cover_url,
-        tags: normalized.tags === undefined ? undefined : JSON.stringify(normalized.tags.map((tag) => tag.name)),
-        aliases: normalized.aliases === undefined ? undefined : JSON.stringify(normalized.aliases),
-      }))
-      .onConflictDoNothing()
-      .run();
+    insertNonAnimeSubject({
+      id: item.id,
+      name: item.name,
+      nameCn: normalized.subject.name_cn,
+      summary: normalized.subject.summary,
+      platform,
+      coverUrl: normalized.subject.cover_url,
+      tags: normalized.tags === undefined ? undefined : JSON.stringify(normalized.tags.map((tag) => tag.name)),
+      aliases: normalized.aliases === undefined ? undefined : JSON.stringify(normalized.aliases),
+    });
     return null;
   }
 
@@ -116,7 +104,7 @@ export async function upsertAnime(item, weekday = undefined, options = {}) {
   if (coverUrl) {
     downloadCover(item.id, coverUrl).then((ok) => {
       if (ok) {
-        sqlite.prepare("UPDATE subjects SET has_cover = 1 WHERE bangumi_id = ?").run(item.id);
+        markSubjectHasCover(item.id, true);
       }
     }).catch(() => {});
   }

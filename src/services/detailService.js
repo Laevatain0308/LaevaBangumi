@@ -4,11 +4,10 @@ import {
   listSubjectTags,
 } from "../repositories/subjectRepository.js";
 import {
-  findEpisodeRawVideoUrl,
   listEpisodeChannelRowsForSubject,
 } from "../repositories/resourceRepository.js";
 import { formatSubjectDetailDto } from "../dto/subjectDto.js";
-import { formatDetailEpisodeDto, formatPlayDto } from "../dto/resourceDto.js";
+import { formatDetailEpisodeDto } from "../dto/resourceDto.js";
 import {
   DETAIL_FRESH_MS,
   DETAIL_SHORT_TIMEOUT_MS,
@@ -20,7 +19,7 @@ import { enrichFromSubject } from "./subjectSyncService.js";
 import { enabledSourceSet, resourceSourceStatuses } from "./resourceMatchService.js";
 import { error } from "../lib/logger.js";
 
-function collectEpisodeChannels(id) {
+export function collectEpisodeChannels(id) {
   const enabledSources = enabledSourceSet();
   const rows = listEpisodeChannelRowsForSubject(id)
     .filter((row) => enabledSources.has(row.source));
@@ -81,20 +80,4 @@ export async function getAnimeDetail(id) {
   }
 
   return getCachedAnimeDetail(id);
-}
-
-export async function getPlayUrl(id, ch, ep) {
-  const channels = collectEpisodeChannels(id);
-  const channel = channels[ch - 1];
-  if (!channel) return null;
-  const episode = channel.episodes.find((row) => row.index === ep);
-  if (!episode) return null;
-  const row = findEpisodeRawVideoUrl({
-    bangumiId: id,
-    source: channel.source,
-    sourceAid: channel.sourceAid,
-    epIndex: ep,
-  });
-  if (!row) return null;
-  return formatPlayDto(row.raw_video_url);
 }

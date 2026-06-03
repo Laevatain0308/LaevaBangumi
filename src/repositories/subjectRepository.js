@@ -14,6 +14,105 @@ export function findSubjectById(id) {
   return sqlite.prepare("SELECT * FROM subjects WHERE bangumi_id = ?").get(id);
 }
 
+export function findSubjectCoverState(id) {
+  return sqlite.prepare(`
+    SELECT cover_url AS coverUrl, has_cover AS hasCover
+    FROM subjects
+    WHERE bangumi_id = ?
+  `).get(id);
+}
+
+export function listSubjects({ ids = null } = {}) {
+  const params = [];
+  let where = "";
+  if (ids) {
+    const normalizedIds = [...ids].map((id) => parseInt(id, 10)).filter(Boolean);
+    if (normalizedIds.length === 0) return [];
+    where = `WHERE bangumi_id IN (${normalizedIds.map(() => "?").join(", ")})`;
+    params.push(...normalizedIds);
+  }
+  return sqlite.prepare(`
+    SELECT * FROM subjects
+    ${where}
+    ORDER BY bangumi_id
+  `).all(...params);
+}
+
+export function listCalendarSubjectRows() {
+  return sqlite.prepare(`
+    SELECT
+      bangumi_id AS id,
+      bangumi_id,
+      name,
+      name_cn,
+      name_cn AS nameCn,
+      summary,
+      cover_url AS coverUrl,
+      cover_url,
+      has_cover AS hasCover,
+      has_cover,
+      rating_score AS ratingScore,
+      rating_score,
+      rating_rank,
+      rating_total,
+      rating_distribution_json,
+      eps,
+      total_episodes AS totalEpisodes,
+      total_episodes,
+      air_date AS airDate,
+      air_date,
+      air_weekday,
+      platform,
+      COALESCE(calendar_weekday, air_weekday) AS calendarWeekday
+    FROM subjects
+  `).all();
+}
+
+export function markSubjectCalendarSynced({ bangumiId, weekday }) {
+  if (!bangumiId) throw new Error("calendar sync mark requires bangumiId");
+  sqlite.prepare(`
+    UPDATE subjects
+    SET calendar_synced_at = datetime('now'),
+        calendar_weekday = ?,
+        updated_at = datetime('now')
+    WHERE bangumi_id = ?
+  `).run(weekday ?? null, bangumiId);
+}
+
+export function clearStaleCalendarSubjects(activeBangumiIds) {
+  if (activeBangumiIds.size === 0) return 0;
+  const ids = [...activeBangumiIds];
+  const result = sqlite.prepare(`
+    UPDATE subjects
+    SET calendar_weekday = NULL,
+        calendar_synced_at = NULL,
+        updated_at = datetime('now')
+    WHERE calendar_weekday IS NOT NULL
+      AND bangumi_id NOT IN (${ids.map(() => "?").join(", ")})
+  `).run(...ids);
+  return result.changes ?? 0;
+}
+
+export function deleteSubjectById(id) {
+  sqlite.prepare("DELETE FROM subjects WHERE bangumi_id = ?").run(id);
+}
+
+export function markSubjectHasCover(id, hasCover) {
+  sqlite.prepare("UPDATE subjects SET has_cover = ? WHERE bangumi_id = ?").run(hasCover ? 1 : 0, id);
+}
+
+export function insertNonAnimeSubject(row) {
+  sqlite.prepare(`
+    INSERT INTO anime_other (
+      id, name, name_cn, summary, platform, cover_url, tags, aliases
+    )
+    VALUES (
+      @id, @name, @nameCn, @summary, @platform, @coverUrl, @tags, @aliases
+    )
+    ON CONFLICT(id) DO NOTHING
+  `).run(row);
+}
+
 export function searchSubjectsByKeyword(keyword, { limit = 60 } = {}) {
   if (!keyword) return [];
   return sqlite.prepare(`
@@ -91,6 +190,13 @@ export function listSubjectAliases(id) {
     WHERE bangumi_id = ?
     ORDER BY alias ASC
   `).all(id).map((row) => row.alias);
+}
+
+export function listManualReviewSubjectRows() {
+  return listSubjects().map((row) => ({
+    ...row,
+    aliases: JSON.stringify(listSubjectAliases(row.bangumi_id)),
+  }));
 }
 
 export function upsertSubjectMetadata({ subject, aliases, tags }) {

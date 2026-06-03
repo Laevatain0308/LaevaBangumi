@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseEpisodes } from "../src/services/cstation.js";
+import { parseEpisodes } from "../src/clients/resourceSources/ffzyClient.js";
 import { initDb, sqlite } from "../src/db/index.js";
 import { saveCatalog } from "../src/services/catalog.js";
 

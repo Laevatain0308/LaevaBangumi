@@ -102,10 +102,28 @@ export function listResourceMappings({ sourceKeys = null } = {}) {
     ? `WHERE source IN (${sourceKeys.map(() => "?").join(", ")})`
     : "";
   return sqlite.prepare(`
-    SELECT bangumi_id, source, source_aid
+    SELECT
+      bangumi_id,
+      source,
+      source_aid,
+      source_ep_start,
+      source_ep_end,
+      display_ep_offset,
+      score,
+      matched_bg_name,
+      matched_resource_name,
+      matched_at
     FROM resource_mappings
     ${sourceFilter}
   `).all(...(sourceKeys || []));
+}
+
+export function listResourceMappingsForSource(source) {
+  if (!source) throw new Error("resource mapping query requires source");
+  return sqlite.prepare(`
+    SELECT bangumi_id FROM resource_mappings
+    WHERE source = ?
+  `).all(source);
 }
 
 export function listResourceItemsForSource(source) {
@@ -116,6 +134,10 @@ export function listResourceItemsForSource(source) {
     FROM resource_items
     WHERE source = ?
   `).all(source);
+}
+
+export function listResourceItems() {
+  return sqlite.prepare("SELECT * FROM resource_items").all();
 }
 
 export function listEpisodeSubjectSourceRows({ sourceKeys = null } = {}) {
@@ -145,6 +167,15 @@ export function listRetryStatesByKind(kind, { sourceKeys = null } = {}) {
   `).all(kind, ...(sourceKeys || []));
 }
 
+export function listRetryStatesForSource({ source, kind }) {
+  if (!source) throw new Error("retry state query requires source");
+  if (!kind) throw new Error("retry state query requires kind");
+  return sqlite.prepare(`
+    SELECT * FROM retry_state
+    WHERE source = ? AND kind = ?
+  `).all(source, kind);
+}
+
 export function findRetryState({ bangumiId, source, kind }) {
   assertResourceStateKey({ bangumiId, source });
   if (!kind) throw new Error("retry state query requires kind");
@@ -166,6 +197,14 @@ export function listManualResourceStates({ sourceKeys = null } = {}) {
     FROM manual_resource_state
     ${sourceFilter}
   `).all(...(sourceKeys || []));
+}
+
+export function listManualResourceStatesForSource(source) {
+  if (!source) throw new Error("manual resource state query requires source");
+  return sqlite.prepare(`
+    SELECT * FROM manual_resource_state
+    WHERE source = ?
+  `).all(source);
 }
 
 export function findManualResourceState({ bangumiId, source }) {
@@ -213,6 +252,69 @@ export function listEpisodeChannelRowsForSubject(bangumiId) {
   `).all(bangumiId);
 }
 
+export function listEpisodeStatsForMapping({ bangumiId, source, sourceAid }) {
+  assertResourceStateKey({ bangumiId, source });
+  if (sourceAid == null) throw new Error("episode stats query requires sourceAid");
+  return sqlite.prepare(`
+    SELECT ep_index, source_ep_index
+    FROM episodes
+    WHERE bangumi_id = ? AND source = ? AND source_aid = ?
+  `).all(bangumiId, source, sourceAid);
+}
+
+export function listLatestEpisodeStatsBySubject() {
+  return sqlite.prepare(`
+    SELECT bangumi_id AS id, ep_index AS latestEp, updated_at AS lastUpdated
+    FROM episodes e1
+    WHERE updated_at = (
+      SELECT MAX(updated_at)
+      FROM episodes e2
+      WHERE e2.bangumi_id = e1.bangumi_id
+    )
+  `).all();
+}
+
+export function listUpdateCandidateRows() {
+  return sqlite.prepare(`
+    SELECT
+      s.bangumi_id AS id,
+      s.bangumi_id,
+      s.name,
+      s.name_cn AS nameCn,
+      s.name_cn,
+      s.summary,
+      s.cover_url AS coverUrl,
+      s.cover_url,
+      s.has_cover AS hasCover,
+      s.has_cover,
+      s.air_date,
+      s.air_weekday,
+      s.platform,
+      s.eps,
+      s.total_episodes,
+      s.rating_score,
+      s.rating_rank,
+      s.rating_total,
+      s.rating_distribution_json,
+      rm.source,
+      rm.source_aid AS sourceAid,
+      rm.source_ep_start AS sourceEpStart,
+      rm.source_ep_end AS sourceEpEnd,
+      rm.display_ep_offset AS displayEpOffset,
+      ri.latest_text AS sourceUpdatedAt,
+      MAX(e.ep_index) AS latestEp,
+      MAX(e.updated_at) AS episodeUpdatedAt
+    FROM resource_mappings rm
+    JOIN subjects s ON s.bangumi_id = rm.bangumi_id
+    JOIN resource_items ri ON ri.source = rm.source AND ri.source_aid = rm.source_aid
+    LEFT JOIN episodes e
+      ON e.bangumi_id = rm.bangumi_id
+      AND e.source = rm.source
+      AND e.source_aid = rm.source_aid
+    GROUP BY rm.bangumi_id, rm.source, rm.source_aid
+  `).all();
+}
+
 export function findEpisodeRawVideoUrl({ bangumiId, source, sourceAid, epIndex }) {
   return sqlite.prepare(`
     SELECT raw_video_url FROM episodes
@@ -221,6 +323,19 @@ export function findEpisodeRawVideoUrl({ bangumiId, source, sourceAid, epIndex }
       AND source_aid = @sourceAid
       AND ep_index = @epIndex
   `).get({ bangumiId, source, sourceAid, epIndex });
+}
+
+export function findResourceItem({ source, sourceAid }) {
+  if (!source) throw new Error("resource item query requires source");
+  if (sourceAid == null) throw new Error("resource item query requires sourceAid");
+  return sqlite.prepare(`
+    SELECT * FROM resource_items
+    WHERE source = ? AND source_aid = ?
+  `).get(source, sourceAid);
+}
+
+export function runResourceTransaction(fn) {
+  return sqlite.transaction(fn)();
 }
 
 export function upsertResourceItem({
@@ -298,6 +413,16 @@ export function upsertResourceSyncState({
       last_error = excluded.last_error,
       updated_at = excluded.updated_at
   `).run({ source, scope, lastSeenAt, lastSuccessAt, status, lastStartedAt, lastError });
+}
+
+export function findResourceSyncState({ source, scope }) {
+  if (!source) throw new Error("resource sync state query requires source");
+  if (!scope) throw new Error("resource sync state query requires scope");
+  return sqlite.prepare(`
+    SELECT source, scope, last_seen_at AS lastSeenAt, last_success_at AS lastSuccessAt
+    FROM sync_state
+    WHERE source = ? AND scope = ?
+  `).get(source, scope);
 }
 
 export function upsertResourceEpisode({

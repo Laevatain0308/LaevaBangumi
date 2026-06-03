@@ -1,7 +1,6 @@
-import { sqlite } from "../db/index.js";
 import * as cstation from "../clients/resourceClient.js";
 import { log, error } from "../lib/logger.js";
-import { upsertResourceItem, upsertResourceSyncState } from "../repositories/resourceRepository.js";
+import { findResourceSyncState, upsertResourceItem, upsertResourceSyncState } from "../repositories/resourceRepository.js";
 import { normalizeResourceItem } from "../normalizers/resourceItemNormalizer.js";
 
 function now() {
@@ -31,11 +30,7 @@ export async function syncCatalogCategory({ source, t, incremental = true, hydra
   if (!source) throw new Error("syncCatalogCategory requires source");
   if (!t) throw new Error("syncCatalogCategory requires t");
   log("catalog", "category sync started", { source, category: t, incremental, hydrateDetails });
-  const state = sqlite.prepare(`
-    SELECT source, scope, last_seen_at AS lastSeenAt, last_success_at AS lastSuccessAt
-    FROM sync_state
-    WHERE source = ? AND scope = ?
-  `).get(source, t);
+  const state = findResourceSyncState({ source, scope: t });
 
   const shouldIncremental = incremental && state?.lastSeenAt;
   const result = shouldIncremental

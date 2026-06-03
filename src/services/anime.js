@@ -22,8 +22,11 @@ export {
 
 export {
   getAnimeDetail,
-  getPlayUrl,
 } from "./detailService.js";
+
+export {
+  getPlayUrl,
+} from "./playService.js";
 
 export {
   getCalendarView,

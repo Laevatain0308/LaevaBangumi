@@ -1,7 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { sqlite } from "../db/index.js";
-import { refreshEpisodesForAnime } from "./anime.js";
+import { refreshEpisodesForAnime } from "./episodeRefreshService.js";
 import { getEnabledSources } from "../lib/cstationConfig.js";
 import { collectBangumiTitles } from "../lib/matcher.js";
 import { log } from "../lib/logger.js";
@@ -10,10 +9,23 @@ import {
   deleteResourceEpisodesForSubjectSource,
   deleteResourceMapping,
   deleteRetryState,
+  findResourceItem,
+  findResourceMapping,
+  listEpisodeStatsForMapping,
+  listManualResourceStatesForSource,
+  listResourceItems,
+  listResourceMappings,
+  listResourceMappingsForSource,
+  listRetryStatesForSource,
+  runResourceTransaction,
   upsertManualResourceState,
   upsertResourceMapping,
   upsertRetryState,
 } from "../repositories/resourceRepository.js";
+import {
+  findSubjectById,
+  listManualReviewSubjectRows,
+} from "../repositories/subjectRepository.js";
 
 export const DEFAULT_REVIEW_PATH = "data/manual/manual_review.csv";
 export const DEFAULT_MAPPED_REVIEW_PATH = "data/manual/mapped_review.csv";
@@ -81,16 +93,11 @@ function animeTitles(a) {
 }
 
 function normalizedSubjectRow(row) {
-  const aliases = sqlite.prepare(`
-    SELECT alias FROM subject_aliases
-    WHERE bangumi_id = ?
-    ORDER BY alias
-  `).all(row.bangumi_id).map((item) => item.alias);
   return {
     id: row.bangumi_id,
     name: row.name,
     nameCn: row.name_cn,
-    aliases: JSON.stringify(aliases),
+    aliases: row.aliases ?? "[]",
     platform: row.platform,
     airDate: row.air_date,
     airWeekday: row.air_weekday,
@@ -156,10 +163,7 @@ function normalizedManualStateRow(row) {
 }
 
 function allAnimeRows() {
-  return sqlite.prepare(`
-    SELECT * FROM subjects
-    ORDER BY bangumi_id
-  `).all().map(normalizedSubjectRow);
+  return listManualReviewSubjectRows().map(normalizedSubjectRow);
 }
 
 function sourcesForReview(source) {
@@ -168,10 +172,7 @@ function sourcesForReview(source) {
 
 function mappedAnimeIdsForSource(source) {
   const ids = new Set();
-  for (const row of sqlite.prepare(`
-    SELECT bangumi_id FROM resource_mappings
-    WHERE source = ?
-  `).all(source)) {
+  for (const row of listResourceMappingsForSource(source)) {
     ids.add(row.bangumi_id);
   }
   return ids;
@@ -179,10 +180,7 @@ function mappedAnimeIdsForSource(source) {
 
 function retryStateByAnimeIdForSource(source) {
   const rowsById = new Map();
-  for (const row of sqlite.prepare(`
-    SELECT * FROM retry_state
-    WHERE source = ? AND kind = 'mapping'
-  `).all(source).map(normalizedRetryRow)) {
+  for (const row of listRetryStatesForSource({ source, kind: "mapping" }).map(normalizedRetryRow)) {
     rowsById.set(row.animeId, row);
   }
   return rowsById;
@@ -190,10 +188,7 @@ function retryStateByAnimeIdForSource(source) {
 
 function manualStateByAnimeIdForSource(source) {
   const rowsById = new Map();
-  for (const row of sqlite.prepare(`
-    SELECT * FROM manual_resource_state
-    WHERE source = ?
-  `).all(source).map(normalizedManualStateRow)) {
+  for (const row of listManualResourceStatesForSource(source).map(normalizedManualStateRow)) {
     rowsById.set(row.animeId, row);
   }
   return rowsById;
@@ -296,11 +291,11 @@ function enabled(value) {
 }
 
 function episodeStatsForMapping(mapping) {
-  const rows = sqlite.prepare(`
-    SELECT ep_index, source_ep_index
-    FROM episodes
-    WHERE bangumi_id = ? AND source = ? AND source_aid = ?
-  `).all(mapping.animeId, mapping.source, mapping.cstationId);
+  const rows = listEpisodeStatsForMapping({
+    bangumiId: mapping.animeId,
+    source: mapping.source,
+    sourceAid: mapping.cstationId,
+  });
   const sourceIndexes = rows
     .map((row) => row.sourceEpIndex ?? row.source_ep_index ?? row.epIndex ?? row.ep_index)
     .filter((value) => Number.isFinite(value));
@@ -316,7 +311,7 @@ function mappingKey(row) {
 }
 
 function allCatalogRows() {
-  return sqlite.prepare("SELECT * FROM resource_items").all().map(normalizedCatalogRow);
+  return listResourceItems().map(normalizedCatalogRow);
 }
 
 function mappingMergeKey(row) {
@@ -324,7 +319,7 @@ function mappingMergeKey(row) {
 }
 
 function allMappingRows() {
-  return sqlite.prepare("SELECT * FROM resource_mappings").all().map(normalizedMappingRow);
+  return listResourceMappings().map(normalizedMappingRow);
 }
 
 function mappedRowForReview(mapping, animeRow, sourceItem, episodeStats) {
@@ -493,23 +488,17 @@ function normalizeMappedDecision(decision) {
 }
 
 function findCatalogItem(source, sourceAid) {
-  const normalized = sqlite.prepare(`
-    SELECT * FROM resource_items
-    WHERE source = ? AND source_aid = ?
-  `).get(source, sourceAid);
+  const normalized = findResourceItem({ source, sourceAid });
   return normalized ? normalizedCatalogRow(normalized) : undefined;
 }
 
 function findAnimeRow(animeId) {
-  const normalized = sqlite.prepare(`
-    SELECT * FROM subjects
-    WHERE bangumi_id = ?
-  `).get(animeId);
+  const normalized = findSubjectById(animeId);
   return normalized ? normalizedSubjectRow(normalized) : undefined;
 }
 
 function ensureSubjectFromAnime(animeId) {
-  return !!sqlite.prepare("SELECT bangumi_id FROM subjects WHERE bangumi_id = ?").get(animeId);
+  return !!findSubjectById(animeId);
 }
 
 function clearRetryState(animeId, source) {
@@ -572,10 +561,7 @@ function applyManualMapping({ animeRow, source, sourceItem, sourceAid, episodeRa
 }
 
 function existingMapping(animeId, source) {
-  const normalized = sqlite.prepare(`
-    SELECT * FROM resource_mappings
-    WHERE bangumi_id = ? AND source = ?
-  `).get(animeId, source);
+  const normalized = findResourceMapping({ bangumiId: animeId, source });
   return normalized ? normalizedMappingRow(normalized) : undefined;
 }
 
@@ -641,8 +627,8 @@ export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refre
 
   if (errors.length > 0) throw new Error(`manual review import failed:\n${errors.join("\n")}`);
 
-  const applyActions = sqlite.transaction((items) => {
-    for (const action of items) {
+  runResourceTransaction(() => {
+    for (const action of actions) {
       if (action.type === "wait_airing") {
         markWaitAiring(action.animeId, action.source, action.note);
         stats.updated++;
@@ -664,8 +650,6 @@ export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refre
       }
     }
   });
-
-  applyActions(actions);
 
   for (const action of actions) {
     if (action.type === "wait_airing") {
@@ -776,8 +760,8 @@ export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, 
 
   if (errors.length > 0) throw new Error(`mapped review import failed:\n${errors.join("\n")}`);
 
-  const applyActions = sqlite.transaction((items) => {
-    for (const action of items) {
+  runResourceTransaction(() => {
+    for (const action of actions) {
       if (action.type === "delete") {
         applyMappedDelete(action.animeId, action.source);
         stats.updated++;
@@ -806,8 +790,6 @@ export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, 
       }
     }
   });
-
-  applyActions(actions);
 
   for (const action of actions) {
     if (action.type === "delete") {

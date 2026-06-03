@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fetchJson } from "../src/services/bangumi.js";
+import { fetchJson } from "../src/clients/bangumiClient.js";
 
 function okJson(value) {
   return {

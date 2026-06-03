@@ -1,6 +1,5 @@
-import { sql } from "drizzle-orm";
-import { db } from "../db/index.js";
 import { listSubjectTags } from "../repositories/subjectRepository.js";
+import { listUpdateCandidateRows } from "../repositories/resourceRepository.js";
 import { formatSubjectSearchDto } from "../dto/subjectDto.js";
 import {
   DAY_MS,
@@ -18,44 +17,7 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
   const enabledSources = getEnabledSourceKeys();
   const enabledSourcesSet = new Set(enabledSources);
   const sourceOrder = new Map(enabledSources.map((source, index) => [source, index]));
-  const rows = db.all(sql`
-    SELECT
-      s.bangumi_id AS id,
-      s.bangumi_id,
-      s.name,
-      s.name_cn AS nameCn,
-      s.name_cn,
-      s.summary,
-      s.cover_url AS coverUrl,
-      s.cover_url,
-      s.has_cover AS hasCover,
-      s.has_cover,
-      s.air_date,
-      s.air_weekday,
-      s.platform,
-      s.eps,
-      s.total_episodes,
-      s.rating_score,
-      s.rating_rank,
-      s.rating_total,
-      s.rating_distribution_json,
-      rm.source,
-      rm.source_aid AS sourceAid,
-      rm.source_ep_start AS sourceEpStart,
-      rm.source_ep_end AS sourceEpEnd,
-      rm.display_ep_offset AS displayEpOffset,
-      ri.latest_text AS sourceUpdatedAt,
-      MAX(e.ep_index) AS latestEp,
-      MAX(e.updated_at) AS episodeUpdatedAt
-    FROM resource_mappings rm
-    JOIN subjects s ON s.bangumi_id = rm.bangumi_id
-    JOIN resource_items ri ON ri.source = rm.source AND ri.source_aid = rm.source_aid
-    LEFT JOIN episodes e
-      ON e.bangumi_id = rm.bangumi_id
-      AND e.source = rm.source
-      AND e.source_aid = rm.source_aid
-    GROUP BY rm.bangumi_id, rm.source, rm.source_aid
-  `);
+  const rows = listUpdateCandidateRows();
 
   const latestByAnime = new Map();
   for (const row of rows) {

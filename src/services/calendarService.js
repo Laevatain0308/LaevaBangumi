@@ -1,7 +1,12 @@
-import { sql } from "drizzle-orm";
-import { db, sqlite } from "../db/index.js";
 import * as bangumi from "../clients/bangumiClient.js";
-import { listSubjectTags } from "../repositories/subjectRepository.js";
+import { normalizeBangumiCalendar } from "../normalizers/bangumiCalendarNormalizer.js";
+import {
+  clearStaleCalendarSubjects,
+  listCalendarSubjectRows,
+  listSubjectTags,
+  markSubjectCalendarSynced,
+} from "../repositories/subjectRepository.js";
+import { listLatestEpisodeStatsBySubject } from "../repositories/resourceRepository.js";
 import { formatSubjectSearchDto } from "../dto/subjectDto.js";
 import { proxyCover } from "./animeShared.js";
 import { upsertAnime, enrichFromSubject } from "./subjectSyncService.js";
@@ -17,18 +22,7 @@ function clearStaleCalendarEntries(activeAnimeIds) {
     warn("calendar", "skip stale calendar cleanup because active anime set is empty");
     return 0;
   }
-
-  const before = sqlite.prepare("SELECT changes() AS changes").get().changes;
-  sqlite.prepare(`
-    UPDATE subjects
-    SET calendar_weekday = NULL,
-        calendar_synced_at = NULL,
-        updated_at = datetime('now')
-    WHERE calendar_weekday IS NOT NULL
-      AND bangumi_id NOT IN (${[...activeAnimeIds].map(() => "?").join(", ")})
-  `).run(...activeAnimeIds);
-  const after = sqlite.prepare("SELECT changes() AS changes").get().changes;
-  return after ?? before ?? 0;
+  return clearStaleCalendarSubjects(activeAnimeIds);
 }
 
 function groupByWeekday(list, epMap) {
@@ -63,7 +57,7 @@ function groupByWeekday(list, epMap) {
 
 export async function syncCalendar({ enqueueEpisodes = true, matchSources = true, calendar: calendarOverride = null } = {}) {
   log("calendar", "sync started", { enqueueEpisodes, matchSources });
-  const calendar = calendarOverride ?? await bangumi.getCalendar();
+  const calendar = normalizeBangumiCalendar(calendarOverride ?? await bangumi.getCalendar());
   const stats = { upserted: 0, mapped: 0, queuedEpisodes: 0, staleCleared: 0, errors: 0 };
   const activeAnimeIds = new Set();
 
@@ -73,13 +67,7 @@ export async function syncCalendar({ enqueueEpisodes = true, matchSources = true
       try {
         const a = await upsertAnime(item, day.weekday?.id);
         if (!a) continue;
-        sqlite.prepare(`
-          UPDATE subjects
-          SET calendar_synced_at = datetime('now'),
-              calendar_weekday = ?,
-              updated_at = datetime('now')
-          WHERE bangumi_id = ?
-        `).run(day.weekday?.id ?? null, item.id);
+        markSubjectCalendarSynced({ bangumiId: item.id, weekday: day.weekday?.id });
         activeAnimeIds.add(item.id);
         stats.upserted++;
 
@@ -124,46 +112,12 @@ export async function syncCalendar({ enqueueEpisodes = true, matchSources = true
 }
 
 export async function getCalendarView() {
-  const all = db.all(sql`
-    SELECT
-      bangumi_id AS id,
-      bangumi_id,
-      name,
-      name_cn,
-      name_cn AS nameCn,
-      summary,
-      cover_url AS coverUrl,
-      cover_url,
-      has_cover AS hasCover,
-      has_cover,
-      rating_score AS ratingScore,
-      rating_score,
-      rating_rank,
-      rating_total,
-      rating_distribution_json,
-      eps,
-      total_episodes AS totalEpisodes,
-      total_episodes,
-      air_date AS airDate,
-      air_date,
-      air_weekday,
-      platform,
-      COALESCE(calendar_weekday, air_weekday) AS calendarWeekday
-    FROM subjects
-  `);
+  const all = listCalendarSubjectRows();
   if (all.length === 0) {
     return { data: [], freshness: "empty", error: "暂无数据，请等待首次同步完成" };
   }
 
-  const epStats = db.all(sql`
-    SELECT bangumi_id AS id, ep_index AS latestEp, updated_at AS lastUpdated
-    FROM episodes e1
-    WHERE updated_at = (
-      SELECT MAX(updated_at)
-      FROM episodes e2
-      WHERE e2.bangumi_id = e1.bangumi_id
-    )
-  `);
+  const epStats = listLatestEpisodeStatsBySubject();
   const epMap = {};
   for (const s of epStats) {
     epMap[s.id] = { latestEp: s.latestEp, lastUpdated: s.lastUpdated };
