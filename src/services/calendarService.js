@@ -44,7 +44,7 @@ function groupByWeekday(list, epMap) {
         const ep = epMap[a.id];
         return {
           ...formatSubjectSearchDto(a, {
-            coverUrl: proxyCover(a.id, a.coverUrl, a.hasCover),
+            coverUrl: proxyCover(a.id, a.coverUrl),
             tags: listSubjectTags(a.id),
           }),
           latestEp: ep?.latestEp ?? null,

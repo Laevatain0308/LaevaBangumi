@@ -1,10 +1,6 @@
-import { createReadStream } from "node:fs";
-import { existsSync } from "node:fs";
 import express from "express";
 import * as animeService from "./services/anime.js";
 import { enqueueSearch } from "./services/queue.js";
-import { coverPath, downloadCover } from "./lib/cover.js";
-import { findSubjectCoverState, markSubjectHasCover } from "./repositories/subjectRepository.js";
 import { log, error } from "./lib/logger.js";
 import { envelope } from "./dto/apiEnvelope.js";
 import { errorEnvelope, serverErrorEnvelope } from "./dto/errorDto.js";
@@ -32,9 +28,10 @@ export function createServer() {
   app.get("/api/updates", async (req, res) => {
     const days = Math.max(1, Math.min(parseInt(req.query.days, 10) || 7, 30));
     const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 60, 120));
+    const today = typeof req.query.today === "string" ? req.query.today : null;
     try {
-      log("api", "updates requested", { days, limit });
-      const result = await animeService.getUpdates({ days, limit });
+      log("api", "updates requested", { days, limit, today });
+      const result = await animeService.getUpdates({ days, limit, today });
       res.json(envelope(result.data, {
         updatedAt: ts(),
         meta: { freshness: result.freshness, total: result.data.length, days },
@@ -113,34 +110,6 @@ export function createServer() {
       error("api", "/api/play error", err);
       res.status(500).json(serverErrorEnvelope(null, err, { updatedAt: ts() }));
     }
-  });
-
-  // ── /api/cover ────────────────────────────────────────
-  app.get("/api/cover", async (req, res) => {
-    const id = parseInt(req.query.id, 10);
-    if (!id) return res.status(400).json({ error: "缺少 id 参数" });
-    const subject = findSubjectCoverState(id);
-
-    if (subject?.hasCover) {
-      const path = coverPath(id);
-      if (existsSync(path)) {
-        res.setHeader("Content-Type", "image/jpeg");
-        res.setHeader("Cache-Control", "public, max-age=86400");
-        return createReadStream(path).pipe(res);
-      }
-      markSubjectHasCover(id, false);
-    }
-
-    if (subject?.coverUrl) {
-      downloadCover(id, subject.coverUrl).then((ok) => {
-        if (ok) {
-          markSubjectHasCover(id, true);
-        }
-      }).catch(() => {});
-      return res.redirect(302, subject.coverUrl);
-    }
-
-    res.status(404).json({ error: "封面不存在" });
   });
 
   // ── /api/heartbeat ─────────────────────────────────────

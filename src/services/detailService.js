@@ -55,7 +55,7 @@ function getCachedAnimeDetail(id) {
   return {
     data: formatSubjectDetailDto({
       subject,
-      coverUrl: proxyCover(subject.bangumi_id, subject.cover_url, subject.has_cover),
+      coverUrl: proxyCover(subject.bangumi_id, subject.cover_url),
       tags: listSubjectTags(id),
       aliases: listSubjectAliases(id),
       channels,

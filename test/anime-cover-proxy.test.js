@@ -24,7 +24,6 @@ test.beforeEach(() => {
       name: "Proxy Cover Test",
       nameCn: "封面代理测试",
       coverUrl: COVER_URL,
-      hasCover: 0,
       ratingDistributionJson: "[]",
       metadataFetchedAt: new Date().toISOString(),
       updatedAt: "2026-06-01 00:00:00",

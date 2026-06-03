@@ -234,10 +234,10 @@ export function listUpdateCandidateRows() {
       s.summary,
       s.cover_url AS coverUrl,
       s.cover_url,
-      s.has_cover AS hasCover,
-      s.has_cover,
       s.air_date,
       s.air_weekday,
+      s.calendar_weekday AS calendarWeekday,
+      s.calendar_weekday,
       s.platform,
       s.eps,
       s.total_episodes,
@@ -250,10 +250,25 @@ export function listUpdateCandidateRows() {
       rm.source_ep_start AS sourceEpStart,
       rm.source_ep_end AS sourceEpEnd,
       rm.display_ep_offset AS displayEpOffset,
+      (
+        SELECT MAX(COALESCE(rm2.source_ep_start, 0))
+        FROM resource_mappings rm2
+        JOIN subjects s2 ON s2.bangumi_id = rm2.bangumi_id
+        WHERE rm2.source = rm.source
+          AND rm2.source_aid = rm.source_aid
+          AND s2.calendar_weekday IS NOT NULL
+      ) AS maxSeasonalSourceEpStart,
+      (
+        SELECT COUNT(*)
+        FROM resource_mappings rm2
+        JOIN subjects s2 ON s2.bangumi_id = rm2.bangumi_id
+        WHERE rm2.source = rm.source
+          AND rm2.source_aid = rm.source_aid
+          AND s2.calendar_weekday IS NOT NULL
+      ) AS seasonalMappingCount,
       ri.latest_text AS sourceUpdatedAt,
       MAX(e.ep_index) AS latestEp,
-      MAX(e.source_ep_index) AS latestSourceEpIndex,
-      MAX(e.updated_at) AS episodeUpdatedAt
+      MAX(e.source_ep_index) AS latestSourceEpIndex
     FROM resource_mappings rm
     JOIN subjects s ON s.bangumi_id = rm.bangumi_id
     JOIN resource_items ri ON ri.source = rm.source AND ri.source_aid = rm.source_aid
@@ -261,6 +276,7 @@ export function listUpdateCandidateRows() {
       ON e.bangumi_id = rm.bangumi_id
       AND e.source = rm.source
       AND e.source_aid = rm.source_aid
+    WHERE s.calendar_weekday IS NOT NULL
     GROUP BY rm.bangumi_id, rm.source, rm.source_aid
   `).all();
 }

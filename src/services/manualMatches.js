@@ -108,7 +108,6 @@ function normalizedSubjectRow(row) {
     totalEpisodes: row.total_episodes,
     summary: row.summary,
     coverUrl: row.cover_url,
-    hasCover: row.has_cover,
     ratingScore: row.rating_score,
     rank: row.rating_rank,
     detailFetchedAt: row.metadata_fetched_at,

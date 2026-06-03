@@ -14,14 +14,6 @@ export function findSubjectById(id) {
   return sqlite.prepare("SELECT * FROM subjects WHERE bangumi_id = ?").get(id);
 }
 
-export function findSubjectCoverState(id) {
-  return sqlite.prepare(`
-    SELECT cover_url AS coverUrl, has_cover AS hasCover
-    FROM subjects
-    WHERE bangumi_id = ?
-  `).get(id);
-}
-
 export function listSubjects({ ids = null } = {}) {
   const params = [];
   let where = "";
@@ -49,8 +41,6 @@ export function listCalendarSubjectRows() {
       summary,
       cover_url AS coverUrl,
       cover_url,
-      has_cover AS hasCover,
-      has_cover,
       rating_score AS ratingScore,
       rating_score,
       rating_rank,
@@ -63,8 +53,9 @@ export function listCalendarSubjectRows() {
       air_date,
       air_weekday,
       platform,
-      COALESCE(calendar_weekday, air_weekday) AS calendarWeekday
+      calendar_weekday AS calendarWeekday
     FROM subjects
+    WHERE calendar_weekday IS NOT NULL
   `).all();
 }
 
@@ -97,10 +88,6 @@ export function deleteSubjectById(id) {
   sqlite.prepare("DELETE FROM subjects WHERE bangumi_id = ?").run(id);
 }
 
-export function markSubjectHasCover(id, hasCover) {
-  sqlite.prepare("UPDATE subjects SET has_cover = ? WHERE bangumi_id = ?").run(hasCover ? 1 : 0, id);
-}
-
 export function insertNonAnimeSubject(row) {
   sqlite.prepare(`
     INSERT INTO anime_other (
@@ -127,7 +114,6 @@ export function searchSubjectsByKeyword(keyword, { limit = 60 } = {}) {
       s.eps,
       s.total_episodes,
       s.cover_url,
-      s.has_cover,
       s.rating_score,
       s.rating_rank,
       s.rating_total,
@@ -156,7 +142,6 @@ export function searchSubjectsByTag(tag, { limit = 60 } = {}) {
       s.eps,
       s.total_episodes,
       s.cover_url,
-      s.has_cover,
       s.rating_score,
       s.rating_rank,
       s.rating_total,

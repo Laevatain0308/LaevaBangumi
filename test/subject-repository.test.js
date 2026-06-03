@@ -22,12 +22,12 @@ function seedRepositorySubject() {
 
     INSERT INTO subjects (
       bangumi_id, name, name_cn, summary, platform, air_date,
-      air_weekday, eps, total_episodes, cover_url, has_cover,
+      air_weekday, eps, total_episodes, cover_url,
       rating_score, rating_rank, rating_total, rating_distribution_json,
       metadata_fetched_at, updated_at
     ) VALUES (
       ${REPOSITORY_SUBJECT_ID}, 'Repository raw title', '仓库标题', 'summary', 'TV', '2026-04-03',
-      5, 12, 12, 'https://example.invalid/repository-cover.jpg', 0,
+      5, 12, 12, 'https://example.invalid/repository-cover.jpg',
       7.8, 321, 88, '[0,0,0,1,2,3,4,5,6,7]', datetime('now'), datetime('now')
     );
     INSERT INTO subject_aliases (bangumi_id, alias) VALUES

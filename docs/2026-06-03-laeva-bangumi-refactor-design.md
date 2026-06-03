@@ -188,7 +188,6 @@ CREATE TABLE subjects (
   eps INTEGER,
   total_episodes INTEGER,
   cover_url TEXT,
-  has_cover INTEGER NOT NULL DEFAULT 0,
 
   rating_score REAL,
   rating_rank INTEGER,
@@ -433,7 +432,7 @@ CREATE VIRTUAL TABLE subject_search_fts USING fts5(
 
 ### 通用 Envelope
 
-所有 API 除 `/api/cover`, `/api/heartbeat`, `/api/health` 外统一：
+所有 API 除 `/api/heartbeat`, `/api/health` 外统一：
 
 ```json
 {

@@ -1,6 +1,5 @@
 import { ANIME_PLATFORMS } from "../db/schema.js";
 import * as bangumi from "../clients/bangumiClient.js";
-import { downloadCover } from "../lib/cover.js";
 import { collectBangumiTitles } from "../lib/matcher.js";
 import { normalizeBangumiSubject, normalizeCoverUrl } from "../normalizers/bangumiSubjectNormalizer.js";
 import {
@@ -9,7 +8,6 @@ import {
   insertNonAnimeSubject,
   listSubjectAliases,
   listSubjects,
-  markSubjectHasCover,
   upsertSubjectMetadata as writeSubjectMetadata,
 } from "../repositories/subjectRepository.js";
 import { deleteResourceRowsForSubject } from "../repositories/resourceRepository.js";
@@ -33,7 +31,6 @@ export function subjectRowToAnimeFacade(row) {
     totalEpisodes: row.total_episodes,
     summary: row.summary,
     coverUrl: row.cover_url,
-    hasCover: row.has_cover,
     ratingScore: row.rating_score,
     rank: row.rating_rank,
     detailFetchedAt: row.metadata_fetched_at,
@@ -99,15 +96,6 @@ export async function upsertAnime(item, weekday = undefined, options = {}) {
 
   writeSubjectMetadata(normalized);
   debug("anime", "upserted subject", { id: item.id, title: item.name_cn || item.name, detailFetched: !!options.detailFetched });
-
-  const coverUrl = normalized.subject.cover_url;
-  if (coverUrl) {
-    downloadCover(item.id, coverUrl).then((ok) => {
-      if (ok) {
-        markSubjectHasCover(item.id, true);
-      }
-    }).catch(() => {});
-  }
 
   return findAnimeFacadeById(item.id);
 }

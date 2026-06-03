@@ -40,7 +40,6 @@ export const subjects = sqliteTable("subjects", {
   eps: integer("eps"),
   totalEpisodes: integer("total_episodes"),
   coverUrl: text("cover_url"),
-  hasCover: integer("has_cover").notNull().default(0),
   ratingScore: real("rating_score"),
   ratingRank: integer("rating_rank"),
   ratingTotal: integer("rating_total"),

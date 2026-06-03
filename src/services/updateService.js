@@ -21,21 +21,20 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
   const latestByAnime = new Map();
   for (const row of rows) {
     if (!enabledSourcesSet.has(row.source)) continue;
-    const episodeUpdatedMs = parseTimestamp(row.episodeUpdatedAt);
-    if (episodeUpdatedMs == null || episodeUpdatedMs < cutoffMs || episodeUpdatedMs > nowMs) continue;
+    const sourceUpdatedMs = parseTimestamp(row.sourceUpdatedAt);
+    if (sourceUpdatedMs == null || sourceUpdatedMs < cutoffMs || sourceUpdatedMs > nowMs) continue;
 
-    const isClosedRange = row.sourceEpEnd != null;
-    const isClosedRangeFinalUpdate =
-      isClosedRange &&
-      row.latestSourceEpIndex != null &&
-      row.latestSourceEpIndex === row.sourceEpEnd;
-    if (isClosedRange && !isClosedRangeFinalUpdate) continue;
+    const seasonalMappingCount = row.seasonalMappingCount ?? 0;
+    const sourceEpStart = row.sourceEpStart ?? 0;
+    const maxSeasonalSourceEpStart = row.maxSeasonalSourceEpStart ?? sourceEpStart;
+    if (seasonalMappingCount > 1 && sourceEpStart < maxSeasonalSourceEpStart) continue;
+
     const hasEpisodeChange = row.latestEp != null;
 
     const sourceUpdate = {
       source: row.source,
       sourceAid: row.sourceAid,
-      updatedAt: new Date(episodeUpdatedMs).toISOString(),
+      updatedAt: new Date(sourceUpdatedMs).toISOString(),
       latestEp: row.latestEp ?? null,
       latestSourceEpIndex: row.latestSourceEpIndex ?? null,
       sourceEpStart: row.sourceEpStart ?? null,
@@ -50,14 +49,14 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
 
     const shouldReplace =
       !existing ||
-      episodeUpdatedMs > existingMs ||
-      (episodeUpdatedMs === existingMs && sourceRank < existingRank);
+      sourceUpdatedMs > existingMs ||
+      (sourceUpdatedMs === existingMs && sourceRank < existingRank);
 
     if (shouldReplace) {
       const sourceUpdates = existing?.sourceUpdates ? [...existing.sourceUpdates, sourceUpdate] : [sourceUpdate];
       latestByAnime.set(row.id, {
         ...formatSubjectSearchDto(row, {
-          coverUrl: proxyCover(row.id, row.coverUrl, row.hasCover),
+          coverUrl: proxyCover(row.id, row.coverUrl),
           tags: listSubjectTags(row.id),
         }),
         latestEp: row.latestEp ?? null,

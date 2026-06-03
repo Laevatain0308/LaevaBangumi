@@ -13,7 +13,7 @@ import { log, error } from "../lib/logger.js";
 
 function formatSubjectSearchRow(row) {
   return formatSubjectSearchDto(row, {
-    coverUrl: proxyCover(row.bangumi_id, row.cover_url, row.has_cover),
+      coverUrl: proxyCover(row.bangumi_id, row.cover_url),
     tags: listSubjectTags(row.bangumi_id),
   });
 }

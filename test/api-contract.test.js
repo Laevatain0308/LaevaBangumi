@@ -5,10 +5,11 @@ import { createServer } from "../src/server.js";
 import { initDb, sqlite } from "../src/db/index.js";
 
 const CONTRACT_SUBJECT_ID = 990547888;
-const EPISODE_UPDATE_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1000;
+const SOURCE_LAST_UPDATE_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1000;
 const RESOURCE_ENTRY_ONLY_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1001;
 const CLOSED_RANGE_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1002;
 const CLOSED_RANGE_FINAL_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1003;
+const NON_SEASONAL_UPDATE_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1004;
 
 function getJson(server, path) {
   return new Promise((resolve, reject) => {
@@ -47,13 +48,20 @@ function getRaw(server, path) {
 function seedContractSubject() {
   initDb();
   sqlite.exec(`
+    DELETE FROM episodes WHERE bangumi_id = ${CONTRACT_SUBJECT_ID} OR (source = 'ffzy' AND source_aid = 123);
+    DELETE FROM resource_mappings WHERE bangumi_id = ${CONTRACT_SUBJECT_ID} OR (source = 'ffzy' AND source_aid = 123);
+    DELETE FROM resource_items WHERE source = 'ffzy' AND source_aid = 123;
+    DELETE FROM subject_tags WHERE bangumi_id = ${CONTRACT_SUBJECT_ID};
+    DELETE FROM subject_aliases WHERE bangumi_id = ${CONTRACT_SUBJECT_ID};
+    DELETE FROM subjects WHERE bangumi_id = ${CONTRACT_SUBJECT_ID};
+
     INSERT INTO subjects (
       bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
-      eps, total_episodes, cover_url, rating_score, rating_rank,
+      calendar_weekday, eps, total_episodes, cover_url, rating_score, rating_rank,
       rating_total, rating_distribution_json, metadata_fetched_at, rating_fetched_at
     ) VALUES (
       ${CONTRACT_SUBJECT_ID}, 'Raw title', '中文标题', 'summary', 'TV', '2026-04-01', 3,
-      12, 12, 'https://example.invalid/cover.jpg', 7.6, 1234,
+      3, 12, 12, 'https://example.invalid/cover.jpg', 7.6, 1234,
       420, '[0,0,1,2,3,10,20,30,5,1]', datetime('now'), datetime('now')
     )
     ON CONFLICT(bangumi_id) DO UPDATE SET
@@ -63,6 +71,7 @@ function seedContractSubject() {
       platform = excluded.platform,
       air_date = excluded.air_date,
       air_weekday = excluded.air_weekday,
+      calendar_weekday = excluded.calendar_weekday,
       eps = excluded.eps,
       total_episodes = excluded.total_episodes,
       cover_url = excluded.cover_url,
@@ -86,7 +95,7 @@ function seedContractSubject() {
     INSERT INTO resource_sources (source, name, enabled) VALUES ('ffzy', '非凡资源', 1)
       ON CONFLICT(source) DO UPDATE SET name = excluded.name, enabled = excluded.enabled;
     INSERT INTO resource_items (source, source_aid, title, latest_text, detail_fetched_at)
-      VALUES ('ffzy', 123, '资源站标题', datetime('now'), datetime('now'))
+      VALUES ('ffzy', 123, '资源站标题', '2026-06-03 10:00:00', datetime('now'))
       ON CONFLICT(source, source_aid) DO UPDATE SET
         title = excluded.title,
         latest_text = excluded.latest_text,
@@ -100,7 +109,7 @@ function seedContractSubject() {
         matched_at = excluded.matched_at,
         updated_at = datetime('now');
     INSERT INTO episodes (bangumi_id, source, source_aid, ep_index, source_ep_index, title, raw_video_url, updated_at)
-      VALUES (${CONTRACT_SUBJECT_ID}, 'ffzy', 123, 1, 1, '第01集', 'https://example.invalid/1.m3u8', datetime('now'))
+      VALUES (${CONTRACT_SUBJECT_ID}, 'ffzy', 123, 1, 1, '第01集', 'https://example.invalid/1.m3u8', '2026-05-01 00:00:00')
       ON CONFLICT(bangumi_id, source, source_aid, ep_index) DO UPDATE SET
         source_ep_index = excluded.source_ep_index,
         title = excluded.title,
@@ -139,13 +148,12 @@ test("detail exposes the new stable Aslan DTO contract", async () => {
   }
 });
 
-test("cover endpoint reads normalized subject cover URLs", async () => {
+test("cover endpoint is not served by LaevaBangumi", async () => {
   seedContractSubject();
   const server = createServer().listen(0);
   try {
     const response = await getRaw(server, `/api/cover?id=${CONTRACT_SUBJECT_ID}`);
-    assert.equal(response.status, 302);
-    assert.equal(response.headers.location, "https://example.invalid/cover.jpg");
+    assert.equal(response.status, 404);
   } finally {
     server.close();
   }
@@ -238,16 +246,45 @@ test("calendar reads normalized subjects and episodes", async () => {
   }
 });
 
+test("calendar ignores subjects that only have historical air_weekday", async () => {
+  seedContractSubject();
+  sqlite.exec(`
+    INSERT INTO subjects (
+      bangumi_id, name, name_cn, platform, air_date, air_weekday,
+      calendar_weekday, rating_distribution_json
+    ) VALUES (
+      ${NON_SEASONAL_UPDATE_SUBJECT_ID}, 'Historical raw', '历史老番',
+      'TV', '2024-01-03', 3, NULL, '[]'
+    )
+    ON CONFLICT(bangumi_id) DO UPDATE SET
+      air_weekday = excluded.air_weekday,
+      calendar_weekday = excluded.calendar_weekday;
+  `);
+
+  const server = createServer().listen(0);
+  try {
+    const response = await getJson(server, "/api/calendar");
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.body.data.flatMap((day) => day.items).some((row) => row.id === NON_SEASONAL_UPDATE_SUBJECT_ID),
+      false,
+    );
+  } finally {
+    server.close();
+  }
+});
+
 test("updates read normalized resource mappings and items", async () => {
   seedContractSubject();
   const server = createServer().listen(0);
   try {
-    const response = await getJson(server, "/api/updates?days=1&limit=10");
+    const response = await getJson(server, "/api/updates?days=1&limit=10&today=2026-06-03");
     assert.equal(response.status, 200);
     const item = response.body.data.find((row) => row.id === CONTRACT_SUBJECT_ID);
     assert.ok(item);
     assert.equal(item.latestEp, 1);
     assert.equal(item.latestEpisode, "更新至第01集");
+    assert.equal(item.updatedAt, "2026-06-03T02:00:00.000Z");
     assert.equal(item.source, "ffzy");
     assert.equal(item.sourceAid, 123);
     assert.equal(item.name, "Raw title");
@@ -269,32 +306,32 @@ test("updates read normalized resource mappings and items", async () => {
   }
 });
 
-test("updates use episode update time when it is newer than catalog time", async () => {
+test("updates use resource source last time instead of local episode write time", async () => {
   seedContractSubject();
   sqlite.exec(`
-    DELETE FROM episodes WHERE bangumi_id = ${EPISODE_UPDATE_SUBJECT_ID};
-    DELETE FROM resource_mappings WHERE bangumi_id = ${EPISODE_UPDATE_SUBJECT_ID};
+    DELETE FROM episodes WHERE bangumi_id = ${SOURCE_LAST_UPDATE_SUBJECT_ID};
+    DELETE FROM resource_mappings WHERE bangumi_id = ${SOURCE_LAST_UPDATE_SUBJECT_ID};
     DELETE FROM resource_items WHERE source = 'ffzy' AND source_aid = 124;
-    DELETE FROM subjects WHERE bangumi_id = ${EPISODE_UPDATE_SUBJECT_ID};
+    DELETE FROM subjects WHERE bangumi_id = ${SOURCE_LAST_UPDATE_SUBJECT_ID};
 
     INSERT INTO subjects (
-      bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
+      bangumi_id, name, name_cn, summary, platform, air_date, air_weekday, calendar_weekday,
       eps, total_episodes, rating_distribution_json, metadata_fetched_at
     ) VALUES (
-      ${EPISODE_UPDATE_SUBJECT_ID}, 'Episode update raw', '剧集更新时间标题',
-      'episode update summary', 'TV', '2026-04-02', 4, 12, 12, '[]', datetime('now')
+      ${SOURCE_LAST_UPDATE_SUBJECT_ID}, 'Source last raw', '采集站更新时间标题',
+      'source last summary', 'TV', '2026-04-02', 4, 4, 12, 12, '[]', datetime('now')
     );
     INSERT INTO resource_items (source, source_aid, title, latest_text, detail_fetched_at)
-      VALUES ('ffzy', 124, '剧集更新时间资源站', '2026-05-01 00:00:00', datetime('now'))
+      VALUES ('ffzy', 124, '采集站更新时间资源站', '2026-06-03 11:00:00', datetime('now'))
       ON CONFLICT(source, source_aid) DO UPDATE SET
         title = excluded.title,
         latest_text = excluded.latest_text,
         detail_fetched_at = excluded.detail_fetched_at;
     INSERT INTO resource_mappings (bangumi_id, source, source_aid, score, matched_at)
-      VALUES (${EPISODE_UPDATE_SUBJECT_ID}, 'ffzy', 124, 0.91, datetime('now'))
+      VALUES (${SOURCE_LAST_UPDATE_SUBJECT_ID}, 'ffzy', 124, 0.91, datetime('now'))
       ON CONFLICT(bangumi_id, source) DO UPDATE SET source_aid = excluded.source_aid;
     INSERT INTO episodes (bangumi_id, source, source_aid, ep_index, source_ep_index, title, raw_video_url, updated_at)
-      VALUES (${EPISODE_UPDATE_SUBJECT_ID}, 'ffzy', 124, 7, 7, '第07集', 'https://example.invalid/7.m3u8', '2026-06-03 11:00:00')
+      VALUES (${SOURCE_LAST_UPDATE_SUBJECT_ID}, 'ffzy', 124, 7, 7, '第07集', 'https://example.invalid/7.m3u8', '2026-05-01 00:00:00')
       ON CONFLICT(bangumi_id, source, source_aid, ep_index) DO UPDATE SET updated_at = excluded.updated_at;
   `);
 
@@ -302,7 +339,7 @@ test("updates use episode update time when it is newer than catalog time", async
   try {
     const response = await getJson(server, "/api/updates?days=1&limit=10&today=2026-06-03");
     assert.equal(response.status, 200);
-    const item = response.body.data.find((row) => row.id === EPISODE_UPDATE_SUBJECT_ID);
+    const item = response.body.data.find((row) => row.id === SOURCE_LAST_UPDATE_SUBJECT_ID);
     assert.ok(item);
     assert.equal(item.latestEp, 7);
     assert.equal(item.latestEpisode, "更新至第07集");
@@ -312,7 +349,7 @@ test("updates use episode update time when it is newer than catalog time", async
   }
 });
 
-test("updates ignore new resource catalog rows without episode update time", async () => {
+test("updates ignore non-seasonal subjects even when resource source last time is recent", async () => {
   seedContractSubject();
   sqlite.exec(`
     DELETE FROM episodes WHERE bangumi_id = ${RESOURCE_ENTRY_ONLY_SUBJECT_ID};
@@ -322,10 +359,10 @@ test("updates ignore new resource catalog rows without episode update time", asy
 
     INSERT INTO subjects (
       bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
-      eps, total_episodes, rating_distribution_json, metadata_fetched_at, created_at, updated_at
+      calendar_weekday, eps, total_episodes, rating_distribution_json, metadata_fetched_at, created_at, updated_at
     ) VALUES (
       ${RESOURCE_ENTRY_ONLY_SUBJECT_ID}, 'Catalog entry raw', '新入库旧番',
-      'catalog entry summary', 'TV', '2025-01-01', 1, 12, 12, '[]',
+      'catalog entry summary', 'TV', '2025-01-01', 1, NULL, 12, 12, '[]',
       '2026-06-03 10:00:00', '2026-06-03 10:00:00', '2026-06-03 10:00:00'
     );
     INSERT INTO resource_items (source, source_aid, title, latest_text, detail_fetched_at, updated_at)
@@ -356,7 +393,7 @@ test("updates ignore new resource catalog rows without episode update time", asy
   }
 });
 
-test("updates skip closed episode ranges unless the closed range final episode updated", async () => {
+test("updates only include the current seasonal final segment for multi-mapped resources", async () => {
   seedContractSubject();
   sqlite.exec(`
     DELETE FROM episodes WHERE bangumi_id IN (${CLOSED_RANGE_SUBJECT_ID}, ${CLOSED_RANGE_FINAL_SUBJECT_ID});
@@ -365,11 +402,11 @@ test("updates skip closed episode ranges unless the closed range final episode u
     DELETE FROM subjects WHERE bangumi_id IN (${CLOSED_RANGE_SUBJECT_ID}, ${CLOSED_RANGE_FINAL_SUBJECT_ID});
 
     INSERT INTO subjects (
-      bangumi_id, name, name_cn, summary, platform, air_date, air_weekday,
+      bangumi_id, name, name_cn, summary, platform, air_date, air_weekday, calendar_weekday,
       eps, total_episodes, rating_distribution_json, metadata_fetched_at
     ) VALUES
-      (${CLOSED_RANGE_SUBJECT_ID}, 'Closed range raw', '分段前半已完结', 'closed range summary', 'TV', '2026-04-03', 5, 12, 12, '[]', datetime('now')),
-      (${CLOSED_RANGE_FINAL_SUBJECT_ID}, 'Closed final raw', '分段末集刚更新', 'closed final summary', 'TV', '2026-04-10', 5, 12, 12, '[]', datetime('now'));
+      (${CLOSED_RANGE_SUBJECT_ID}, 'Closed range raw', '分段前半已完结', 'closed range summary', 'TV', '2025-04-03', 5, NULL, 12, 12, '[]', datetime('now')),
+      (${CLOSED_RANGE_FINAL_SUBJECT_ID}, 'Closed final raw', '分段末集刚更新', 'closed final summary', 'TV', '2026-04-10', 5, 5, 12, 12, '[]', datetime('now'));
     INSERT INTO resource_items (source, source_aid, title, latest_text, detail_fetched_at)
       VALUES ('ffzy', 126, '共享资源站条目', '2026-06-03 12:00:00', datetime('now'))
       ON CONFLICT(source, source_aid) DO UPDATE SET
@@ -389,7 +426,7 @@ test("updates skip closed episode ranges unless the closed range final episode u
     INSERT INTO episodes (bangumi_id, source, source_aid, ep_index, source_ep_index, title, raw_video_url, updated_at)
       VALUES
         (${CLOSED_RANGE_SUBJECT_ID}, 'ffzy', 126, 12, 12, '第12集', 'https://example.invalid/12.m3u8', '2026-05-01 00:00:00'),
-        (${CLOSED_RANGE_FINAL_SUBJECT_ID}, 'ffzy', 126, 12, 24, '第24集', 'https://example.invalid/24.m3u8', '2026-06-03 12:00:00')
+        (${CLOSED_RANGE_FINAL_SUBJECT_ID}, 'ffzy', 126, 12, 24, '第24集', 'https://example.invalid/24.m3u8', '2026-05-01 00:00:00')
       ON CONFLICT(bangumi_id, source, source_aid, ep_index) DO UPDATE SET updated_at = excluded.updated_at;
   `);
 

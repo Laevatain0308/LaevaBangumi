@@ -57,11 +57,10 @@ export function compactRow(row) {
   return Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined));
 }
 
-export function proxyCover(id, coverUrl, hasCover) {
+export function proxyCover(id, coverUrl) {
   const normalizedCoverUrl = normalizeCoverUrl(coverUrl);
   const externalProxyUrl = buildCoverProxyUrl({ id, sourceUrl: normalizedCoverUrl });
   if (externalProxyUrl) return externalProxyUrl;
-  if (hasCover) return `/anime/api/cover?id=${id}`;
   return normalizedCoverUrl;
 }
 
