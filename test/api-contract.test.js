@@ -28,6 +28,18 @@ function getJson(server, path) {
   });
 }
 
+function getRaw(server, path) {
+  return new Promise((resolve, reject) => {
+    const { port } = server.address();
+    http
+      .get({ hostname: "127.0.0.1", port, path }, (res) => {
+        res.resume();
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers }));
+      })
+      .on("error", reject);
+  });
+}
+
 function seedContractSubject() {
   initDb();
   sqlite.exec(`
@@ -118,6 +130,18 @@ test("detail exposes the new stable Aslan DTO contract", async () => {
     assert.equal(Object.hasOwn(detail, "bangumiId"), false);
     assert.equal(response.body.meta.resourceSources[0].sourceAid, 123);
     assert.equal(Object.hasOwn(response.body.meta.resourceSources[0], "cstationId"), false);
+  } finally {
+    server.close();
+  }
+});
+
+test("cover endpoint reads normalized subject cover URLs", async () => {
+  seedContractSubject();
+  const server = createServer().listen(0);
+  try {
+    const response = await getRaw(server, `/api/cover?id=${CONTRACT_SUBJECT_ID}`);
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.location, "https://example.invalid/cover.jpg");
   } finally {
     server.close();
   }
