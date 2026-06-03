@@ -62,6 +62,133 @@ export function listManualResourceStatesForSubject(bangumiId) {
   `).all(bangumiId);
 }
 
+export function findResourceMapping({ bangumiId, source }) {
+  assertResourceStateKey({ bangumiId, source });
+
+  return sqlite.prepare(`
+    SELECT
+      bangumi_id,
+      source,
+      source_aid,
+      source_ep_start,
+      source_ep_end,
+      display_ep_offset,
+      score,
+      matched_bg_name,
+      matched_resource_name,
+      matched_at
+    FROM resource_mappings
+    WHERE bangumi_id = @bangumiId AND source = @source
+  `).get({ bangumiId, source });
+}
+
+export function findResourceMappingOwner({ source, sourceAid, exceptBangumiId = null }) {
+  if (!source) throw new Error("resource mapping owner query requires source");
+  if (sourceAid == null) throw new Error("resource mapping owner query requires sourceAid");
+
+  return sqlite.prepare(`
+    SELECT bangumi_id, source, source_aid
+    FROM resource_mappings
+    WHERE source = @source
+      AND source_aid = @sourceAid
+      AND (@exceptBangumiId IS NULL OR bangumi_id <> @exceptBangumiId)
+    LIMIT 1
+  `).get({ source, sourceAid, exceptBangumiId });
+}
+
+export function listResourceMappings({ sourceKeys = null } = {}) {
+  if (sourceKeys != null && sourceKeys.length === 0) return [];
+  const sourceFilter = sourceKeys && sourceKeys.length > 0
+    ? `WHERE source IN (${sourceKeys.map(() => "?").join(", ")})`
+    : "";
+  return sqlite.prepare(`
+    SELECT bangumi_id, source, source_aid
+    FROM resource_mappings
+    ${sourceFilter}
+  `).all(...(sourceKeys || []));
+}
+
+export function listResourceItemsForSource(source) {
+  if (!source) throw new Error("resource item query requires source");
+
+  return sqlite.prepare(`
+    SELECT source, source_aid, title, subtitle, category, year, latest_text, detail_fetched_at
+    FROM resource_items
+    WHERE source = ?
+  `).all(source);
+}
+
+export function listEpisodeSubjectSourceRows({ sourceKeys = null } = {}) {
+  if (sourceKeys != null && sourceKeys.length === 0) return [];
+  const sourceFilter = sourceKeys && sourceKeys.length > 0
+    ? `AND source IN (${sourceKeys.map(() => "?").join(", ")})`
+    : "";
+  return sqlite.prepare(`
+    SELECT bangumi_id, source
+    FROM episodes
+    WHERE bangumi_id IS NOT NULL AND source IS NOT NULL
+    ${sourceFilter}
+  `).all(...(sourceKeys || []));
+}
+
+export function listRetryStatesByKind(kind, { sourceKeys = null } = {}) {
+  if (!kind) throw new Error("retry state query requires kind");
+  if (sourceKeys != null && sourceKeys.length === 0) return [];
+  const sourceFilter = sourceKeys && sourceKeys.length > 0
+    ? `AND source IN (${sourceKeys.map(() => "?").join(", ")})`
+    : "";
+  return sqlite.prepare(`
+    SELECT bangumi_id, source, retry_count, retry_at, updated_at
+    FROM retry_state
+    WHERE kind = ?
+    ${sourceFilter}
+  `).all(kind, ...(sourceKeys || []));
+}
+
+export function findRetryState({ bangumiId, source, kind }) {
+  assertResourceStateKey({ bangumiId, source });
+  if (!kind) throw new Error("retry state query requires kind");
+
+  return sqlite.prepare(`
+    SELECT bangumi_id, source, retry_count, retry_at, updated_at
+    FROM retry_state
+    WHERE bangumi_id = @bangumiId AND source = @source AND kind = @kind
+  `).get({ bangumiId, source, kind });
+}
+
+export function listManualResourceStates({ sourceKeys = null } = {}) {
+  if (sourceKeys != null && sourceKeys.length === 0) return [];
+  const sourceFilter = sourceKeys && sourceKeys.length > 0
+    ? `WHERE source IN (${sourceKeys.map(() => "?").join(", ")})`
+    : "";
+  return sqlite.prepare(`
+    SELECT bangumi_id, source, status, note, updated_at
+    FROM manual_resource_state
+    ${sourceFilter}
+  `).all(...(sourceKeys || []));
+}
+
+export function findManualResourceState({ bangumiId, source }) {
+  assertResourceStateKey({ bangumiId, source });
+
+  return sqlite.prepare(`
+    SELECT bangumi_id, source, status, note, updated_at
+    FROM manual_resource_state
+    WHERE bangumi_id = @bangumiId AND source = @source
+  `).get({ bangumiId, source });
+}
+
+export function listMappingSubjectIdsBySourceAid({ source, sourceAid }) {
+  if (!source) throw new Error("resource mapping query requires source");
+  if (sourceAid == null) throw new Error("resource mapping query requires sourceAid");
+
+  return sqlite.prepare(`
+    SELECT bangumi_id
+    FROM resource_mappings
+    WHERE source = @source AND source_aid = @sourceAid
+  `).all({ source, sourceAid }).map((row) => row.bangumi_id);
+}
+
 export function listEpisodeChannelRowsForSubject(bangumiId) {
   return sqlite.prepare(`
     SELECT

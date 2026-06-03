@@ -1,4 +1,4 @@
-import * as cstation from "./cstation.js";
+import * as cstation from "../clients/resourceClient.js";
 import { buildCoverProxyUrl } from "../lib/coverProxyUrl.js";
 import { normalizeCoverUrl } from "../normalizers/bangumiSubjectNormalizer.js";
 

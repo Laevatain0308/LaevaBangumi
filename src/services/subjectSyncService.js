@@ -1,6 +1,6 @@
 import { db, sqlite } from "../db/index.js";
 import { animeOther, ANIME_PLATFORMS } from "../db/schema.js";
-import * as bangumi from "./bangumi.js";
+import * as bangumi from "../clients/bangumiClient.js";
 import { downloadCover } from "../lib/cover.js";
 import { collectBangumiTitles } from "../lib/matcher.js";
 import { normalizeBangumiSubject, normalizeCoverUrl } from "../normalizers/bangumiSubjectNormalizer.js";

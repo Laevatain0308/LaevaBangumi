@@ -1,4 +1,4 @@
-import * as bangumi from "./bangumi.js";
+import * as bangumi from "../clients/bangumiClient.js";
 import { error, log, warn } from "../lib/logger.js";
 import {
   enrichFromSubject,

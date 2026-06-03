@@ -1,5 +1,5 @@
 import { sqlite } from "../db/index.js";
-import * as cstation from "./cstation.js";
+import * as cstation from "../clients/resourceClient.js";
 import { log, error } from "../lib/logger.js";
 import { upsertResourceItem, upsertResourceSyncState } from "../repositories/resourceRepository.js";
 import { normalizeResourceItem } from "../normalizers/resourceItemNormalizer.js";

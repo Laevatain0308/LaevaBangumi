@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { db, sqlite } from "../db/index.js";
-import * as bangumi from "./bangumi.js";
+import * as bangumi from "../clients/bangumiClient.js";
 import { listSubjectTags } from "../repositories/subjectRepository.js";
 import { formatSubjectSearchDto } from "../dto/subjectDto.js";
 import { proxyCover } from "./animeShared.js";
