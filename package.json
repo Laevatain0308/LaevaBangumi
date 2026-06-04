@@ -8,6 +8,7 @@
     "start": "node src/index.js",
     "start:sync": "node src/index.js --sync",
     "prewarm:anime": "node src/scripts/prewarm-anime.js",
+    "sync:user": "node src/scripts/sync-user.js",
     "export:manual-review": "node src/scripts/export-manual-review.js",
     "import:manual-review": "node src/scripts/import-manual-review.js",
     "export:mapped-review": "node src/scripts/export-mapped-review.js",

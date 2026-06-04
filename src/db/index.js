@@ -7,6 +7,7 @@ const DB_PATH = new URL("../../data/anime.db", import.meta.url).pathname;
 export const sqlite = new Database(DB_PATH);
 sqlite.pragma("journal_mode = WAL");
 sqlite.pragma("foreign_keys = ON");
+sqlite.pragma("busy_timeout = 5000");
 
 export const db = drizzle(sqlite, { schema });
 
@@ -35,6 +36,12 @@ function ensureRecommendedIndexes() {
 
     CREATE INDEX IF NOT EXISTS idx_retry_state_retry_at
       ON retry_state(retry_at);
+
+    CREATE INDEX IF NOT EXISTS idx_sync_events_user_domain_version
+      ON sync_events(user_id, domain, version);
+
+    CREATE INDEX IF NOT EXISTS idx_sync_events_user_device_seq
+      ON sync_events(user_id, device_id, seq);
   `);
 }
 
@@ -186,6 +193,128 @@ export function initDb() {
       note TEXT,
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (bangumi_id, source)
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_users (
+      user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      display_name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      disabled_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_credentials (
+      user_id INTEGER PRIMARY KEY REFERENCES sync_users(user_id) ON DELETE CASCADE,
+      login_name TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      password_changed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_invites (
+      invite_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invite_hash TEXT NOT NULL UNIQUE,
+      label TEXT,
+      max_uses INTEGER NOT NULL DEFAULT 1,
+      used_count INTEGER NOT NULL DEFAULT 0,
+      expires_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      disabled_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_tokens (
+      token_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES sync_users(user_id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      label TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used_at TEXT,
+      revoked_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_devices (
+      user_id INTEGER NOT NULL REFERENCES sync_users(user_id) ON DELETE CASCADE,
+      device_id TEXT NOT NULL,
+      device_name TEXT,
+      platform TEXT,
+      app_version TEXT,
+      first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, device_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_events (
+      user_id INTEGER NOT NULL REFERENCES sync_users(user_id) ON DELETE CASCADE,
+      event_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      domain TEXT NOT NULL,
+      op TEXT NOT NULL,
+      entity_key TEXT,
+      bangumi_id INTEGER,
+      updated_at_ms INTEGER NOT NULL,
+      version TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      received_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, event_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS watch_history_items (
+      user_id INTEGER NOT NULL REFERENCES sync_users(user_id) ON DELETE CASCADE,
+      entity_key TEXT NOT NULL,
+      bangumi_id INTEGER NOT NULL,
+      adapter_name TEXT NOT NULL,
+      last_watch_episode INTEGER NOT NULL,
+      last_watch_time_ms INTEGER NOT NULL,
+      last_src TEXT,
+      last_watch_episode_name TEXT,
+      bangumi_item_json TEXT NOT NULL,
+      item_version TEXT NOT NULL,
+      PRIMARY KEY (user_id, entity_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS watch_progress (
+      user_id INTEGER NOT NULL REFERENCES sync_users(user_id) ON DELETE CASCADE,
+      entity_key TEXT NOT NULL,
+      episode INTEGER NOT NULL,
+      road INTEGER NOT NULL,
+      progress_ms INTEGER NOT NULL,
+      progress_version TEXT NOT NULL,
+      PRIMARY KEY (user_id, entity_key, episode)
+    );
+
+    CREATE TABLE IF NOT EXISTS watch_deleted_items (
+      user_id INTEGER NOT NULL REFERENCES sync_users(user_id) ON DELETE CASCADE,
+      entity_key TEXT NOT NULL,
+      deleted_version TEXT NOT NULL,
+      PRIMARY KEY (user_id, entity_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS watch_clear_state (
+      user_id INTEGER PRIMARY KEY REFERENCES sync_users(user_id) ON DELETE CASCADE,
+      clear_version TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS collection_items (
+      user_id INTEGER NOT NULL REFERENCES sync_users(user_id) ON DELETE CASCADE,
+      bangumi_id INTEGER NOT NULL,
+      type INTEGER NOT NULL,
+      collected_at_ms INTEGER,
+      updated_at_ms INTEGER NOT NULL,
+      bangumi_item_json TEXT NOT NULL,
+      item_version TEXT NOT NULL,
+      PRIMARY KEY (user_id, bangumi_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS collection_deleted_items (
+      user_id INTEGER NOT NULL REFERENCES sync_users(user_id) ON DELETE CASCADE,
+      bangumi_id INTEGER NOT NULL,
+      deleted_version TEXT NOT NULL,
+      PRIMARY KEY (user_id, bangumi_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS collection_clear_state (
+      user_id INTEGER PRIMARY KEY REFERENCES sync_users(user_id) ON DELETE CASCADE,
+      clear_version TEXT
     );
 
     INSERT OR IGNORE INTO resource_sources (source, name, enabled, priority)

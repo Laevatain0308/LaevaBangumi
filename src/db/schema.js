@@ -154,5 +154,134 @@ export const manualResourceState = sqliteTable("manual_resource_state", {
   pk: uniqueIndex("idx_manual_resource_state_unique").on(table.bangumiId, table.source),
 }));
 
+export const syncUsers = sqliteTable("sync_users", {
+  userId: integer("user_id").primaryKey({ autoIncrement: true }),
+  displayName: text("display_name").notNull(),
+  createdAt: text("created_at").default("(datetime('now'))").notNull(),
+  disabledAt: text("disabled_at"),
+});
+
+export const syncCredentials = sqliteTable("sync_credentials", {
+  userId: integer("user_id").primaryKey().references(() => syncUsers.userId),
+  loginName: text("login_name").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  createdAt: text("created_at").default("(datetime('now'))").notNull(),
+  passwordChangedAt: text("password_changed_at"),
+});
+
+export const syncInvites = sqliteTable("sync_invites", {
+  inviteId: integer("invite_id").primaryKey({ autoIncrement: true }),
+  inviteHash: text("invite_hash").notNull().unique(),
+  label: text("label"),
+  maxUses: integer("max_uses").notNull().default(1),
+  usedCount: integer("used_count").notNull().default(0),
+  expiresAt: text("expires_at"),
+  createdAt: text("created_at").default("(datetime('now'))").notNull(),
+  disabledAt: text("disabled_at"),
+});
+
+export const syncTokens = sqliteTable("sync_tokens", {
+  tokenId: integer("token_id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => syncUsers.userId),
+  tokenHash: text("token_hash").notNull().unique(),
+  label: text("label"),
+  createdAt: text("created_at").default("(datetime('now'))").notNull(),
+  lastUsedAt: text("last_used_at"),
+  revokedAt: text("revoked_at"),
+});
+
+export const syncDevices = sqliteTable("sync_devices", {
+  userId: integer("user_id").notNull().references(() => syncUsers.userId),
+  deviceId: text("device_id").notNull(),
+  deviceName: text("device_name"),
+  platform: text("platform"),
+  appVersion: text("app_version"),
+  firstSeenAt: text("first_seen_at").default("(datetime('now'))").notNull(),
+  lastSeenAt: text("last_seen_at").default("(datetime('now'))").notNull(),
+}, (table) => ({
+  pk: uniqueIndex("idx_sync_devices_unique").on(table.userId, table.deviceId),
+}));
+
+export const syncEvents = sqliteTable("sync_events", {
+  userId: integer("user_id").notNull().references(() => syncUsers.userId),
+  eventId: text("event_id").notNull(),
+  deviceId: text("device_id").notNull(),
+  seq: integer("seq").notNull(),
+  domain: text("domain").notNull(),
+  op: text("op").notNull(),
+  entityKey: text("entity_key"),
+  bangumiId: integer("bangumi_id"),
+  updatedAtMs: integer("updated_at_ms").notNull(),
+  version: text("version").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  receivedAt: text("received_at").default("(datetime('now'))").notNull(),
+}, (table) => ({
+  pk: uniqueIndex("idx_sync_events_unique").on(table.userId, table.eventId),
+}));
+
+export const watchHistoryItems = sqliteTable("watch_history_items", {
+  userId: integer("user_id").notNull().references(() => syncUsers.userId),
+  entityKey: text("entity_key").notNull(),
+  bangumiId: integer("bangumi_id").notNull(),
+  adapterName: text("adapter_name").notNull(),
+  lastWatchEpisode: integer("last_watch_episode").notNull(),
+  lastWatchTimeMs: integer("last_watch_time_ms").notNull(),
+  lastSrc: text("last_src"),
+  lastWatchEpisodeName: text("last_watch_episode_name"),
+  bangumiItemJson: text("bangumi_item_json").notNull(),
+  itemVersion: text("item_version").notNull(),
+}, (table) => ({
+  pk: uniqueIndex("idx_watch_history_items_unique").on(table.userId, table.entityKey),
+}));
+
+export const watchProgress = sqliteTable("watch_progress", {
+  userId: integer("user_id").notNull().references(() => syncUsers.userId),
+  entityKey: text("entity_key").notNull(),
+  episode: integer("episode").notNull(),
+  road: integer("road").notNull(),
+  progressMs: integer("progress_ms").notNull(),
+  progressVersion: text("progress_version").notNull(),
+}, (table) => ({
+  pk: uniqueIndex("idx_watch_progress_unique").on(table.userId, table.entityKey, table.episode),
+}));
+
+export const watchDeletedItems = sqliteTable("watch_deleted_items", {
+  userId: integer("user_id").notNull().references(() => syncUsers.userId),
+  entityKey: text("entity_key").notNull(),
+  deletedVersion: text("deleted_version").notNull(),
+}, (table) => ({
+  pk: uniqueIndex("idx_watch_deleted_items_unique").on(table.userId, table.entityKey),
+}));
+
+export const watchClearState = sqliteTable("watch_clear_state", {
+  userId: integer("user_id").primaryKey().references(() => syncUsers.userId),
+  clearVersion: text("clear_version"),
+});
+
+export const collectionItems = sqliteTable("collection_items", {
+  userId: integer("user_id").notNull().references(() => syncUsers.userId),
+  bangumiId: integer("bangumi_id").notNull(),
+  type: integer("type").notNull(),
+  collectedAtMs: integer("collected_at_ms"),
+  updatedAtMs: integer("updated_at_ms").notNull(),
+  bangumiItemJson: text("bangumi_item_json").notNull(),
+  itemVersion: text("item_version").notNull(),
+}, (table) => ({
+  pk: uniqueIndex("idx_collection_items_unique").on(table.userId, table.bangumiId),
+}));
+
+export const collectionDeletedItems = sqliteTable("collection_deleted_items", {
+  userId: integer("user_id").notNull().references(() => syncUsers.userId),
+  bangumiId: integer("bangumi_id").notNull(),
+  deletedVersion: text("deleted_version").notNull(),
+}, (table) => ({
+  pk: uniqueIndex("idx_collection_deleted_items_unique").on(table.userId, table.bangumiId),
+}));
+
+export const collectionClearState = sqliteTable("collection_clear_state", {
+  userId: integer("user_id").primaryKey().references(() => syncUsers.userId),
+  clearVersion: text("clear_version"),
+});
+
 /** 允许进入 subjects 表并参与番剧同步的 platform 值 */
 export const ANIME_PLATFORMS = new Set(["TV", "WEB", "OVA", "剧场版"]);

@@ -4,6 +4,7 @@ import { enqueueSearch } from "./services/queue.js";
 import { log, error } from "./lib/logger.js";
 import { envelope } from "./dto/apiEnvelope.js";
 import { errorEnvelope, serverErrorEnvelope } from "./dto/errorDto.js";
+import { createPrivateSyncRouter } from "./routes/privateSyncRoutes.js";
 
 function ts() {
   return new Date().toISOString();
@@ -11,6 +12,8 @@ function ts() {
 
 export function createServer() {
   const app = express();
+  app.use(express.json({ limit: "1mb" }));
+  app.use("/api/sync", createPrivateSyncRouter());
 
   // ── /api/calendar ──────────────────────────────────────
   app.get("/api/calendar", async (_req, res) => {
