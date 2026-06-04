@@ -5,6 +5,8 @@ import {
   createSyncInvite,
   createSyncToken,
   createSyncUser,
+  deleteSyncUser,
+  disableSyncUser,
   revokeSyncToken,
 } from "../services/syncTokenService.js";
 
@@ -32,6 +34,14 @@ export function runSyncUserCommand(argv) {
       revokeSyncToken(tokenId);
       return { revokedTokenId: tokenId };
     }
+    case "disable-user": {
+      const userId = Number(requireOption(options, "user-id"));
+      return disableSyncUser(userId);
+    }
+    case "delete-user": {
+      const userId = Number(requireOption(options, "user-id"));
+      return deleteSyncUser(userId);
+    }
     case "create-invite": {
       const maxUses = options["max-uses"] == null ? 1 : Number(options["max-uses"]);
       const invite = createSyncInvite({
@@ -46,7 +56,7 @@ export function runSyncUserCommand(argv) {
     }
     default:
       throw new Error(
-        "Usage: sync-user.js <create-user|create-token|revoke-token|create-invite> [--name value] [--user-id value] [--label value] [--token-id value] [--max-uses value] [--expires-at value]",
+        "Usage: sync-user.js <create-user|create-token|revoke-token|disable-user|delete-user|create-invite> [--name value] [--user-id value] [--label value] [--token-id value] [--max-uses value] [--expires-at value]",
       );
   }
 }

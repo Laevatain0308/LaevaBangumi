@@ -231,6 +231,49 @@ export function revokeSyncToken(tokenId) {
     .run(tokenId);
 }
 
+export function disableSyncUser(userId) {
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw new Error("userId is required");
+  }
+  const disableResult = sqlite
+    .prepare(
+      `
+      UPDATE sync_users
+      SET disabled_at = COALESCE(disabled_at, datetime('now'))
+      WHERE user_id = ?
+    `,
+    )
+    .run(userId);
+  const revokeResult = sqlite
+    .prepare(
+      `
+      UPDATE sync_tokens
+      SET revoked_at = datetime('now')
+      WHERE user_id = ?
+        AND revoked_at IS NULL
+    `,
+    )
+    .run(userId);
+  return {
+    disabledUserId: userId,
+    disabled: disableResult.changes > 0,
+    revokedTokenCount: revokeResult.changes,
+  };
+}
+
+export function deleteSyncUser(userId) {
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw new Error("userId is required");
+  }
+  const result = sqlite
+    .prepare("DELETE FROM sync_users WHERE user_id = ?")
+    .run(userId);
+  return {
+    deletedUserId: userId,
+    deleted: result.changes > 0,
+  };
+}
+
 export function authenticateBearerToken(authorizationHeader) {
   const rawToken = parseBearerToken(authorizationHeader);
   if (!rawToken) {
