@@ -10,6 +10,7 @@ import {
 } from "../services/syncTokenService.js";
 import {
   buildPrivateSyncSnapshot,
+  clearPrivateSyncData,
   mergePrivateSyncEvents,
 } from "../services/privateSyncMergeService.js";
 
@@ -253,6 +254,30 @@ export function createPrivateSyncRouter() {
           errorCode: "invalid_sync_event",
         }),
       );
+    }
+  });
+
+  router.post("/clear", (req, res) => {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const watch = body.watch === true;
+    const collection = body.collection === true;
+    if (!watch && !collection) {
+      return invalidQuery(res, "watch or collection must be true");
+    }
+    try {
+      const snapshot = clearPrivateSyncData({
+        userId: req.syncAuth.user.userId,
+        watch,
+        collection,
+      });
+      res.json(
+        envelope(
+          { snapshot },
+          { updatedAt: ts(), meta: { freshness: "cache" } },
+        ),
+      );
+    } catch (err) {
+      res.status(500).json(serverErrorEnvelope(null, err, { updatedAt: ts() }));
     }
   });
 

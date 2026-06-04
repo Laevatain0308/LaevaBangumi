@@ -21,6 +21,7 @@ function watchUpsert({
   entityKey = "LaevaBangumi1",
   bangumiId = 1,
   episode = 1,
+  lastWatchEpisode = episode,
   road = 0,
   progressMs = 10000,
 } = {}) {
@@ -39,6 +40,7 @@ function watchUpsert({
       bangumiId,
       bangumiItem: item(bangumiId),
       episode,
+      lastWatchEpisode,
       road,
       progressMs,
       lastSrc: `https://example.invalid/${bangumiId}/${episode}`,
@@ -210,6 +212,26 @@ test("watch merge keeps per-episode progress while latest item metadata wins", (
   assert.equal(history.progresses["2"].progressMs, 20000);
 });
 
+test("watch merge keeps explicit last watched episode separate from progress episode", () => {
+  const user = createSyncUser("private-sync-merge-WatchEpisode");
+
+  const result = mergePrivateSyncEvents({
+    userId: user.userId,
+    events: [
+      watchUpsert({
+        eventId: "device-a:1",
+        updatedAt: 1000,
+        episode: 1,
+        lastWatchEpisode: 3,
+        progressMs: 10000,
+      }),
+    ],
+  });
+
+  assert.equal(result.snapshot.watch.histories[0].lastWatchEpisode, 3);
+  assert.equal(result.snapshot.watch.histories[0].progresses["1"].progressMs, 10000);
+});
+
 test("watch delete tombstone blocks older upserts and newer upserts revive", () => {
   const user = createSyncUser("private-sync-merge-Alice");
 
@@ -370,5 +392,18 @@ test("merge rejects excessive event counts and oversized payloads", () => {
         })),
       }),
     /Sync event payload is too large/,
+  );
+});
+
+test("merge rejects collection status outside the client range", () => {
+  const user = createSyncUser("private-sync-merge-TypeLimit");
+
+  assert.throws(
+    () =>
+      mergePrivateSyncEvents({
+        userId: user.userId,
+        events: [collectionUpsert({ type: 6 })],
+      }),
+    /Invalid collection.upsert payload/,
   );
 });

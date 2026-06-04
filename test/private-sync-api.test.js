@@ -379,3 +379,62 @@ test("merge accepts events and returns a snapshot", async () => {
     server.close();
   }
 });
+
+test("clear removes only requested sync domains", async () => {
+  const { rawToken } = seedToken();
+  const server = createServer().listen(0);
+  try {
+    const merged = await requestJson(server, {
+      method: "POST",
+      path: "/api/sync/merge",
+      token: rawToken,
+      body: {
+        deviceId: "device-a",
+        clientSeq: 1,
+        events: [
+          watchEvent(),
+          {
+            eventId: "device-a:2",
+            deviceId: "device-a",
+            seq: 2,
+            domain: "collection",
+            op: "collection.upsert",
+            updatedAt: 2000,
+            bangumiId: 1,
+            payload: {
+              bangumiId: 1,
+              type: 1,
+              bangumiItem: watchEvent().payload.bangumiItem,
+              collectedAt: 2000,
+            },
+          },
+        ],
+      },
+    });
+    assert.equal(merged.status, 200);
+    assert.equal(merged.body.data.snapshot.watch.histories.length, 1);
+    assert.equal(merged.body.data.snapshot.collection.items.length, 1);
+
+    const clearWatch = await requestJson(server, {
+      method: "POST",
+      path: "/api/sync/clear",
+      token: rawToken,
+      body: { watch: true, collection: false },
+    });
+    assert.equal(clearWatch.status, 200);
+    assert.equal(clearWatch.body.data.snapshot.watch.histories.length, 0);
+    assert.equal(clearWatch.body.data.snapshot.collection.items.length, 1);
+
+    const clearCollection = await requestJson(server, {
+      method: "POST",
+      path: "/api/sync/clear",
+      token: rawToken,
+      body: { collection: true },
+    });
+    assert.equal(clearCollection.status, 200);
+    assert.equal(clearCollection.body.data.snapshot.watch.histories.length, 0);
+    assert.equal(clearCollection.body.data.snapshot.collection.items.length, 0);
+  } finally {
+    server.close();
+  }
+});

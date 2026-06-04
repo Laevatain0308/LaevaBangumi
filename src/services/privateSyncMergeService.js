@@ -57,6 +57,44 @@ export function buildPrivateSyncSnapshot(userId) {
   };
 }
 
+export function clearPrivateSyncData({
+  userId,
+  watch = false,
+  collection = false,
+}) {
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw new Error("userId is required");
+  }
+  sqlite.transaction(() => {
+    if (watch) {
+      sqlite
+        .prepare("DELETE FROM watch_progress WHERE user_id = ?")
+        .run(userId);
+      sqlite
+        .prepare("DELETE FROM watch_history_items WHERE user_id = ?")
+        .run(userId);
+      sqlite
+        .prepare("DELETE FROM watch_deleted_items WHERE user_id = ?")
+        .run(userId);
+      sqlite
+        .prepare("DELETE FROM watch_clear_state WHERE user_id = ?")
+        .run(userId);
+    }
+    if (collection) {
+      sqlite
+        .prepare("DELETE FROM collection_items WHERE user_id = ?")
+        .run(userId);
+      sqlite
+        .prepare("DELETE FROM collection_deleted_items WHERE user_id = ?")
+        .run(userId);
+      sqlite
+        .prepare("DELETE FROM collection_clear_state WHERE user_id = ?")
+        .run(userId);
+    }
+  })();
+  return buildPrivateSyncSnapshot(userId);
+}
+
 function normalizeEvent(event) {
   const eventId = stringValue(event?.eventId);
   const deviceId = stringValue(event?.deviceId);
@@ -164,6 +202,7 @@ function applyWatchUpsert(userId, event) {
   const adapterName = stringValue(payload.adapterName);
   const bangumiId = numberValue(payload.bangumiId ?? event.bangumiId);
   const episode = numberValue(payload.episode);
+  const lastWatchEpisode = numberValue(payload.lastWatchEpisode ?? episode);
   const road = numberValue(payload.road);
   const progressMs = numberValue(payload.progressMs);
   const bangumiItem =
@@ -176,6 +215,7 @@ function applyWatchUpsert(userId, event) {
     !adapterName ||
     !Number.isFinite(bangumiId) ||
     !Number.isFinite(episode) ||
+    !Number.isFinite(lastWatchEpisode) ||
     !Number.isFinite(road) ||
     !Number.isFinite(progressMs) ||
     !bangumiItem
@@ -223,8 +263,10 @@ function applyWatchUpsert(userId, event) {
         entityKey,
         bangumiId,
         adapterName,
-        episode,
-        event.updatedAtMs,
+        lastWatchEpisode,
+        Number.isFinite(numberValue(payload.lastWatchTime))
+          ? numberValue(payload.lastWatchTime)
+          : event.updatedAtMs,
         stringValue(payload.lastSrc) || "",
         stringValue(payload.lastWatchEpisodeName) || "",
         JSON.stringify(bangumiItem),
@@ -349,7 +391,13 @@ function applyCollectionUpsert(userId, event) {
     payload.bangumiItem && typeof payload.bangumiItem === "object"
       ? payload.bangumiItem
       : null;
-  if (!Number.isFinite(bangumiId) || !Number.isFinite(type) || !bangumiItem) {
+  if (
+    !Number.isFinite(bangumiId) ||
+    !Number.isInteger(type) ||
+    type < 1 ||
+    type > 5 ||
+    !bangumiItem
+  ) {
     throw new Error("Invalid collection.upsert payload");
   }
   if (!isNewerThanCollectionClear(userId, event.version)) {
