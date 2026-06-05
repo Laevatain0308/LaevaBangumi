@@ -566,10 +566,112 @@ function existingMapping(animeId, source) {
   return normalized ? normalizedMappingRow(normalized) : undefined;
 }
 
-export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refreshEpisodes = true } = {}) {
+function mappingActionRow(action) {
+  return {
+    animeId: action.animeRow.id,
+    source: action.source,
+    sourceAid: action.sourceAid,
+    sourceEpStart: action.episodeRange.sourceEpStart,
+    sourceEpEnd: action.episodeRange.sourceEpEnd,
+    displayEpOffset: action.episodeRange.displayEpOffset,
+  };
+}
+
+function projectedMappingsAfterActions(actions) {
+  const affectedSources = [...new Set(actions.map((action) => action.source).filter(Boolean))];
+  const projected = new Map();
+  for (const row of listResourceMappings({ sourceKeys: affectedSources }).map(normalizedMappingRow)) {
+    projected.set(`${row.animeId}:${row.source}`, row);
+  }
+
+  for (const action of actions) {
+    if (!action.source) continue;
+    const key = `${action.animeId ?? action.animeRow?.id}:${action.source}`;
+    if (["delete", "wait_airing", "no_resource"].includes(action.type)) {
+      projected.delete(key);
+      continue;
+    }
+    if (["match", "update"].includes(action.type)) {
+      projected.set(key, mappingActionRow(action));
+    }
+  }
+
+  return [...projected.values()];
+}
+
+function validateSharedSourceRanges(actions) {
+  const errors = [];
+  const mappings = projectedMappingsAfterActions(actions);
+  const affectedSourceAidKeys = new Set();
+  for (const action of actions) {
+    if (["match", "update"].includes(action.type) && action.sourceAid != null) {
+      affectedSourceAidKeys.add(`${action.source}:${action.sourceAid}`);
+    }
+    if (action.previousMapping?.sourceAid != null) {
+      affectedSourceAidKeys.add(`${action.previousMapping.source}:${action.previousMapping.sourceAid}`);
+    }
+  }
+  const bySourceAid = new Map();
+  for (const mapping of mappings) {
+    const key = `${mapping.source}:${mapping.sourceAid}`;
+    if (!affectedSourceAidKeys.has(key)) continue;
+    const group = bySourceAid.get(key) || [];
+    group.push(mapping);
+    bySourceAid.set(key, group);
+  }
+
+  for (const [key, group] of bySourceAid.entries()) {
+    if (group.length <= 1) continue;
+    const missingStart = group.filter((row) => row.sourceEpStart == null);
+    for (const row of missingStart) {
+      errors.push(`shared source ${key}: mapping ${row.animeId}:${row.source} must include source_ep_start`);
+    }
+    if (missingStart.length > 0) continue;
+
+    const sorted = [...group].sort((a, b) => a.sourceEpStart - b.sourceEpStart || a.animeId - b.animeId);
+    for (let i = 0; i < sorted.length; i++) {
+      const row = sorted[i];
+      if (row.sourceEpEnd != null && row.sourceEpEnd < row.sourceEpStart) {
+        errors.push(`shared source ${key}: mapping ${row.animeId}:${row.source} source_ep_end must be greater than or equal to source_ep_start`);
+      }
+      if (i < sorted.length - 1 && row.sourceEpEnd == null) {
+        errors.push(`shared source ${key}: non-final shared range must include source_ep_end`);
+      }
+      if (i > 0) {
+        const previous = sorted[i - 1];
+        if (previous.sourceEpEnd != null && previous.sourceEpEnd >= row.sourceEpStart) {
+          errors.push(`shared source ${key}: shared ranges must not overlap (${previous.animeId}:${previous.source} and ${row.animeId}:${row.source})`);
+        }
+      }
+    }
+  }
+
+  if (errors.length > 0) throw new Error(`resource range validation failed:\n${errors.join("\n")}`);
+}
+
+function countManualActionStats(actions, stats) {
+  for (const action of actions) {
+    stats.updated++;
+    if (action.type === "wait_airing") stats.waitAiring++;
+    if (action.type === "no_resource") stats.noResource++;
+    if (action.type === "match") stats.matched++;
+  }
+}
+
+function countMappedActionStats(actions, stats) {
+  for (const action of actions) {
+    stats.updated++;
+    if (action.type === "delete") stats.deleted++;
+    if (action.type === "wait_airing") stats.waitAiring++;
+    if (action.type === "no_resource") stats.noResource++;
+    if (action.type === "update") stats.matched++;
+  }
+}
+
+export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refreshEpisodes = true, dryRun = false } = {}) {
   const raw = await readFile(filePath, "utf8");
   const rows = parseCsv(raw);
-  const stats = { filePath, rows: rows.length, updated: 0, matched: 0, waitAiring: 0, noResource: 0, refreshed: 0, skipped: 0 };
+  const stats = { filePath, rows: rows.length, updated: 0, matched: 0, waitAiring: 0, noResource: 0, refreshed: 0, skipped: 0, dryRun };
   const errors = [];
   const actions = [];
 
@@ -603,11 +705,11 @@ export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refre
     }
 
     if (decision === "wait_airing") {
-      actions.push({ type: "wait_airing", animeId, source, note });
+      actions.push({ type: "wait_airing", animeId, source, note, previousMapping: existingMapping(animeId, source), line });
       continue;
     }
     if (decision === "no_resource") {
-      actions.push({ type: "no_resource", animeId, source, note });
+      actions.push({ type: "no_resource", animeId, source, note, previousMapping: existingMapping(animeId, source), line });
       continue;
     }
 
@@ -623,10 +725,17 @@ export async function importManualReview(filePath = DEFAULT_REVIEW_PATH, { refre
     }
     const episodeRange = parseEpisodeRange(row, line, errors);
 
-    actions.push({ type: "match", animeRow, source, sourceItem, sourceAid, episodeRange });
+    actions.push({ type: "match", animeId, animeRow, source, sourceItem, sourceAid, episodeRange, previousMapping: existingMapping(animeId, source), line });
   }
 
   if (errors.length > 0) throw new Error(`manual review import failed:\n${errors.join("\n")}`);
+  validateSharedSourceRanges(actions);
+
+  if (dryRun) {
+    countManualActionStats(actions, stats);
+    log("manual-match", "manual review dry-run completed", stats);
+    return stats;
+  }
 
   runResourceTransaction(() => {
     for (const action of actions) {
@@ -689,10 +798,10 @@ function applyMappedNoResource(animeId, source, note) {
   markNoResource(animeId, source, note);
 }
 
-export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, { refreshEpisodes = true } = {}) {
+export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, { refreshEpisodes = true, dryRun = false } = {}) {
   const raw = await readFile(filePath, "utf8");
   const rows = parseCsv(raw);
-  const stats = { filePath, rows: rows.length, updated: 0, matched: 0, deleted: 0, waitAiring: 0, noResource: 0, refreshed: 0, skipped: 0 };
+  const stats = { filePath, rows: rows.length, updated: 0, matched: 0, deleted: 0, waitAiring: 0, noResource: 0, refreshed: 0, skipped: 0, dryRun };
   const errors = [];
   const actions = [];
 
@@ -733,15 +842,15 @@ export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, 
     }
 
     if (decision === "delete") {
-      actions.push({ type: "delete", animeId, source });
+      actions.push({ type: "delete", animeId, source, previousMapping: mapping, line });
       continue;
     }
     if (decision === "wait_airing") {
-      actions.push({ type: "wait_airing", animeId, source, note });
+      actions.push({ type: "wait_airing", animeId, source, note, previousMapping: mapping, line });
       continue;
     }
     if (decision === "no_resource") {
-      actions.push({ type: "no_resource", animeId, source, note });
+      actions.push({ type: "no_resource", animeId, source, note, previousMapping: mapping, line });
       continue;
     }
 
@@ -756,10 +865,17 @@ export async function importMappedReview(filePath = DEFAULT_MAPPED_REVIEW_PATH, 
       continue;
     }
     const episodeRange = parseEpisodeRange(row, line, errors);
-    actions.push({ type: "update", animeRow, source, sourceItem, sourceAid, episodeRange });
+    actions.push({ type: "update", animeId, animeRow, source, sourceItem, sourceAid, episodeRange, previousMapping: mapping, line });
   }
 
   if (errors.length > 0) throw new Error(`mapped review import failed:\n${errors.join("\n")}`);
+  validateSharedSourceRanges(actions);
+
+  if (dryRun) {
+    countMappedActionStats(actions, stats);
+    log("manual-match", "mapped review dry-run completed", stats);
+    return stats;
+  }
 
   runResourceTransaction(() => {
     for (const action of actions) {

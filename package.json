@@ -12,7 +12,9 @@
     "export:manual-review": "node src/scripts/export-manual-review.js",
     "import:manual-review": "node src/scripts/import-manual-review.js",
     "export:mapped-review": "node src/scripts/export-mapped-review.js",
-    "import:mapped-review": "node src/scripts/import-mapped-review.js"
+    "import:mapped-review": "node src/scripts/import-mapped-review.js",
+    "export:ai-match-pack": "node src/scripts/export-ai-match-pack.js",
+    "validate:ai-match-suggestions": "node src/scripts/validate-ai-match-suggestions.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",
