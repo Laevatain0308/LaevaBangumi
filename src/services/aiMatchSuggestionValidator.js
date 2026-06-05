@@ -194,39 +194,79 @@ function mappingFromSuggestion(normalized, matchCase) {
   };
 }
 
-function validateProjectedSharedRange({ normalized, matchCase, candidate, index }) {
-  if (normalized.decision !== "match") return;
-  const group = [
-    ...(candidate.owners || [])
-      .filter((owner) => owner.animeId !== normalized.animeId)
-      .map((owner) => mappingFromOwner(owner, matchCase.source, candidate.sourceAid)),
-    mappingFromSuggestion(normalized, matchCase),
-  ];
-  if (group.length <= 1) return;
-  const errors = [];
-  for (const row of group) {
-    if (row.sourceEpStart == null) errors.push(`mapping ${row.animeId}:${row.source} must include sourceEpStart`);
-    if (row.sourceEpStart != null && row.sourceEpEnd != null && row.sourceEpEnd < row.sourceEpStart) {
-      errors.push(`mapping ${row.animeId}:${row.source} sourceEpEnd must be greater than or equal to sourceEpStart`);
+function mappingIdentity(row) {
+  const animeId = Number.isFinite(Number(row.animeId)) ? Number(row.animeId) : row.animeId;
+  return `${animeId}:${row.source}`;
+}
+
+function sourceAidIdentity(row) {
+  return `${row.source}:${row.sourceAid}`;
+}
+
+function addProjectedMapping(groups, row) {
+  const sourceAidKey = sourceAidIdentity(row);
+  const group = groups.get(sourceAidKey) || new Map();
+  group.set(mappingIdentity(row), row);
+  groups.set(sourceAidKey, group);
+}
+
+function projectedSharedGroups(matchActions) {
+  const groups = new Map();
+  const suggestionsByMapping = new Map();
+  for (const action of matchActions) {
+    const row = mappingFromSuggestion(action.normalized, action.matchCase);
+    suggestionsByMapping.set(mappingIdentity(row), row);
+  }
+
+  for (const action of matchActions) {
+    for (const owner of action.candidate.owners || []) {
+      const row = mappingFromOwner(owner, action.matchCase.source, action.candidate.sourceAid);
+      if (suggestionsByMapping.has(mappingIdentity(row))) continue;
+      addProjectedMapping(groups, row);
     }
   }
-  if (errors.length === 0) {
+
+  for (const row of suggestionsByMapping.values()) {
+    addProjectedMapping(groups, row);
+  }
+
+  return groups;
+}
+
+function validateSharedRangeGroup(key, group, errors) {
+  if (group.length <= 1) return;
+  const groupErrors = [];
+  for (const row of group) {
+    if (row.sourceEpStart == null) groupErrors.push(`shared source ${key}: mapping ${row.animeId}:${row.source} must include sourceEpStart`);
+    if (row.sourceEpStart != null && row.sourceEpEnd != null && row.sourceEpEnd < row.sourceEpStart) {
+      groupErrors.push(`shared source ${key}: mapping ${row.animeId}:${row.source} sourceEpEnd must be greater than or equal to sourceEpStart`);
+    }
+  }
+  if (groupErrors.length === 0) {
     const sorted = [...group].sort((a, b) => a.sourceEpStart - b.sourceEpStart || a.animeId - b.animeId);
     for (let i = 0; i < sorted.length; i++) {
       const row = sorted[i];
       if (i < sorted.length - 1 && row.sourceEpEnd == null) {
-        errors.push(`non-final shared range must include sourceEpEnd for mapping ${row.animeId}:${row.source}`);
+        groupErrors.push(`shared source ${key}: non-final shared range must include sourceEpEnd for mapping ${row.animeId}:${row.source}`);
       }
       if (i > 0) {
         const previous = sorted[i - 1];
         if (previous.sourceEpEnd != null && previous.sourceEpEnd >= row.sourceEpStart) {
-          errors.push(`shared ranges must not overlap (${previous.animeId}:${previous.source} and ${row.animeId}:${row.source})`);
+          groupErrors.push(`shared source ${key}: shared ranges must not overlap (${previous.animeId}:${previous.source} and ${row.animeId}:${row.source})`);
         }
       }
     }
   }
+  errors.push(...groupErrors);
+}
+
+function validateProjectedSharedRanges(matchActions) {
+  const errors = [];
+  for (const [key, group] of projectedSharedGroups(matchActions).entries()) {
+    validateSharedRangeGroup(key, [...group.values()], errors);
+  }
   if (errors.length > 0) {
-    throw new Error(`suggestion ${index + 1}: ${errors.join("; ")}`);
+    throw new Error(`AI suggestion range validation failed:\n${errors.join("\n")}`);
   }
 }
 
@@ -242,6 +282,7 @@ export async function validateAiMatchSuggestions({
   const suggestions = await readJsonl(actualSuggestionsFile);
   const casesIndex = indexCases(cases);
   const acceptedRows = [];
+  const matchActions = [];
   const seenCaseIds = new Set();
   const report = {
     suggestions: suggestions.length,
@@ -265,11 +306,15 @@ export async function validateAiMatchSuggestions({
       continue;
     }
     const candidate = validateCandidateUse(normalized, matchCase, index);
-    validateProjectedSharedRange({ normalized, matchCase, candidate, index });
+    if (normalized.decision === "match") {
+      matchActions.push({ normalized, matchCase, candidate, index });
+    }
     acceptedRows.push(manualRowForSuggestion({ suggestion, normalized, matchCase, candidate }));
     report.accepted++;
     report.rows.push({ animeId: normalized.animeId, decision: normalized.decision, accepted: true, sourceAid: normalized.sourceAid || null });
   }
+
+  validateProjectedSharedRanges(matchActions);
 
   await mkdir(actualOutputDir, { recursive: true });
   await Promise.all([

@@ -270,6 +270,56 @@ test("AI suggestion validator treats a suggestion for an existing mapping as a r
   });
 });
 
+test("AI suggestion validator validates shared ranges after applying all suggestions in the batch", async () => {
+  seedAiPackRows();
+  sqlite.exec(`
+    INSERT INTO resource_mappings (
+      bangumi_id, source, source_aid, source_ep_start, source_ep_end,
+      display_ep_offset, score, matched_subject_title, matched_resource_title, matched_at
+    )
+    VALUES (
+      ${TARGET_ID}, '${SOURCE}', ${SOURCE_AID}, null, null,
+      0, 0.95, '石纪元 科学与未来 第2部分', '石纪元第四季', datetime('now')
+    ), (
+      ${LATER_ID}, '${SOURCE}', ${SOURCE_AID}, 25, null,
+      24, 0.95, '石纪元 科学与未来 第3部分', '石纪元第四季', datetime('now')
+    );
+  `);
+
+  await withTempDir(async (dir) => {
+    await exportAiMatchPack(dir, { source: SOURCE, candidateLimit: 5 });
+    const suggestions = join(dir, "suggestions.jsonl");
+    await writeFile(suggestions, [
+      JSON.stringify({
+        caseId: `${TARGET_ID}:${SOURCE}`,
+        animeId: TARGET_ID,
+        decision: "match",
+        sourceAid: SOURCE_AID,
+        sourceEpStart: 13,
+        sourceEpEnd: 24,
+        displayEpOffset: 12,
+        confidence: "high",
+        reason: "fills the middle shared segment",
+      }),
+      JSON.stringify({
+        caseId: `${LATER_ID}:${SOURCE}`,
+        animeId: LATER_ID,
+        decision: "match",
+        sourceAid: SOURCE_AID,
+        sourceEpStart: 25,
+        sourceEpEnd: null,
+        displayEpOffset: 24,
+        confidence: "high",
+        reason: "keeps the final ongoing shared segment",
+      }),
+    ].join("\n") + "\n", "utf8");
+
+    const stats = await validateAiMatchSuggestions({ packDir: dir, suggestionsFile: suggestions, outputDir: dir });
+
+    assert.equal(stats.accepted, 2);
+  });
+});
+
 test("AI suggestion validator requires confidence and reason for match decisions", async () => {
   seedAiPackRows();
 
