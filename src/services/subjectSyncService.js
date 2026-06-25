@@ -11,6 +11,7 @@ import {
   upsertSubjectMetadata as writeSubjectMetadata,
 } from "../repositories/subjectRepository.js";
 import { deleteResourceRowsForSubject } from "../repositories/resourceRepository.js";
+import { syncWaitAiringStateForAnime } from "./airingStateService.js";
 import { now, safeJson } from "./animeShared.js";
 import { debug, log } from "../lib/logger.js";
 
@@ -95,6 +96,7 @@ export async function upsertAnime(item, weekday = undefined, options = {}) {
   }
 
   writeSubjectMetadata(normalized);
+  syncWaitAiringStateForAnime(normalized.subject, { now: options.now ?? now });
   debug("anime", "upserted subject", { id: item.id, title: item.name_cn || item.name, detailFetched: !!options.detailFetched });
 
   return findAnimeFacadeById(item.id);

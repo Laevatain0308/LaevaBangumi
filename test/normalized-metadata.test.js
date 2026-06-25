@@ -87,3 +87,43 @@ test("upsertAnime persists Bangumi detail metadata into normalized subject table
   `).all(METADATA_SUBJECT_ID);
   assert.deepEqual(tags, [{ name: "原创", count: 10, total_count: 20 }]);
 });
+
+test("upsertAnime auto-writes and clears wait_airing around the airing date", async () => {
+  resetTables();
+
+  await upsertAnime({
+    id: METADATA_SUBJECT_ID,
+    type: 2,
+    name: "Raw Title",
+    name_cn: "中文标题",
+    summary: "简介",
+    date: "2026-06-30",
+    platform: "TV",
+    images: { large: "https://example.invalid/cover.jpg" },
+    rating: { score: 7.6, rank: 1234, total: 420, count: {} },
+  }, 3, { detailFetched: true, now: () => "2026-06-29 08:00:00" });
+
+  let manual = sqlite.prepare(`
+    SELECT status, note FROM manual_resource_state
+    WHERE bangumi_id = ?
+  `).get(METADATA_SUBJECT_ID);
+  assert.deepEqual(manual, { status: "wait_airing", note: "等待开播：2026-06-30" });
+
+  await upsertAnime({
+    id: METADATA_SUBJECT_ID,
+    type: 2,
+    name: "Raw Title",
+    name_cn: "中文标题",
+    summary: "简介",
+    date: "2026-06-30",
+    platform: "TV",
+    images: { large: "https://example.invalid/cover.jpg" },
+    rating: { score: 7.6, rank: 1234, total: 420, count: {} },
+  }, 3, { detailFetched: true, now: () => "2026-06-30 08:00:00" });
+
+  manual = sqlite.prepare(`
+    SELECT COUNT(*) AS count FROM manual_resource_state
+    WHERE bangumi_id = ?
+  `).get(METADATA_SUBJECT_ID);
+  assert.equal(manual.count, 0);
+});
