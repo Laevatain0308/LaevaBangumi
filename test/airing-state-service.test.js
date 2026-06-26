@@ -153,6 +153,66 @@ test("syncWaitAiringStateForAnime keeps existing non-wait_airing manual states i
   assert.deepEqual(manual, { status: "no_resource", note: "手动无资源" });
 });
 
+test("syncWaitAiringStateForAnime keeps existing wait_airing manual notes intact", () => {
+  resetSubject();
+  sqlite.prepare(`
+    INSERT INTO manual_resource_state (bangumi_id, source, status, note)
+    VALUES (?, ?, 'wait_airing', '资源站通常晚一天上线')
+  `).run(SUBJECT_ID, SOURCE);
+
+  const result = syncWaitAiringStateForAnime({
+    bangumi_id: SUBJECT_ID,
+    air_date: "2026-07-01",
+  }, {
+    sourceKeys: [SOURCE],
+    now: new Date("2026-06-30T12:00:00+08:00"),
+  });
+
+  const manual = sqlite.prepare(`
+    SELECT status, note FROM manual_resource_state
+    WHERE bangumi_id = ? AND source = ?
+  `).get(SUBJECT_ID, SOURCE);
+
+  assert.equal(result.written, 0);
+  assert.equal(result.cleared, 0);
+  assert.deepEqual(manual, { status: "wait_airing", note: "资源站通常晚一天上线" });
+});
+
+test("syncWaitAiringStateForAnime compares dates in the Bangumi business timezone", () => {
+  const originalTz = process.env.TZ;
+  process.env.TZ = "UTC";
+  try {
+    resetSubject();
+    sqlite.prepare(`
+      INSERT INTO manual_resource_state (bangumi_id, source, status, note)
+      VALUES (?, ?, 'wait_airing', '等待开播：2026-06-30')
+    `).run(SUBJECT_ID, SOURCE);
+
+    const result = syncWaitAiringStateForAnime({
+      bangumi_id: SUBJECT_ID,
+      air_date: "2026-06-30",
+    }, {
+      sourceKeys: [SOURCE],
+      now: new Date("2026-06-29T16:30:00Z"),
+    });
+
+    const manual = sqlite.prepare(`
+      SELECT COUNT(*) AS count FROM manual_resource_state
+      WHERE bangumi_id = ? AND source = ? AND status = 'wait_airing'
+    `).get(SUBJECT_ID, SOURCE);
+
+    assert.equal(result.status, "started");
+    assert.equal(result.cleared, 1);
+    assert.equal(manual.count, 0);
+  } finally {
+    if (originalTz == null) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = originalTz;
+    }
+  }
+});
+
 test("syncWaitAiringStateForAnime treats month and year precision as inclusive boundaries", () => {
   resetSubject();
   sqlite.prepare(`

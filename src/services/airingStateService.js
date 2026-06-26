@@ -7,6 +7,14 @@ import {
   upsertRetryState,
 } from "../repositories/resourceRepository.js";
 
+const BANGUMI_BUSINESS_TIME_ZONE = "Asia/Shanghai";
+const bangumiDatePartsFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: BANGUMI_BUSINESS_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 function normalizeDateParts(value) {
   if (!value) return null;
   const text = String(value).trim();
@@ -47,10 +55,13 @@ function resolveNow(now = new Date()) {
 function nowParts(now = new Date()) {
   const resolved = resolveNow(now);
   const date = resolved instanceof Date ? resolved : new Date(resolved);
+  const parts = Object.fromEntries(
+    bangumiDatePartsFormatter.formatToParts(date).map((part) => [part.type, part.value])
+  );
   return {
-    year: date.getFullYear(),
-    month: date.getMonth() + 1,
-    day: date.getDate(),
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
   };
 }
 
@@ -97,6 +108,7 @@ function syncSingleSourceState({ bangumiId, source, status, note }) {
   }
   if (status === "future") {
     if (existing && existing.status !== "wait_airing") return { action: "ignored" };
+    if (existing?.status === "wait_airing") return { action: "ignored" };
     upsertManualResourceState({ bangumiId, source, status: "wait_airing", note });
     return { action: "written" };
   }
