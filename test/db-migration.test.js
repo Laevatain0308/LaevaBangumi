@@ -215,6 +215,10 @@ test("initDb creates the normalized schema tables", () => {
   const itemColumns = new Set(sqlite.prepare("PRAGMA table_info(resource_items)").all().map((row) => row.name));
   assert.equal(itemColumns.has("created_at"), true, "resource_items.created_at column should exist");
   assert.equal(itemColumns.has("updated_at"), true, "resource_items.updated_at column should exist");
+  assert.equal(itemColumns.has("media_type"), true, "resource_items.media_type column should exist");
+
+  const subjectColumns = new Set(sqlite.prepare("PRAGMA table_info(subjects)").all().map((row) => row.name));
+  assert.equal(subjectColumns.has("media_type"), true, "subjects.media_type column should exist");
 
   const retryColumns = new Set(sqlite.prepare("PRAGMA table_info(retry_state)").all().map((row) => row.name));
   assert.equal(retryColumns.has("last_error"), true, "retry_state.last_error column should exist");
@@ -245,10 +249,14 @@ test("initDb creates the normalized schema tables", () => {
     "idx_subjects_calendar_weekday",
     "idx_subjects_updated_at",
     "idx_subjects_rating_score",
+    "idx_subjects_media_type",
+    "idx_subjects_type_media_type",
     "idx_subject_aliases_alias",
     "idx_subject_tags_tag_id",
     "idx_episodes_bangumi_source",
     "idx_resource_items_title",
+    "idx_resource_items_media_type",
+    "idx_resource_items_media_type_latest_text",
     "idx_retry_state_retry_at",
   ]) {
     assert.equal(indexes.has(indexName), true, `${indexName} index should exist`);

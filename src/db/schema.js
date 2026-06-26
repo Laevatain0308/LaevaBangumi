@@ -30,6 +30,7 @@ export const animeOther = sqliteTable("anime_other", {
 export const subjects = sqliteTable("subjects", {
   bangumiId: integer("bangumi_id").primaryKey(),
   type: integer("type").notNull().default(2),
+  mediaType: text("media_type").notNull().default("anime"),
   name: text("name").notNull(),
   nameCn: text("name_cn"),
   summary: text("summary"),
@@ -93,6 +94,7 @@ export const resourceItems = sqliteTable("resource_items", {
   source: text("source").notNull().references(() => resourceSources.source),
   sourceAid: integer("source_aid").notNull(),
   title: text("title").notNull(),
+  mediaType: text("media_type").notNull().default("anime"),
   subtitle: text("subtitle"),
   category: text("category"),
   year: text("year"),

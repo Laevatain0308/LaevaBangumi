@@ -11,6 +11,20 @@ sqlite.pragma("busy_timeout = 5000");
 
 export const db = drizzle(sqlite, { schema });
 
+function tableHasColumn(table, column) {
+  return sqlite.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+
+function ensureColumn(table, column, definition) {
+  if (tableHasColumn(table, column)) return;
+  sqlite.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+}
+
+function ensureSchemaMigrations() {
+  ensureColumn("subjects", "media_type", "TEXT NOT NULL DEFAULT 'anime'");
+  ensureColumn("resource_items", "media_type", "TEXT NOT NULL DEFAULT 'anime'");
+}
+
 function ensureRecommendedIndexes() {
   sqlite.exec(`
     CREATE INDEX IF NOT EXISTS idx_subjects_calendar_weekday
@@ -21,6 +35,12 @@ function ensureRecommendedIndexes() {
 
     CREATE INDEX IF NOT EXISTS idx_subjects_rating_score
       ON subjects(rating_score);
+
+    CREATE INDEX IF NOT EXISTS idx_subjects_media_type
+      ON subjects(media_type);
+
+    CREATE INDEX IF NOT EXISTS idx_subjects_type_media_type
+      ON subjects(type, media_type);
 
     CREATE INDEX IF NOT EXISTS idx_subject_aliases_alias
       ON subject_aliases(alias);
@@ -33,6 +53,12 @@ function ensureRecommendedIndexes() {
 
     CREATE INDEX IF NOT EXISTS idx_resource_items_title
       ON resource_items(title);
+
+    CREATE INDEX IF NOT EXISTS idx_resource_items_media_type
+      ON resource_items(media_type);
+
+    CREATE INDEX IF NOT EXISTS idx_resource_items_media_type_latest_text
+      ON resource_items(media_type, latest_text);
 
     CREATE INDEX IF NOT EXISTS idx_retry_state_retry_at
       ON retry_state(retry_at);
@@ -62,6 +88,7 @@ export function initDb() {
     CREATE TABLE IF NOT EXISTS subjects (
       bangumi_id INTEGER PRIMARY KEY,
       type INTEGER NOT NULL DEFAULT 2,
+      media_type TEXT NOT NULL DEFAULT 'anime',
       name TEXT NOT NULL,
       name_cn TEXT,
       summary TEXT,
@@ -123,6 +150,7 @@ export function initDb() {
       source TEXT NOT NULL REFERENCES resource_sources(source),
       source_aid INTEGER NOT NULL,
       title TEXT NOT NULL,
+      media_type TEXT NOT NULL DEFAULT 'anime',
       subtitle TEXT,
       category TEXT,
       year TEXT,
@@ -321,5 +349,6 @@ export function initDb() {
       VALUES ('ffzy', '非凡资源', 1, 100);
   `);
 
+  ensureSchemaMigrations();
   ensureRecommendedIndexes();
 }

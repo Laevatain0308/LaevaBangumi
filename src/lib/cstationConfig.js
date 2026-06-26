@@ -31,6 +31,7 @@ function normalizeSource(source) {
     categories: (Array.isArray(source.categories) ? source.categories : []).map((category) => ({
       tid: String(category.tid),
       name: category.name || String(category.tid),
+      mediaType: category.mediaType || "anime",
       enabled: category.enabled !== false,
     })).filter((category) => category.tid),
   };

@@ -9,9 +9,30 @@
       "timeoutMs": 15000,
       "catalogTimeoutMs": 20000,
       "categories": [
-        { "tid": "30", "name": "国产动漫", "enabled": true },
-        { "tid": "29", "name": "日韩动漫", "enabled": true },
-        { "tid": "31", "name": "欧美动漫", "enabled": true }
+        { "tid": "30", "name": "国产动漫", "mediaType": "anime", "enabled": true },
+        { "tid": "29", "name": "日韩动漫", "mediaType": "anime", "enabled": true },
+        { "tid": "31", "name": "欧美动漫", "mediaType": "anime", "enabled": true },
+        { "tid": "13", "name": "国产剧", "mediaType": "tv", "enabled": true },
+        { "tid": "14", "name": "香港剧", "mediaType": "tv", "enabled": true },
+        { "tid": "15", "name": "韩国剧", "mediaType": "tv", "enabled": true },
+        { "tid": "16", "name": "欧美剧", "mediaType": "tv", "enabled": true },
+        { "tid": "20", "name": "记录片", "mediaType": "tv", "enabled": true },
+        { "tid": "21", "name": "台湾剧", "mediaType": "tv", "enabled": true },
+        { "tid": "22", "name": "日本剧", "mediaType": "tv", "enabled": true },
+        { "tid": "23", "name": "海外剧", "mediaType": "tv", "enabled": true },
+        { "tid": "24", "name": "泰国剧", "mediaType": "tv", "enabled": true },
+        { "tid": "4", "name": "动漫片", "mediaType": "movie", "enabled": true },
+        { "tid": "6", "name": "动作片", "mediaType": "movie", "enabled": true },
+        { "tid": "7", "name": "喜剧片", "mediaType": "movie", "enabled": true },
+        { "tid": "8", "name": "爱情片", "mediaType": "movie", "enabled": true },
+        { "tid": "9", "name": "科幻片", "mediaType": "movie", "enabled": true },
+        { "tid": "10", "name": "恐怖片", "mediaType": "movie", "enabled": true },
+        { "tid": "11", "name": "剧情片", "mediaType": "movie", "enabled": true },
+        { "tid": "12", "name": "战争片", "mediaType": "movie", "enabled": true },
+        { "tid": "25", "name": "大陆综艺", "mediaType": "variety", "enabled": true },
+        { "tid": "26", "name": "港台综艺", "mediaType": "variety", "enabled": true },
+        { "tid": "27", "name": "日韩综艺", "mediaType": "variety", "enabled": true },
+        { "tid": "28", "name": "欧美综艺", "mediaType": "variety", "enabled": true }
       ]
     }
   ]
