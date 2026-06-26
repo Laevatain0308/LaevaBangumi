@@ -6,8 +6,10 @@ import { upsertResourceItem } from "../src/repositories/resourceRepository.js";
 
 const SOURCE = "auto_match_owner";
 const SOURCE_AID = 991001;
+const MOVIE_SOURCE_AID = 991002;
 const FIRST_SUBJECT_ID = 990559001;
 const SECOND_SUBJECT_ID = 990559002;
+const MEDIA_FILTER_SUBJECT_ID = 990559003;
 
 function seedAutoMatchRows() {
   initDb();
@@ -59,5 +61,44 @@ test("automatic matching still blocks a second subject from claiming the same so
       WHERE bangumi_id = ? AND source = ?
     `).get(SECOND_SUBJECT_ID, SOURCE),
     { status: "source_already_mapped" },
+  );
+});
+
+test("automatic matching only considers source items from the subject media type", async () => {
+  initDb();
+  sqlite.exec(`
+    DELETE FROM manual_resource_state WHERE bangumi_id = ${MEDIA_FILTER_SUBJECT_ID};
+    DELETE FROM retry_state WHERE bangumi_id = ${MEDIA_FILTER_SUBJECT_ID};
+    DELETE FROM resource_mappings WHERE bangumi_id = ${MEDIA_FILTER_SUBJECT_ID} OR source = '${SOURCE}';
+    DELETE FROM episodes WHERE bangumi_id = ${MEDIA_FILTER_SUBJECT_ID} OR source = '${SOURCE}';
+    DELETE FROM resource_items WHERE source = '${SOURCE}';
+    DELETE FROM resource_sources WHERE source = '${SOURCE}';
+    DELETE FROM subject_aliases WHERE bangumi_id = ${MEDIA_FILTER_SUBJECT_ID};
+    DELETE FROM subject_tags WHERE bangumi_id = ${MEDIA_FILTER_SUBJECT_ID};
+    DELETE FROM subjects WHERE bangumi_id = ${MEDIA_FILTER_SUBJECT_ID};
+
+    INSERT INTO subjects (bangumi_id, media_type, name, name_cn, air_date, rating_distribution_json)
+      VALUES (${MEDIA_FILTER_SUBJECT_ID}, 'anime', 'Media Filter Title', '媒体过滤标题', '2026-04-01', '[]');
+    INSERT INTO resource_sources (source, name, enabled)
+      VALUES ('${SOURCE}', '自动匹配测试源', 1);
+  `);
+  upsertResourceItem({
+    source: SOURCE,
+    sourceAid: MOVIE_SOURCE_AID,
+    mediaType: "movie",
+    title: "媒体过滤标题",
+    year: "2026",
+  });
+
+  const result = await ensureMappingForAnime(MEDIA_FILTER_SUBJECT_ID, { source: SOURCE });
+
+  assert.equal(result.matched, false);
+  assert.equal(result.reason, "no-catalog-match");
+  assert.equal(
+    sqlite.prepare(`
+      SELECT COUNT(*) AS count FROM resource_mappings
+      WHERE bangumi_id = ? AND source = ?
+    `).get(MEDIA_FILTER_SUBJECT_ID, SOURCE).count,
+    0,
   );
 });

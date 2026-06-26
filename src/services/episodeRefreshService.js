@@ -15,7 +15,7 @@ import {
   getMap,
   upsertMap,
 } from "./resourceMatchService.js";
-import { ensureSubjectFromAnime } from "./subjectSyncService.js";
+import { ensureSubjectFromAnime, findAnimeFacadeById } from "./subjectSyncService.js";
 import { saveCatalog } from "./catalog.js";
 import { log, warn } from "../lib/logger.js";
 
@@ -77,6 +77,7 @@ function pruneEpisodesForRefresh(animeId, source, sourceAid, episodesList) {
 export async function refreshEpisodesForAnime(animeId, { source } = {}) {
   if (!source) throw new Error("refreshEpisodesForAnime requires source");
   log("episodes", "refresh started", { animeId, source });
+  const subject = findAnimeFacadeById(animeId);
   let mapped = getMap(animeId, source);
   if (!mapped) {
     const mapping = await ensureMappingForAnime(animeId, { source });
@@ -97,7 +98,7 @@ export async function refreshEpisodesForAnime(animeId, { source } = {}) {
     return { animeId, refreshed: false, reason: "fetch-detail-failed" };
   }
 
-  await saveCatalog([normalizeResourceItem(detail, { source, detailFetchedAt: now() })], { source });
+  await saveCatalog([normalizeResourceItem(detail, { source, mediaType: subject?.mediaType ?? "anime", detailFetchedAt: now() })], { source });
 
   const rangedEpisodes = applyEpisodeRange(detail.episodes, mapped);
   pruneEpisodesForRefresh(animeId, source, detail.id, rangedEpisodes);

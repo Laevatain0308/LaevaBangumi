@@ -7,6 +7,7 @@ import {
   deleteResourceRowsForSubject,
   deleteManualResourceStateByStatus,
   deleteRetryState,
+  listResourceItemsForSource,
   listManualResourceStatesForSubject,
   listResourceMappingsWithEpisodePresenceForSubject,
   listRetryStateForSubject,
@@ -34,9 +35,9 @@ function seedResourceRows() {
   sqlite.exec(`
     DELETE FROM manual_resource_state WHERE bangumi_id = ${RESOURCE_SUBJECT_ID};
     DELETE FROM retry_state WHERE bangumi_id = ${RESOURCE_SUBJECT_ID};
-    DELETE FROM episodes WHERE bangumi_id = ${RESOURCE_SUBJECT_ID};
-    DELETE FROM resource_mappings WHERE bangumi_id = ${RESOURCE_SUBJECT_ID};
-    DELETE FROM resource_items WHERE source = '${RESOURCE_SOURCE}' AND source_aid = ${RESOURCE_AID};
+    DELETE FROM episodes WHERE bangumi_id = ${RESOURCE_SUBJECT_ID} OR source = '${RESOURCE_SOURCE}';
+    DELETE FROM resource_mappings WHERE bangumi_id = ${RESOURCE_SUBJECT_ID} OR source = '${RESOURCE_SOURCE}';
+    DELETE FROM resource_items WHERE source = '${RESOURCE_SOURCE}';
     DELETE FROM resource_sources WHERE source = '${RESOURCE_SOURCE}';
     DELETE FROM subjects WHERE bangumi_id = ${RESOURCE_SUBJECT_ID};
 
@@ -406,6 +407,36 @@ test("resource repository upserts resource items without erasing existing option
   assert.equal(sourceRow.enabled, 1);
   assert.ok(sourceRow.created_at);
   assert.ok(sourceRow.updated_at);
+});
+
+test("resource repository can filter resource items by media type", () => {
+  initDb();
+  const source = `${RESOURCE_SOURCE}_media_filter`;
+  sqlite.exec(`
+    DELETE FROM resource_items WHERE source = '${source}';
+    DELETE FROM resource_sources WHERE source = '${source}';
+  `);
+  upsertResourceItem({
+    source,
+    sourceAid: 777101,
+    mediaType: "anime",
+    title: "动画资源",
+  });
+  upsertResourceItem({
+    source,
+    sourceAid: 777102,
+    mediaType: "movie",
+    title: "电影资源",
+  });
+
+  assert.deepEqual(
+    listResourceItemsForSource(source, { mediaType: "anime" }).map((row) => row.source_aid),
+    [777101],
+  );
+  assert.deepEqual(
+    listResourceItemsForSource(source).map((row) => row.source_aid).sort(),
+    [777101, 777102],
+  );
 });
 
 test("resource repository upserts normalized sync state rows", () => {

@@ -1,4 +1,6 @@
 import { searchSubjects } from "../clients/bangumiClient.js";
+import { assertMediaType } from "../lib/mediaTypes.js";
+import { pathToFileURL } from "node:url";
 
 const DEFAULT_KEYWORDS = [
   "星际之门",
@@ -13,26 +15,28 @@ const DEFAULT_KEYWORDS = [
   "The Big Bang Theory",
 ];
 
-function parseArgs(argv) {
-  const args = { keywords: DEFAULT_KEYWORDS, maxResults: 10 };
+export function parseDiscoveryArgs(argv) {
+  const args = { keywords: DEFAULT_KEYWORDS, maxResults: 10, mediaType: "tv" };
   for (const arg of argv) {
     if (arg.startsWith("--keywords=")) {
       args.keywords = arg.slice("--keywords=".length).split(",").map((item) => item.trim()).filter(Boolean);
     } else if (arg.startsWith("--max-results=")) {
       const parsed = Number.parseInt(arg.slice("--max-results=".length), 10);
       if (Number.isFinite(parsed) && parsed > 0) args.maxResults = parsed;
+    } else if (arg.startsWith("--media-type=")) {
+      args.mediaType = assertMediaType(arg.slice("--media-type=".length));
     }
   }
   return args;
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseDiscoveryArgs(process.argv.slice(2));
   const platforms = new Map();
 
   for (const keyword of args.keywords) {
     const result = await searchSubjects(keyword, {
-      mediaType: "tv",
+      mediaType: args.mediaType,
       maxResults: args.maxResults,
       maxPages: 1,
     });
@@ -58,7 +62,9 @@ async function main() {
   console.log(JSON.stringify(rows, null, 2));
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}

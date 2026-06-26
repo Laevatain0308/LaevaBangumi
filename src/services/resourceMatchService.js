@@ -148,7 +148,7 @@ function getAutoExclusiveSourceOwner(source, sourceAid, animeId) {
 function getCandidatesForAnime(a, source) {
   const year = bangumi.extractYear(a.airDate);
   const candidatesById = new Map();
-  const normalizedRows = listResourceItemsForSource(source);
+  const normalizedRows = listResourceItemsForSource(source, { mediaType: a.mediaType ?? "anime" });
   for (const row of normalizedRows) {
     const existing = candidatesById.get(row.source_aid);
     candidatesById.set(row.source_aid, {
@@ -190,7 +190,7 @@ async function findBestSourceMatch(a, source, ranked = null) {
     .map((match) => match.video.id);
 
   if (needDetailIds.length > 0) {
-    await hydrateCatalogDetails(needDetailIds, { source });
+    await hydrateCatalogDetails(needDetailIds, { source, mediaType: a.mediaType ?? "anime" });
     const detailed = getCandidatesForAnime(a, source)
       .filter((c) => needDetailIds.includes(c.id));
     const detailedBest = matchOne(names, year, detailed);

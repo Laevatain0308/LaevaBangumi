@@ -113,6 +113,50 @@ test("upsertAnime persists supported real-person subjects with derived media typ
   assert.equal(other, undefined);
 });
 
+test("upsertAnime refuses to override a real Bangumi platform media type", async () => {
+  resetTables();
+
+  await upsertAnime({
+    id: METADATA_SUBJECT_ID,
+    type: 6,
+    name: "Interstellar",
+    name_cn: "星际穿越",
+    summary: "movie",
+    date: "2014-11-07",
+    platform: "电影",
+    eps: 1,
+    total_episodes: 1,
+    images: { large: "https://example.invalid/interstellar.jpg" },
+    rating: { score: 8.5, rank: 0, total: 1000, count: {} },
+  }, undefined, { detailFetched: true, mediaType: "tv" });
+
+  const subject = sqlite.prepare("SELECT type, media_type, platform FROM subjects WHERE bangumi_id = ?").get(METADATA_SUBJECT_ID);
+
+  assert.deepEqual(subject, { type: 6, media_type: "movie", platform: "电影" });
+});
+
+test("upsertAnime still accepts explicit media type when Bangumi platform is not mapped", async () => {
+  resetTables();
+
+  await upsertAnime({
+    id: METADATA_SUBJECT_ID,
+    type: 6,
+    name: "Unknown Platform",
+    name_cn: "未知平台",
+    summary: "unknown",
+    date: "2026-01-01",
+    platform: "未采样平台",
+    eps: 1,
+    total_episodes: 1,
+    images: { large: "https://example.invalid/unknown.jpg" },
+    rating: { score: 6, rank: 0, total: 1, count: {} },
+  }, undefined, { detailFetched: true, mediaType: "tv" });
+
+  const subject = sqlite.prepare("SELECT type, media_type, platform FROM subjects WHERE bangumi_id = ?").get(METADATA_SUBJECT_ID);
+
+  assert.deepEqual(subject, { type: 6, media_type: "tv", platform: "未采样平台" });
+});
+
 test("upsertAnime auto-writes and clears wait_airing around the airing date", async () => {
   resetTables();
 

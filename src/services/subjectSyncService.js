@@ -24,6 +24,7 @@ export function subjectRowToAnimeFacade(row) {
     id: row.bangumi_id,
     name: row.name,
     nameCn: row.name_cn,
+    mediaType: row.media_type ?? "anime",
     aliases: JSON.stringify(listSubjectAliases(row.bangumi_id)),
     platform: row.platform,
     airDate: row.air_date,
@@ -78,7 +79,8 @@ export function ensureSubjectFromAnime(animeId) {
 
 export async function upsertAnime(item, weekday = undefined, options = {}) {
   const platform = item.platform || null;
-  const subjectMediaType = options.mediaType ?? mediaTypeForBangumiSubject(item);
+  const derivedMediaType = mediaTypeForBangumiSubject(item);
+  const subjectMediaType = derivedMediaType ?? options.mediaType;
   const normalized = normalizeBangumiSubject(item, weekday, { ...options, mediaType: subjectMediaType, now });
   const isSupportedSubject = subjectMediaType != null;
 

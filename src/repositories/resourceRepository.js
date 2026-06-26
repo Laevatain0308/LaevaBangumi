@@ -134,14 +134,16 @@ export function listResourceMappingsForSource(source) {
   `).all(source);
 }
 
-export function listResourceItemsForSource(source) {
+export function listResourceItemsForSource(source, { mediaType = null } = {}) {
   if (!source) throw new Error("resource item query requires source");
+  const mediaTypeFilter = mediaType ? "AND media_type = @mediaType" : "";
 
   return sqlite.prepare(`
-    SELECT source, source_aid, title, subtitle, category, year, latest_text, detail_fetched_at
+    SELECT source, source_aid, title, media_type, subtitle, category, year, latest_text, detail_fetched_at
     FROM resource_items
-    WHERE source = ?
-  `).all(source);
+    WHERE source = @source
+    ${mediaTypeFilter}
+  `).all({ source, mediaType });
 }
 
 export function listResourceItems() {
