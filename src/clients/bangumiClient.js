@@ -1,5 +1,6 @@
 import { fetch } from "undici";
 import { getDispatcher, getProxyStatus } from "../lib/proxy.js";
+import { BANGUMI_SUBJECT_TYPE_BY_MEDIA_TYPE, assertMediaType } from "../lib/mediaTypes.js";
 
 const BG = "https://api.bgm.tv";
 const TIMEOUT = 30000;
@@ -89,6 +90,7 @@ export async function getCalendar() {
 
 /** POST /v0/search/subjects */
 export async function searchSubjects(keyword, {
+  mediaType = "anime",
   sort = "rank",
   offset = 0,
   limit = DEFAULT_SEARCH_LIMIT,
@@ -103,10 +105,16 @@ export async function searchSubjects(keyword, {
   );
   const pageLimitCount = boundedInteger(maxPages, { fallback: DEFAULT_SEARCH_MAX_PAGES, min: 1, max: 10 });
   const startOffset = boundedInteger(offset, { fallback: 0, min: 0, max: Number.MAX_SAFE_INTEGER });
+  const normalizedMediaType = assertMediaType(mediaType);
   const body = {
     keyword,
     sort,
-    filter: { type: [2], tag: [], rank: [">=0", "<=99999"], nsfw: false },
+    filter: {
+      type: [BANGUMI_SUBJECT_TYPE_BY_MEDIA_TYPE[normalizedMediaType]],
+      tag: [],
+      rank: [">=0", "<=99999"],
+      nsfw: false,
+    },
   };
   const data = [];
   let total = null;

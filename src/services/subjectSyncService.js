@@ -14,6 +14,7 @@ import { deleteResourceRowsForSubject } from "../repositories/resourceRepository
 import { syncWaitAiringStateForAnime } from "./airingStateService.js";
 import { now, safeJson } from "./animeShared.js";
 import { debug, log } from "../lib/logger.js";
+import { mediaTypeForBangumiSubject } from "../lib/mediaTypes.js";
 
 export { normalizeCoverUrl };
 
@@ -77,9 +78,11 @@ export function ensureSubjectFromAnime(animeId) {
 
 export async function upsertAnime(item, weekday = undefined, options = {}) {
   const platform = item.platform || null;
-  const normalized = normalizeBangumiSubject(item, weekday, { ...options, now });
+  const subjectMediaType = options.mediaType ?? mediaTypeForBangumiSubject(item);
+  const normalized = normalizeBangumiSubject(item, weekday, { ...options, mediaType: subjectMediaType, now });
+  const isSupportedSubject = subjectMediaType != null;
 
-  if (platform && !ANIME_PLATFORMS.has(platform)) {
+  if (!isSupportedSubject || (subjectMediaType === "anime" && platform && !ANIME_PLATFORMS.has(platform))) {
     log("anime", "skip non-anime subject", { id: item.id, name: item.name, platform });
     deleteAnimeDependencies(item.id);
     insertNonAnimeSubject({

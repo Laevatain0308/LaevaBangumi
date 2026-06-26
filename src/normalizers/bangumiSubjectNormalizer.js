@@ -1,4 +1,5 @@
 import { collectBangumiTitles } from "../lib/matcher.js";
+import { mediaTypeForBangumiSubject } from "../lib/mediaTypes.js";
 
 function defaultNow() {
   return new Date().toISOString().replace("T", " ").slice(0, 19);
@@ -121,16 +122,18 @@ function normalizedAliasesFromItem(item, detailFetched) {
   return detailFetched ? [] : undefined;
 }
 
-export function normalizeBangumiSubject(item, weekday, { detailFetched = false, now = defaultNow } = {}) {
+export function normalizeBangumiSubject(item, weekday, { detailFetched = false, mediaType = null, now = defaultNow } = {}) {
   const timestamp = resolveNow(now);
   const airDate = dateFromItem(item);
   const coverUrl = coverFromItem(item);
   const ratingDistribution = ratingDistributionFromItem(item);
+  const normalizedMediaType = mediaType ?? mediaTypeForBangumiSubject(item);
 
   return {
     subject: compactRow({
       bangumi_id: item.id,
       type: intFromItem(item.type) ?? 2,
+      media_type: normalizedMediaType,
       name: item.name || item.name_cn || `#${item.id}`,
       name_cn: knownOrSkip(item.name_cn, detailFetched),
       summary: knownOrSkip(item.summary, detailFetched),

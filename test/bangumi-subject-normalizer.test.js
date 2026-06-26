@@ -29,6 +29,7 @@ test("normalizeBangumiSubject returns normalized subject metadata", () => {
   assert.deepEqual(normalized.subject, {
     bangumi_id: 547888,
     type: 2,
+    media_type: "anime",
     name: "Raw Title",
     name_cn: "中文标题",
     summary: "简介",
@@ -50,4 +51,23 @@ test("normalizeBangumiSubject returns normalized subject metadata", () => {
   assert.deepEqual(normalized.aliases, ["Alias A", "Alias B"]);
   assert.deepEqual(normalized.tags, [{ name: "原创", count: 10, totalCount: 20 }]);
   assert.equal(Object.hasOwn(normalized, "legacyAnime"), false);
+});
+
+test("normalizeBangumiSubject keeps Bangumi platform and stores derived media type", () => {
+  const normalized = normalizeBangumiSubject({
+    id: 20006,
+    type: 6,
+    name: "Stargate Universe Season 2",
+    name_cn: "星际之门：宇宙 第二季",
+    date: "2010-09-28",
+    platform: "欧美剧",
+    eps: 20,
+    total_episodes: 20,
+    images: { large: "https://example.invalid/stargate.jpg" },
+    rating: { score: 6.5, rank: 0, total: 2, count: {} },
+  }, undefined, { detailFetched: true, mediaType: "tv", now: () => "2026-06-03 01:02:03" });
+
+  assert.equal(normalized.subject.type, 6);
+  assert.equal(normalized.subject.media_type, "tv");
+  assert.equal(normalized.subject.platform, "欧美剧");
 });

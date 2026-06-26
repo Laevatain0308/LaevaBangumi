@@ -132,6 +132,21 @@ test("searchSubjects shrinks page size when caller asks for fewer results", asyn
   assert.deepEqual(requestedLimits, ["3"]);
 });
 
+test("searchSubjects uses Bangumi real-person subject type for non-anime media", async () => {
+  const requests = [];
+  await searchSubjects("星际之门", {
+    mediaType: "tv",
+    maxResults: 1,
+    retryDelaysMs: [],
+    fetchImpl: async (_url, opts) => {
+      requests.push(JSON.parse(opts.body));
+      return okJson({ data: [], total: 0, limit: 1, offset: 0 });
+    },
+  });
+
+  assert.deepEqual(requests[0].filter.type, [6]);
+});
+
 test("prewarmAnime passes query limit down to Bangumi search", async () => {
   const { prewarmAnime } = await import("../src/services/prewarmService.js");
   const searchCalls = [];

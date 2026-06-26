@@ -58,6 +58,7 @@ test("upsertAnime persists Bangumi detail metadata into normalized subject table
   const subject = sqlite.prepare("SELECT * FROM subjects WHERE bangumi_id = ?").get(METADATA_SUBJECT_ID);
   assert.equal(subject.id, undefined);
   assert.equal(subject.name, "Raw Title");
+  assert.equal(subject.media_type, "anime");
   assert.equal(subject.name_cn, "中文标题");
   assert.equal(subject.summary, "简介");
   assert.equal(subject.air_date, "2026-04-01");
@@ -86,6 +87,30 @@ test("upsertAnime persists Bangumi detail metadata into normalized subject table
     WHERE st.bangumi_id = ?
   `).all(METADATA_SUBJECT_ID);
   assert.deepEqual(tags, [{ name: "原创", count: 10, total_count: 20 }]);
+});
+
+test("upsertAnime persists supported real-person subjects with derived media type", async () => {
+  resetTables();
+
+  await upsertAnime({
+    id: METADATA_SUBJECT_ID,
+    type: 6,
+    name: "Stargate Universe Season 2",
+    name_cn: "星际之门：宇宙 第二季",
+    summary: "第二季",
+    date: "2010-09-28",
+    platform: "欧美剧",
+    eps: 20,
+    total_episodes: 20,
+    images: { large: "https://example.invalid/stargate.jpg" },
+    rating: { score: 6.5, rank: 0, total: 2, count: {} },
+  }, undefined, { detailFetched: true, mediaType: "tv" });
+
+  const subject = sqlite.prepare("SELECT type, media_type, platform FROM subjects WHERE bangumi_id = ?").get(METADATA_SUBJECT_ID);
+  const other = sqlite.prepare("SELECT 1 FROM anime_other WHERE id = ?").get(METADATA_SUBJECT_ID);
+
+  assert.deepEqual(subject, { type: 6, media_type: "tv", platform: "欧美剧" });
+  assert.equal(other, undefined);
 });
 
 test("upsertAnime auto-writes and clears wait_airing around the airing date", async () => {
