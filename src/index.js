@@ -41,6 +41,7 @@ async function runSync({ initial = false } = {}) {
       const stats = await syncCatalogCategory({
         source: source.key,
         t: category.tid,
+        mediaType: category.mediaType,
         incremental: !initial,
         hydrateDetails: !initial,
       });

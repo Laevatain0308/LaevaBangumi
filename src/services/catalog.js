@@ -51,6 +51,7 @@ export async function saveCatalog(catalog, { source } = {}) {
 export async function syncCatalogCategory({
   source,
   t,
+  mediaType = null,
   incremental = true,
   hydrateDetails = true,
   fetchCatalog = cstation.fetchCatalog,
@@ -77,7 +78,10 @@ export async function syncCatalogCategory({
       ? await fetchCatalogIncremental({ source, t, sinceLastSeenAt: state.lastSeenAt })
       : { catalog: await fetchCatalog({ source, t }), maxLast: null, completed: true, pagesRead: null, pagecount: null };
 
-    const catalog = result.catalog || [];
+    const catalog = (result.catalog || []).map((item) => ({
+      ...item,
+      mediaType: item.mediaType ?? mediaType ?? "anime",
+    }));
     const saved = await saveCatalog(catalog, { source });
     log("catalog", "category page data saved", {
       source,
@@ -91,7 +95,7 @@ export async function syncCatalogCategory({
 
     let hydrated = 0;
     if (hydrateDetails && shouldIncremental && catalog.length > 0) {
-      hydrated = await hydrateCatalogDetails(catalog.map((item) => item.id), { source });
+      hydrated = await hydrateCatalogDetails(catalog.map((item) => item.id), { source, mediaType });
     }
 
     const maxLast = result.maxLast || maxLastFromCatalog(catalog) || state?.lastSeenAt || null;
@@ -117,7 +121,7 @@ export async function syncCatalogCategory({
   }
 }
 
-export async function hydrateCatalogDetails(ids, { source } = {}) {
+export async function hydrateCatalogDetails(ids, { source, mediaType = null } = {}) {
   if (!source) throw new Error("hydrateCatalogDetails requires source");
   const uniqueIds = [...new Set(ids.map((id) => parseInt(id, 10)).filter(Boolean))];
   let count = 0;
@@ -133,6 +137,7 @@ export async function hydrateCatalogDetails(ids, { source } = {}) {
     await saveCatalog(details.map((detail) => ({
       id: detail.id,
       name: detail.name,
+      mediaType: detail.mediaType ?? mediaType ?? "anime",
       subname: detail.subname || null,
       year: detail.year || null,
       last: detail.last || null,

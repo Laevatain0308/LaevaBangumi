@@ -298,6 +298,7 @@ export function upsertResourceItem({
   source,
   sourceAid,
   title,
+  mediaType = "anime",
   subtitle = null,
   category = null,
   year = null,
@@ -312,15 +313,16 @@ export function upsertResourceItem({
     ensureResourceSource({ source });
     sqlite.prepare(`
       INSERT INTO resource_items (
-        source, source_aid, title, subtitle, category, year,
+        source, source_aid, title, media_type, subtitle, category, year,
         latest_text, detail_fetched_at, updated_at
       )
       VALUES (
-        @source, @sourceAid, @title, @subtitle, @category, @year,
+        @source, @sourceAid, @title, @mediaType, @subtitle, @category, @year,
         @latestText, @detailFetchedAt, datetime('now')
       )
       ON CONFLICT(source, source_aid) DO UPDATE SET
         title = excluded.title,
+        media_type = excluded.media_type,
         subtitle = COALESCE(excluded.subtitle, resource_items.subtitle),
         category = COALESCE(excluded.category, resource_items.category),
         year = COALESCE(excluded.year, resource_items.year),
@@ -331,6 +333,7 @@ export function upsertResourceItem({
       source,
       sourceAid,
       title,
+      mediaType,
       subtitle,
       category,
       year,

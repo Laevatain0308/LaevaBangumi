@@ -54,10 +54,12 @@ test("syncCatalogCategory records successful sync_state after catalog save", asy
       enabled: true,
       apiEndpoint: "https://example.invalid/catalog-state",
       priority: 42,
+      mediaType: "tv",
     },
     fetchCatalog: async () => [{
       id: 123,
       name: "Catalog State Item",
+      mediaType: "tv",
       last: "2026-06-03 02:00:00",
     }],
   });
@@ -83,4 +85,8 @@ test("syncCatalogCategory records successful sync_state after catalog save", asy
     base_url: "https://example.invalid/catalog-state",
     priority: 42,
   });
+  assert.equal(sqlite.prepare(`
+    SELECT media_type FROM resource_items
+    WHERE source = ? AND source_aid = 123
+  `).get(SOURCE).media_type, "tv");
 });

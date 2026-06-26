@@ -77,6 +77,7 @@ test("saveCatalog persists resource items in normalized storage", async () => {
   const saved = await saveCatalog([{
     id: 1001,
     name: "资源标题",
+    mediaType: "tv",
     subname: "别名 A / Alias A",
     year: "2026",
     last: "2026-06-03 01:00:00",
@@ -90,6 +91,7 @@ test("saveCatalog persists resource items in normalized storage", async () => {
     WHERE source = 'test_cstation' AND source_aid = 1001
   `).get();
   assert.equal(row.title, "资源标题");
+  assert.equal(row.media_type, "tv");
   assert.equal(row.subtitle, "别名 A / Alias A");
   assert.equal(row.year, "2026");
   assert.equal(row.latest_text, "2026-06-03 01:00:00");
@@ -110,6 +112,7 @@ test("saveCatalog accepts already normalized resource items", async () => {
     source: "test_cstation_normalized",
     sourceAid: 1002,
     title: "规范化标题",
+    mediaType: "movie",
     subtitle: "规范化副标题",
     category: "OVA",
     year: "2026",
@@ -119,12 +122,13 @@ test("saveCatalog accepts already normalized resource items", async () => {
 
   assert.equal(saved, 1);
   assert.deepEqual(sqlite.prepare(`
-    SELECT source_aid, title, subtitle, category, year, latest_text, detail_fetched_at
+    SELECT source_aid, title, media_type, subtitle, category, year, latest_text, detail_fetched_at
     FROM resource_items
     WHERE source = 'test_cstation_normalized' AND source_aid = 1002
   `).get(), {
     source_aid: 1002,
     title: "规范化标题",
+    media_type: "movie",
     subtitle: "规范化副标题",
     category: "OVA",
     year: "2026",

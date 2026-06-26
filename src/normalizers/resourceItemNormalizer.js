@@ -18,7 +18,7 @@ function titleFromItem(item) {
   return stringValue(item.title ?? item.name);
 }
 
-export function normalizeResourceItem(item, { source, detailFetchedAt = null } = {}) {
+export function normalizeResourceItem(item, { source, mediaType = null, detailFetchedAt = null } = {}) {
   if (!source) throw new Error("normalizeResourceItem requires source");
   const sourceAid = sourceAidFromItem(item);
   const title = titleFromItem(item);
@@ -29,6 +29,7 @@ export function normalizeResourceItem(item, { source, detailFetchedAt = null } =
     source,
     sourceAid,
     title,
+    mediaType: stringValue(item.mediaType ?? item.media_type ?? mediaType) ?? "anime",
     subtitle: stringValue(item.subtitle ?? item.subname),
     category: stringValue(item.category ?? item.type),
     year: stringValue(item.year),

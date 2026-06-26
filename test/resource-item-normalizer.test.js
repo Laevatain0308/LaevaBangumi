@@ -21,6 +21,7 @@ test("normalizeResourceItem maps catalog rows into repository input", () => {
     source: "ffzy",
     sourceAid: 1001,
     title: "资源站标题",
+    mediaType: "anime",
     subtitle: "副标题",
     category: "TV",
     year: "2026",
@@ -35,10 +36,11 @@ test("normalizeResourceItem maps detail rows and caller supplied timestamps", ()
     title: "详情标题",
     type: "OVA",
     note: "更新至第02集",
-  }, { source: "ffzy", detailFetchedAt: "2026-06-03 02:00:00" }), {
+  }, { source: "ffzy", mediaType: "movie", detailFetchedAt: "2026-06-03 02:00:00" }), {
     source: "ffzy",
     sourceAid: 1002,
     title: "详情标题",
+    mediaType: "movie",
     subtitle: null,
     category: "OVA",
     year: null,
