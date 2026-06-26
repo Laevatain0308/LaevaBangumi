@@ -10,6 +10,7 @@ import { upsertAnime } from "./subjectSyncService.js";
 import { enqueueMetadataRefresh } from "./metadataRefreshService.js";
 import { ensureMappingForAnime, enqueueEpisodeRefresh, getEnabledSourceKeys } from "./resourceMatchService.js";
 import { log, error } from "../lib/logger.js";
+import { assertMediaType, mediaTypeForBangumiSubject } from "../lib/mediaTypes.js";
 
 function formatSubjectSearchRow(row) {
   return formatSubjectSearchDto(row, {
@@ -18,31 +19,36 @@ function formatSubjectSearchRow(row) {
   });
 }
 
-export async function searchAnime(keyword) {
+export async function searchAnime(keyword, { mediaType = "anime" } = {}) {
   if (keyword && typeof keyword === "object") {
-    if (keyword.tag) return searchAnimeByTag(keyword.tag);
+    mediaType = keyword.mediaType ?? keyword.type ?? mediaType;
+    if (keyword.tag) return searchAnimeByTag(keyword.tag, { mediaType });
     keyword = keyword.q || "";
   }
-  const normalized = searchSubjectsByKeyword(keyword);
+  const normalizedMediaType = assertMediaType(mediaType);
+  const normalized = searchSubjectsByKeyword(keyword, { mediaType: normalizedMediaType });
   return {
     data: normalized.map(formatSubjectSearchRow),
     freshness: "cache",
   };
 }
 
-export async function searchAnimeByTag(tag) {
+export async function searchAnimeByTag(tag, { mediaType = "anime" } = {}) {
+  const normalizedMediaType = assertMediaType(mediaType);
   return {
-    data: searchSubjectsByTag(tag).map(formatSubjectSearchRow),
+    data: searchSubjectsByTag(tag, { mediaType: normalizedMediaType }).map(formatSubjectSearchRow),
     freshness: "cache",
   };
 }
 
-export async function enrichFromBangumiSearch(keyword) {
-  log("search", "bangumi search started", { keyword });
+export async function enrichFromBangumiSearch(keyword, { mediaType = "anime" } = {}) {
+  const normalizedMediaType = assertMediaType(mediaType);
+  log("search", "bangumi search started", { keyword, mediaType: normalizedMediaType });
   let subjects;
   try {
-    const bgResult = await bangumi.searchSubjects(keyword);
-    subjects = bgResult?.data || [];
+    const bgResult = await bangumi.searchSubjects(keyword, { mediaType: normalizedMediaType });
+    subjects = (bgResult?.data || [])
+      .filter((item) => mediaTypeForBangumiSubject(item) === normalizedMediaType);
   } catch (err) {
     error("search", "bangumi search failed", err);
     return { upserted: 0, queuedMetadata: 0, matched: 0, queuedEpisodes: 0, errors: 1 };
@@ -52,7 +58,7 @@ export async function enrichFromBangumiSearch(keyword) {
   log("search", "bangumi search returned", { keyword, total: subjects.length });
   for (const item of subjects) {
     try {
-      const a = await upsertAnime(item);
+      const a = await upsertAnime(item, undefined, { mediaType: normalizedMediaType });
       if (!a) continue;
       stats.upserted++;
 

@@ -35,14 +35,14 @@ export function enqueueJob(type, payload = {}, options = {}) {
   return true;
 }
 
-export function enqueueSearch(keyword) {
+export function enqueueSearch(keyword, { mediaType = "anime" } = {}) {
   const q = String(keyword || "").trim();
   if (!q) return false;
-  return enqueueJob("bangumi-search", { keyword: q }, { key: `bangumi-search:${q}` });
+  return enqueueJob("bangumi-search", { keyword: q, mediaType }, { key: `bangumi-search:${mediaType}:${q}` });
 }
 
 export function onSearchFlush(fn) {
-  registerJob("bangumi-search", ({ keyword }) => fn(keyword));
+  registerJob("bangumi-search", ({ keyword, mediaType }) => fn(keyword, { mediaType }));
 }
 
 export function queueStats() {

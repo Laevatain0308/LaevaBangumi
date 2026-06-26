@@ -19,6 +19,7 @@ test("subject DTOs expose the normalized public contract", () => {
     bangumi_id: 547888,
     name: "Raw title",
     name_cn: "中文标题",
+    media_type: "anime",
     summary: "简介[简介原文]原始内容",
     air_date: "2026-04-01",
     air_weekday: 3,
@@ -38,6 +39,7 @@ test("subject DTOs expose the normalized public contract", () => {
     title: "中文标题",
     name: "Raw title",
     nameCn: "中文标题",
+    mediaType: "anime",
     coverUrl: "https://example.invalid/cover.jpg",
     summary: "简介",
     airDate: "2026-04-01",
@@ -58,6 +60,7 @@ test("subject DTOs expose the normalized public contract", () => {
       bangumi_id: 547888,
       name: "Raw title",
       name_cn: "中文标题",
+      media_type: "anime",
       summary: "简介[简介原文]原始内容",
       air_date: "2026-04-01",
       air_weekday: 3,
@@ -75,6 +78,7 @@ test("subject DTOs expose the normalized public contract", () => {
     channels: [{ id: "ffzy:123", episodes: [] }],
   });
   assert.equal(detail.id, 547888);
+  assert.equal(detail.mediaType, "anime");
   assert.equal(detail.summary, "简介");
   assert.deepEqual(detail.votesCount, [0, 0, 1, 2, 3, 10, 20, 30, 5, 1]);
   assert.deepEqual(detail.tags, [{ name: "原创", count: 10, totalCount: 20 }]);

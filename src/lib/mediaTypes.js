@@ -11,7 +11,12 @@ export const BANGUMI_SUBJECT_TYPE_BY_MEDIA_TYPE = Object.freeze({
 
 export const BANGUMI_PLATFORM_MEDIA_TYPES = Object.freeze({
   // Values in this map must come from actual Bangumi API platform responses.
+  "华语剧": "tv",
   "欧美剧": "tv",
+  "日剧": "tv",
+  "电视剧": "tv",
+  "电影": "movie",
+  "综艺": "variety",
 });
 
 export function assertMediaType(value, fallback = DEFAULT_MEDIA_TYPE) {

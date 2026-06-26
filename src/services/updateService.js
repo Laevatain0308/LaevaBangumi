@@ -8,15 +8,17 @@ import {
   proxyCover,
 } from "./animeShared.js";
 import { getEnabledSourceKeys } from "./resourceMatchService.js";
+import { assertMediaType } from "../lib/mediaTypes.js";
 
-export async function getUpdates({ days = 7, limit = 60, today: todayOption = null } = {}) {
+export async function getUpdates({ days = 7, limit = 60, today: todayOption = null, mediaType = "anime" } = {}) {
+  const normalizedMediaType = assertMediaType(mediaType);
   const windowMs = Math.max(1, days) * DAY_MS;
   const nowMs = parseUpdateNow(todayOption) ?? Date.now();
   const cutoffMs = nowMs - windowMs;
   const enabledSources = getEnabledSourceKeys();
   const enabledSourcesSet = new Set(enabledSources);
   const sourceOrder = new Map(enabledSources.map((source, index) => [source, index]));
-  const rows = listUpdateCandidateRows();
+  const rows = listUpdateCandidateRows({ mediaType: normalizedMediaType });
 
   const latestByAnime = new Map();
   for (const row of rows) {
@@ -82,7 +84,7 @@ export async function getUpdates({ days = 7, limit = 60, today: todayOption = nu
       return {
         ...publicRow,
         latestEp: primary?.latestEp ?? null,
-        latestEpisode: primary?.hasEpisodeChange && primary?.latestEp
+        latestEpisode: normalizedMediaType === "anime" && primary?.hasEpisodeChange && primary?.latestEp
           ? `更新至第${String(primary.latestEp).padStart(2, "0")}集`
           : "资源有更新",
         updatedAt: primary?.updatedAt ?? row.updatedAt,

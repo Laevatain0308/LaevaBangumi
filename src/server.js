@@ -5,6 +5,7 @@ import { log, error } from "./lib/logger.js";
 import { envelope } from "./dto/apiEnvelope.js";
 import { errorEnvelope, serverErrorEnvelope } from "./dto/errorDto.js";
 import { createPrivateSyncRouter } from "./routes/privateSyncRoutes.js";
+import { assertMediaType } from "./lib/mediaTypes.js";
 
 function ts() {
   return new Date().toISOString();
@@ -32,12 +33,18 @@ export function createServer() {
     const days = Math.max(1, Math.min(parseInt(req.query.days, 10) || 7, 30));
     const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 60, 120));
     const today = typeof req.query.today === "string" ? req.query.today : null;
+    let mediaType;
     try {
-      log("api", "updates requested", { days, limit, today });
-      const result = await animeService.getUpdates({ days, limit, today });
+      mediaType = assertMediaType(req.query.type);
+    } catch (err) {
+      return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: err.message, errorCode: "invalid_query", meta: { total: 0 } }));
+    }
+    try {
+      log("api", "updates requested", { days, limit, today, type: mediaType });
+      const result = await animeService.getUpdates({ days, limit, today, mediaType });
       res.json(envelope(result.data, {
         updatedAt: ts(),
-        meta: { freshness: result.freshness, total: result.data.length, days },
+        meta: { freshness: result.freshness, total: result.data.length, days, type: mediaType },
       }));
     } catch (err) {
       error("api", "/api/updates error", err);
@@ -49,6 +56,12 @@ export function createServer() {
   app.get("/api/search", async (req, res) => {
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     const tag = typeof req.query.tag === "string" ? req.query.tag.trim() : "";
+    let mediaType;
+    try {
+      mediaType = assertMediaType(req.query.type);
+    } catch (err) {
+      return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: err.message, errorCode: "invalid_query", meta: { total: 0 } }));
+    }
     if (q && tag) {
       return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "q 和 tag 不能同时使用", errorCode: "invalid_query", meta: { total: 0 } }));
     }
@@ -56,9 +69,11 @@ export function createServer() {
       return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "关键词至少需要 2 个字符", errorCode: "invalid_query", meta: { total: 0 } }));
     }
     try {
-      log("api", "search requested", tag ? { tag } : { q });
-      const result = tag ? await animeService.searchAnimeByTag(tag) : await animeService.searchAnime(q);
-      if (q) enqueueSearch(q);
+      log("api", "search requested", tag ? { tag, type: mediaType } : { q, type: mediaType });
+      const result = tag
+        ? await animeService.searchAnimeByTag(tag, { mediaType })
+        : await animeService.searchAnime(q, { mediaType });
+      if (q) enqueueSearch(q, { mediaType });
       res.json(envelope(result.data, {
         updatedAt: ts(),
         meta: {
@@ -66,6 +81,7 @@ export function createServer() {
           total: result.data.length,
           query: q || null,
           tag: tag || null,
+          type: mediaType,
         },
       }));
     } catch (err) {

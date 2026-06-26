@@ -10,6 +10,7 @@ const RESOURCE_ENTRY_ONLY_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1001;
 const CLOSED_RANGE_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1002;
 const CLOSED_RANGE_FINAL_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1003;
 const NON_SEASONAL_UPDATE_SUBJECT_ID = CONTRACT_SUBJECT_ID + 1004;
+const TV_SUBJECT_ID = CONTRACT_SUBJECT_ID + 2000;
 
 function getJson(server, path) {
   return new Promise((resolve, reject) => {
@@ -118,6 +119,52 @@ function seedContractSubject() {
   `);
 }
 
+function seedTvSubject() {
+  seedContractSubject();
+  sqlite.exec(`
+    DELETE FROM episodes WHERE bangumi_id = ${TV_SUBJECT_ID} OR (source = 'ffzy' AND source_aid = 223);
+    DELETE FROM resource_mappings WHERE bangumi_id = ${TV_SUBJECT_ID} OR (source = 'ffzy' AND source_aid = 223);
+    DELETE FROM resource_items WHERE source = 'ffzy' AND source_aid = 223;
+    DELETE FROM subject_tags WHERE bangumi_id = ${TV_SUBJECT_ID};
+    DELETE FROM subject_aliases WHERE bangumi_id = ${TV_SUBJECT_ID};
+    DELETE FROM subjects WHERE bangumi_id = ${TV_SUBJECT_ID};
+
+    INSERT INTO subjects (
+      bangumi_id, type, media_type, name, name_cn, summary, platform, air_date,
+      eps, total_episodes, cover_url, rating_score, rating_rank,
+      rating_total, rating_distribution_json, metadata_fetched_at, rating_fetched_at
+    ) VALUES (
+      ${TV_SUBJECT_ID}, 6, 'tv', 'Stargate Universe Season 2', '星际之门：宇宙 第二季',
+      'tv summary', '欧美剧', '2010-09-28', 20, 20,
+      'https://example.invalid/tv-cover.jpg', 6.5, NULL, 2, '[]', datetime('now'), datetime('now')
+    );
+    INSERT INTO subject_aliases (bangumi_id, alias) VALUES (${TV_SUBJECT_ID}, 'Stargate Universe S2')
+      ON CONFLICT(bangumi_id, alias) DO NOTHING;
+    INSERT INTO resource_items (source, source_aid, title, media_type, latest_text, detail_fetched_at)
+      VALUES ('ffzy', 223, '星际之门资源站', 'tv', '2026-06-03 12:00:00', datetime('now'))
+      ON CONFLICT(source, source_aid) DO UPDATE SET
+        title = excluded.title,
+        media_type = excluded.media_type,
+        latest_text = excluded.latest_text,
+        detail_fetched_at = excluded.detail_fetched_at,
+        updated_at = datetime('now');
+    INSERT INTO resource_mappings (bangumi_id, source, source_aid, score, matched_at)
+      VALUES (${TV_SUBJECT_ID}, 'ffzy', 223, 0.92, datetime('now'))
+      ON CONFLICT(bangumi_id, source) DO UPDATE SET
+        source_aid = excluded.source_aid,
+        score = excluded.score,
+        matched_at = excluded.matched_at,
+        updated_at = datetime('now');
+    INSERT INTO episodes (bangumi_id, source, source_aid, ep_index, source_ep_index, title, raw_video_url, updated_at)
+      VALUES (${TV_SUBJECT_ID}, 'ffzy', 223, 1, 1, '第01集', 'https://example.invalid/tv-1.m3u8', '2026-05-01 00:00:00')
+      ON CONFLICT(bangumi_id, source, source_aid, ep_index) DO UPDATE SET
+        source_ep_index = excluded.source_ep_index,
+        title = excluded.title,
+        raw_video_url = excluded.raw_video_url,
+        updated_at = excluded.updated_at;
+  `);
+}
+
 test("detail exposes the new stable Aslan DTO contract", async () => {
   seedContractSubject();
   const server = createServer().listen(0);
@@ -127,6 +174,7 @@ test("detail exposes the new stable Aslan DTO contract", async () => {
     const detail = response.body.data;
     assert.equal(detail.id, CONTRACT_SUBJECT_ID);
     assert.equal(detail.title, "中文标题");
+    assert.equal(detail.mediaType, "anime");
     assert.equal(detail.ratingScore, 7.6);
     assert.equal(detail.rank, 1234);
     assert.equal(detail.votes, 420);
@@ -190,6 +238,7 @@ test("tag search returns subject summaries", async () => {
     assert.equal(item.airDate, "2026-04-01");
     assert.equal(item.airWeekday, 3);
     assert.equal(item.platform, "TV");
+    assert.equal(item.mediaType, "anime");
     assert.equal(item.eps, 12);
     assert.equal(item.totalEpisodes, 12);
     assert.equal(item.ratingScore, 7.6);
@@ -219,6 +268,27 @@ test("keyword search matches local tag names", async () => {
   }
 });
 
+test("search type parameter filters local subjects by media type", async () => {
+  seedTvSubject();
+  const server = createServer().listen(0);
+  try {
+    const animeResponse = await getJson(server, "/api/search?q=%E6%98%9F%E9%99%85");
+    assert.equal(animeResponse.status, 200);
+    assert.equal(animeResponse.body.meta.type, "anime");
+    assert.equal(animeResponse.body.data.some((row) => row.id === TV_SUBJECT_ID), false);
+
+    const tvResponse = await getJson(server, "/api/search?q=%E6%98%9F%E9%99%85&type=tv");
+    assert.equal(tvResponse.status, 200);
+    assert.equal(tvResponse.body.meta.type, "tv");
+    const item = tvResponse.body.data.find((row) => row.id === TV_SUBJECT_ID);
+    assert.ok(item);
+    assert.equal(item.mediaType, "tv");
+    assert.equal(item.platform, "欧美剧");
+  } finally {
+    server.close();
+  }
+});
+
 test("calendar reads normalized subjects and episodes", async () => {
   seedContractSubject();
   const server = createServer().listen(0);
@@ -236,6 +306,7 @@ test("calendar reads normalized subjects and episodes", async () => {
     assert.equal(item.summary, "summary");
     assert.equal(item.airWeekday, 3);
     assert.equal(item.platform, "TV");
+    assert.equal(item.mediaType, "anime");
     assert.equal(item.rank, 1234);
     assert.equal(item.votes, 420);
     assert.deepEqual(item.votesCount, [0, 0, 1, 2, 3, 10, 20, 30, 5, 1]);
@@ -292,6 +363,7 @@ test("updates read normalized resource mappings and items", async () => {
     assert.equal(item.airDate, "2026-04-01");
     assert.equal(item.airWeekday, 3);
     assert.equal(item.platform, "TV");
+    assert.equal(item.mediaType, "anime");
     assert.equal(item.eps, 12);
     assert.equal(item.totalEpisodes, 12);
     assert.equal(item.ratingScore, 7.6);
@@ -301,6 +373,28 @@ test("updates read normalized resource mappings and items", async () => {
     assert.deepEqual(item.tags, [{ name: "原创", count: 10, totalCount: 20 }]);
     assert.equal(Object.hasOwn(item, "sourceUpdates"), false);
     assert.equal(Object.hasOwn(item, "bangumiId"), false);
+  } finally {
+    server.close();
+  }
+});
+
+test("updates type parameter returns non-anime updates from resource last time", async () => {
+  seedTvSubject();
+  const server = createServer().listen(0);
+  try {
+    const animeResponse = await getJson(server, "/api/updates?days=1&limit=20&today=2026-06-03");
+    assert.equal(animeResponse.status, 200);
+    assert.equal(animeResponse.body.meta.type, "anime");
+    assert.equal(animeResponse.body.data.some((row) => row.id === TV_SUBJECT_ID), false);
+
+    const tvResponse = await getJson(server, "/api/updates?days=1&limit=20&today=2026-06-03&type=tv");
+    assert.equal(tvResponse.status, 200);
+    assert.equal(tvResponse.body.meta.type, "tv");
+    const item = tvResponse.body.data.find((row) => row.id === TV_SUBJECT_ID);
+    assert.ok(item);
+    assert.equal(item.mediaType, "tv");
+    assert.equal(item.updatedAt, "2026-06-03T04:00:00.000Z");
+    assert.equal(item.latestEpisode, "资源有更新");
   } finally {
     server.close();
   }

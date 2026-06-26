@@ -223,7 +223,7 @@ export function listMappingSubjectIdsBySourceAid({ source, sourceAid }) {
   `).all({ source, sourceAid }).map((row) => row.bangumi_id);
 }
 
-export function listUpdateCandidateRows() {
+export function listUpdateCandidateRows({ mediaType = "anime" } = {}) {
   return sqlite.prepare(`
     SELECT
       s.bangumi_id AS id,
@@ -232,6 +232,7 @@ export function listUpdateCandidateRows() {
       s.name_cn AS nameCn,
       s.name_cn,
       s.summary,
+      s.media_type,
       s.cover_url AS coverUrl,
       s.cover_url,
       s.air_date,
@@ -256,7 +257,8 @@ export function listUpdateCandidateRows() {
         JOIN subjects s2 ON s2.bangumi_id = rm2.bangumi_id
         WHERE rm2.source = rm.source
           AND rm2.source_aid = rm.source_aid
-          AND s2.calendar_weekday IS NOT NULL
+          AND s2.media_type = @mediaType
+          AND (@mediaType <> 'anime' OR s2.calendar_weekday IS NOT NULL)
       ) AS maxSeasonalSourceEpStart,
       (
         SELECT COUNT(*)
@@ -264,7 +266,8 @@ export function listUpdateCandidateRows() {
         JOIN subjects s2 ON s2.bangumi_id = rm2.bangumi_id
         WHERE rm2.source = rm.source
           AND rm2.source_aid = rm.source_aid
-          AND s2.calendar_weekday IS NOT NULL
+          AND s2.media_type = @mediaType
+          AND (@mediaType <> 'anime' OR s2.calendar_weekday IS NOT NULL)
       ) AS seasonalMappingCount,
       ri.latest_text AS sourceUpdatedAt,
       MAX(e.ep_index) AS latestEp,
@@ -276,9 +279,11 @@ export function listUpdateCandidateRows() {
       ON e.bangumi_id = rm.bangumi_id
       AND e.source = rm.source
       AND e.source_aid = rm.source_aid
-    WHERE s.calendar_weekday IS NOT NULL
+    WHERE s.media_type = @mediaType
+      AND ri.media_type = @mediaType
+      AND (@mediaType <> 'anime' OR s.calendar_weekday IS NOT NULL)
     GROUP BY rm.bangumi_id, rm.source, rm.source_aid
-  `).all();
+  `).all({ mediaType });
 }
 
 export function findResourceItem({ source, sourceAid }) {

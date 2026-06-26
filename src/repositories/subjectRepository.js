@@ -38,6 +38,7 @@ export function listCalendarSubjectRows() {
       name,
       name_cn,
       name_cn AS nameCn,
+      media_type,
       summary,
       cover_url AS coverUrl,
       cover_url,
@@ -100,13 +101,14 @@ export function insertNonAnimeSubject(row) {
   `).run(row);
 }
 
-export function searchSubjectsByKeyword(keyword, { limit = 60 } = {}) {
+export function searchSubjectsByKeyword(keyword, { limit = 60, mediaType = "anime" } = {}) {
   if (!keyword) return [];
   return sqlite.prepare(`
     SELECT DISTINCT
       s.bangumi_id,
       s.name,
       s.name_cn,
+      s.media_type,
       s.summary,
       s.air_date,
       s.air_weekday,
@@ -122,19 +124,21 @@ export function searchSubjectsByKeyword(keyword, { limit = 60 } = {}) {
     LEFT JOIN subject_aliases a ON a.bangumi_id = s.bangumi_id
     LEFT JOIN subject_tags st ON st.bangumi_id = s.bangumi_id
     LEFT JOIN tags t ON t.tag_id = st.tag_id
-    WHERE s.name LIKE @q OR s.name_cn LIKE @q OR a.alias LIKE @q OR t.name LIKE @q
+    WHERE s.media_type = @mediaType
+      AND (s.name LIKE @q OR s.name_cn LIKE @q OR a.alias LIKE @q OR t.name LIKE @q)
     ORDER BY s.updated_at DESC
     LIMIT @limit
-  `).all({ q: `%${keyword}%`, limit: boundedLimit(limit) });
+  `).all({ q: `%${keyword}%`, mediaType, limit: boundedLimit(limit) });
 }
 
-export function searchSubjectsByTag(tag, { limit = 60 } = {}) {
+export function searchSubjectsByTag(tag, { limit = 60, mediaType = "anime" } = {}) {
   if (!tag) return [];
   return sqlite.prepare(`
     SELECT DISTINCT
       s.bangumi_id,
       s.name,
       s.name_cn,
+      s.media_type,
       s.summary,
       s.air_date,
       s.air_weekday,
@@ -149,10 +153,11 @@ export function searchSubjectsByTag(tag, { limit = 60 } = {}) {
     FROM subjects s
     JOIN subject_tags st ON st.bangumi_id = s.bangumi_id
     JOIN tags t ON t.tag_id = st.tag_id
-    WHERE t.name = @tag
+    WHERE s.media_type = @mediaType
+      AND t.name = @tag
     ORDER BY st.count DESC, s.rating_score DESC, s.air_date DESC
     LIMIT @limit
-  `).all({ tag, limit: boundedLimit(limit) });
+  `).all({ tag, mediaType, limit: boundedLimit(limit) });
 }
 
 export function listSubjectAliases(id) {
