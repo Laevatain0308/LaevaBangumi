@@ -43,12 +43,19 @@ export function createBangumiDetailRefreshService({
       return true;
     } catch (error) {
       const delayIndex = Math.min(row.consecutiveFailures, BANGUMI_DETAIL_RETRY_DELAYS_MS.length - 1);
-      repository.recordDetailRefreshFailure({
-        bangumiId: row.bangumiId,
-        now: attemptedAt,
-        nextRefreshAt: new Date(Date.parse(attemptedAt) + BANGUMI_DETAIL_RETRY_DELAYS_MS[delayIndex]).toISOString(),
-        error: error.message ?? String(error),
-      });
+      try {
+        repository.recordDetailRefreshFailure({
+          bangumiId: row.bangumiId,
+          now: attemptedAt,
+          nextRefreshAt: new Date(Date.parse(attemptedAt) + BANGUMI_DETAIL_RETRY_DELAYS_MS[delayIndex]).toISOString(),
+          error: error.message ?? String(error),
+        });
+      } catch (stateError) {
+        writeError("bangumi-detail-refresh", "failure state write failed", {
+          bangumiId: row.bangumiId,
+          message: stateError.message ?? String(stateError),
+        });
+      }
       writeError("bangumi-detail-refresh", "subject refresh failed", {
         bangumiId: row.bangumiId,
         message: error.message ?? String(error),

@@ -79,6 +79,22 @@ test("startup skips a fresh calendar", async () => {
   assert.deepEqual(result.calendar, { started: false, skipped: true, reason: "calendar_fresh" });
 });
 
+test("startup still attempts a stale calendar when detail refresh fails", async () => {
+  let calendarRuns = 0;
+  const scheduler = createBangumiScheduler({
+    cron: createCron(),
+    detailRefresher: { runDueBatch: async () => { throw new Error("detail startup failed"); } },
+    calendarService: {
+      isStale: () => true,
+      sync: async () => { calendarRuns += 1; return { members: 1 }; },
+    },
+  });
+
+  await assert.rejects(() => scheduler.startup(), /detail startup failed/);
+  assert.equal(calendarRuns, 1);
+  assert.deepEqual(scheduler.state(), { detailRunning: false, calendarRunning: false });
+});
+
 test("skips overlap independently for detail and calendar jobs", async () => {
   const detailGate = deferred();
   let detailRuns = 0;

@@ -202,6 +202,17 @@ test("initDb creates the normalized schema tables", () => {
     "sync_state",
     "retry_state",
     "manual_resource_state",
+    "bangumi_subjects",
+    "bangumi_subject_images",
+    "bangumi_subject_rating",
+    "bangumi_subject_collection",
+    "bangumi_subject_tags",
+    "bangumi_subject_meta_tags",
+    "bangumi_subject_infobox_entries",
+    "bangumi_subject_infobox_values",
+    "bangumi_subject_refresh_state",
+    "bangumi_calendar_subjects",
+    "bangumi_calendar_sync_state",
   ]) {
     assert.equal(tableNames.has(table), true, `${table} table should exist`);
   }
@@ -224,6 +235,14 @@ test("initDb creates the normalized schema tables", () => {
   assert.equal(retryColumns.has("last_error"), true, "retry_state.last_error column should exist");
 
   assert.equal(Object.hasOwn(subjects, "hasCover"), false, "subjects.hasCover should not exist");
+
+  const bangumiSubjectColumns = new Set(sqlite.prepare("PRAGMA table_info(bangumi_subjects)").all().map((row) => row.name));
+  assert.equal(bangumiSubjectColumns.has("type"), false, "bangumi_subjects.type should not exist");
+  assert.equal(bangumiSubjectColumns.has("media_type"), false, "bangumi_subjects.media_type should not exist");
+  assert.equal(sqlite.prepare(`
+    SELECT COUNT(*) AS count FROM sqlite_master
+    WHERE (type = 'view' OR type = 'trigger') AND name LIKE 'bangumi_%'
+  `).get().count, 0, "new metadata domain should not expose legacy compatibility views or triggers");
 
   const mappingColumns = new Set(sqlite.prepare("PRAGMA table_info(resource_mappings)").all().map((row) => row.name));
   assert.equal(mappingColumns.has("status"), true, "resource_mappings.status column should exist");

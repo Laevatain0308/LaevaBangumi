@@ -1,5 +1,5 @@
 import { normalizeSubject } from "./normalizer.js";
-import { validateAnimeSubject, validateCalendarPayload } from "./validation.js";
+import { BangumiPayloadError, validateAnimeSubject, validateCalendarPayload } from "./validation.js";
 import { BANGUMI_CALENDAR_STALE_MS } from "./config.js";
 
 function iso(value) {
@@ -47,6 +47,9 @@ export function createBangumiCalendarService({
         }
       }
 
+      if (entries.length === 0) {
+        throw new BangumiPayloadError("calendar contains no valid anime", { code: "incomplete_calendar" });
+      }
       repository.replaceCalendarSnapshot(entries, { now });
       const result = {
         received,

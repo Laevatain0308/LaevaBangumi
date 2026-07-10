@@ -183,12 +183,31 @@ function detailSubject(metadata) {
   return subject;
 }
 
+function completeObject(value, keys, defaultValue) {
+  const source = value ?? {};
+  return Object.fromEntries(keys.map((key) => [
+    key,
+    Object.hasOwn(source, key) ? source[key] : defaultValue,
+  ]));
+}
+
 function replaceDetailInternal(sqlite, metadata, { now, nextRefreshAt }) {
   const bangumiId = metadata.subject.bangumiId;
   upsertSubject(sqlite, detailSubject(metadata), now);
-  writeImages(sqlite, bangumiId, metadata.images ?? null);
-  writeRating(sqlite, bangumiId, metadata.rating ?? null);
-  writeCollection(sqlite, bangumiId, metadata.collection ?? null);
+  writeImages(sqlite, bangumiId, metadata.images == null
+    ? null
+    : completeObject(metadata.images, Object.keys(IMAGE_COLUMNS), null));
+  writeRating(sqlite, bangumiId, metadata.rating == null
+    ? null
+    : {
+      ...completeObject(metadata.rating, ["score", "rank", "total"], null),
+      counts: Object.hasOwn(metadata.rating, "counts")
+        ? metadata.rating.counts
+        : Array(10).fill(0),
+    });
+  writeCollection(sqlite, bangumiId, metadata.collection == null
+    ? null
+    : completeObject(metadata.collection, Object.keys(COLLECTION_COLUMNS), 0));
   replaceTags(sqlite, bangumiId, metadata.tags ?? []);
   replaceMetaTags(sqlite, bangumiId, metadata.metaTags ?? []);
   replaceInfobox(sqlite, bangumiId, metadata.infobox ?? []);

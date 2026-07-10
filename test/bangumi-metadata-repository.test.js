@@ -159,6 +159,33 @@ test("detail snapshot clears missing detail-owned fields and child relations", (
   assert.deepEqual(result.infobox, []);
 });
 
+test("detail snapshot clears child columns omitted from present objects", (t) => {
+  const { repository } = createRepository(t);
+  repository.mergeSummary(summary(), { now: NOW });
+  repository.replaceDetail({
+    subject: { bangumiId: 1, name: "Partial Children" },
+    images: { largeUrl: "new-large" },
+    rating: { score: 9.0 },
+    collection: { wish: 99 },
+  }, { now: LATER, nextRefreshAt: NEXT });
+
+  const result = repository.findById(1);
+  assert.deepEqual(result.images, {
+    largeUrl: "new-large",
+    commonUrl: null,
+    mediumUrl: null,
+    smallUrl: null,
+    gridUrl: null,
+  });
+  assert.deepEqual(result.rating, {
+    score: 9.0,
+    rank: null,
+    total: null,
+    counts: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  });
+  assert.deepEqual(result.collection, { wish: 99, collect: 0, doing: 0, onHold: 0, dropped: 0 });
+});
+
 test("round-trips scalar, labeled list, and empty Infobox values losslessly", (t) => {
   const { repository } = createRepository(t);
   const input = detail();

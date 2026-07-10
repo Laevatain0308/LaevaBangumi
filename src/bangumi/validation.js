@@ -156,6 +156,7 @@ export function validateAnimeSubject(value, { expectedId } = {}) {
 
 export function validateCalendarPayload(value) {
   if (!Array.isArray(value)) fail("calendar must be an array", "$");
+  if (value.length === 0) fail("calendar must contain weekday groups", "$", "incomplete_calendar");
   return value.map((day, dayIndex) => {
     const path = `$[${dayIndex}]`;
     assertPlainObject(day, path, "calendar day must be an object");

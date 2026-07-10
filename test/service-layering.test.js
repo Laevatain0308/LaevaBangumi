@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 const projectRoot = new URL("..", import.meta.url).pathname;
@@ -115,5 +115,34 @@ test("resource service runtime naming uses sourceAid instead of cstationId", asy
   ]) {
     const source = await readFile(join(projectRoot, "src/services", file), "utf8");
     assert.doesNotMatch(source, /cstationId|matchedCsName/, `${file} should use sourceAid/resource names`);
+  }
+});
+
+test("legacy domains do not link to the new Bangumi metadata domain", async () => {
+  for (const file of [
+    "src/repositories/subjectRepository.js",
+    "src/repositories/tagRepository.js",
+    "src/repositories/resourceRepository.js",
+    "src/services/subjectSyncService.js",
+    "src/services/resourceMatchService.js",
+    "src/services/episodeRefreshService.js",
+    "src/services/searchService.js",
+    "src/services/detailService.js",
+    "src/services/calendarService.js",
+  ]) {
+    const source = await readFile(join(projectRoot, file), "utf8");
+    assert.doesNotMatch(source, /from ["'][^"']*\/bangumi\//, file);
+    assert.equal(source.includes("bangumi_subjects"), false, file);
+  }
+});
+
+test("new Bangumi metadata modules do not import legacy domain repositories or services", async () => {
+  const bangumiRoot = join(projectRoot, "src/bangumi");
+  const files = (await readdir(bangumiRoot)).filter((file) => file.endsWith(".js"));
+  for (const file of files) {
+    const source = await readFile(join(bangumiRoot, file), "utf8");
+    assert.doesNotMatch(source, /\.\.\/repositories\//, file);
+    assert.doesNotMatch(source, /\.\.\/services\//, file);
+    assert.doesNotMatch(source, /\b(subjects|subject_aliases|subject_tags|anime_other)\b/, file);
   }
 });

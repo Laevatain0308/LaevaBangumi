@@ -46,11 +46,14 @@ export function createBangumiScheduler({
   }
 
   async function startup() {
-    const details = await runDetails("startup");
-    const calendar = calendarService.isStale()
-      ? await runCalendar("startup")
-      : { started: false, skipped: true, reason: "calendar_fresh" };
-    return { details, calendar };
+    const detailPromise = runDetails("startup");
+    const calendarPromise = calendarService.isStale()
+      ? runCalendar("startup")
+      : Promise.resolve({ started: false, skipped: true, reason: "calendar_fresh" });
+    const [details, calendar] = await Promise.allSettled([detailPromise, calendarPromise]);
+    if (details.status === "rejected") throw details.reason;
+    if (calendar.status === "rejected") throw calendar.reason;
+    return { details: details.value, calendar: calendar.value };
   }
 
   function guarded(run, scope) {
@@ -90,7 +93,7 @@ export function createBangumiScheduler({
 export function createProductionBangumiScheduler({ sqlite, cron = cronModule, logger = {} }) {
   const repository = createBangumiRepository(sqlite);
   const client = createBangumiMetadataClient();
-  const metadataService = createBangumiMetadataService({ client, repository });
+  const metadataService = createBangumiMetadataService({ client, repository, logger });
   const calendarService = createBangumiCalendarService({ client, repository, logger });
   const detailRefresher = createBangumiDetailRefreshService({ metadataService, repository, logger });
   return createBangumiScheduler({ cron, detailRefresher, calendarService, logger });

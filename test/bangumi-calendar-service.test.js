@@ -121,6 +121,26 @@ test("an invalid calendar container preserves the previous snapshot", async (t) 
   assert.equal(context.repository.findCalendarSyncState().consecutiveFailures, 1);
 });
 
+test("a calendar with no valid anime preserves the previous snapshot", async (t) => {
+  const context = setup(t);
+  await context.service.sync();
+  const previous = context.repository.listCalendarSubjects();
+  const empty = createBangumiCalendarService({
+    client: {
+      getCalendar: async () => [{
+        weekday: { id: 1 },
+        items: [{ id: 2, type: 6, name: "Person" }, { id: 3, type: "2", name: "String Type" }],
+      }],
+    },
+    repository: context.repository,
+    clock: () => new Date(LATER),
+  });
+
+  await assert.rejects(() => empty.sync(), (error) => error.code === "incomplete_calendar");
+  assert.deepEqual(context.repository.listCalendarSubjects(), previous);
+  assert.equal(context.repository.findCalendarSyncState().consecutiveFailures, 1);
+});
+
 test("staleness is based on the last successful sync", async (t) => {
   const context = setup(t);
   assert.equal(context.service.isStale(new Date(NOW)), true);

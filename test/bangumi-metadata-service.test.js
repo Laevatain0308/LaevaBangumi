@@ -45,12 +45,17 @@ function setup(t, overrides = {}) {
   };
   const repository = createBangumiRepository(sqlite);
   const client = createBangumiMetadataClient(httpClient);
+  const logs = [];
   const service = createBangumiMetadataService({
     client,
     repository,
     clock: () => new Date(NOW),
+    logger: {
+      log(scope, message, meta) { logs.push({ scope, message, meta }); },
+      error(scope, message, meta) { logs.push({ scope, message, meta }); },
+    },
   });
-  return { calls, client, httpClient, repository, service, get detailCalls() { return detailCalls; } };
+  return { calls, client, httpClient, logs, repository, service, get detailCalls() { return detailCalls; } };
 }
 
 test("anime-only client forces the search media type", async () => {
@@ -75,6 +80,8 @@ test("search persists valid anime summaries and rejects all other types", async 
   assert.equal(context.repository.findById(2), null);
   assert.equal(context.repository.findById(3), null);
   assert.equal(context.repository.hasCompletedDetail(1), false);
+  assert.deepEqual(context.logs.map((entry) => entry.meta.id), [2, 3]);
+  assert.ok(context.logs.every((entry) => entry.meta.path === "$.type"));
 });
 
 test("first detail read fetches full metadata and later reads the cache", async (t) => {
@@ -86,6 +93,7 @@ test("first detail read fetches full metadata and later reads the cache", async 
   assert.equal(first.subject.summary, "full detail");
   assert.equal(first.refreshState.nextRefreshAt, NEXT);
   assert.equal(first.refreshState.consecutiveFailures, 0);
+  assert.deepEqual(context.logs.map((entry) => entry.message), ["detail fetch started", "detail fetch completed"]);
 
   const second = await context.service.getDetail(1);
   assert.equal(context.detailCalls, 1);
@@ -116,6 +124,7 @@ test("failed first detail fetch leaves no refresh state", async (t) => {
   await assert.rejects(() => context.service.getDetail(1), /Bangumi unavailable/);
   assert.equal(context.repository.hasCompletedDetail(1), false);
   assert.equal(context.repository.findById(1).subject.name, "Summary");
+  assert.deepEqual(context.logs.map((entry) => entry.message), ["detail fetch started", "detail fetch failed"]);
 });
 
 test("forced refresh replaces an existing detail snapshot", async (t) => {

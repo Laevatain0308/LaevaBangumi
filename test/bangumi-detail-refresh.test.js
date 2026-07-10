@@ -111,3 +111,31 @@ for (const [previousFailures, expectedDelay] of [[0, 6 * HOUR_MS], [1, 24 * HOUR
     });
   });
 }
+
+test("continues the batch when recording one failure state also fails", async () => {
+  const attempted = [];
+  const refresher = createBangumiDetailRefreshService({
+    repository: {
+      listDueRefreshIds: () => [1, 2].map((bangumiId) => ({ bangumiId, consecutiveFailures: 0 })),
+      recordDetailRefreshFailure({ bangumiId }) {
+        if (bangumiId === 1) throw new Error("state write failed");
+      },
+    },
+    metadataService: {
+      async refreshDetail(id) {
+        attempted.push(id);
+        throw new Error("Bangumi unavailable");
+      },
+    },
+    clock: () => new Date(NOW),
+    sleep: async () => {},
+    monotonicNow: (() => {
+      let value = 0;
+      return () => { value += 500; return value; };
+    })(),
+  });
+
+  const result = await refresher.runDueBatch();
+  assert.deepEqual(attempted, [1, 2]);
+  assert.deepEqual(result, { due: 2, succeeded: 0, failed: 2 });
+});

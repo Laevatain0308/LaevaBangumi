@@ -45,6 +45,10 @@ test("validates calendar containers before item validation", () => {
   ]);
   assert.throws(() => validateCalendarPayload({}), BangumiPayloadError);
   assert.throws(
+    () => validateCalendarPayload([]),
+    (error) => error.code === "incomplete_calendar",
+  );
+  assert.throws(
     () => validateCalendarPayload([{ weekday: { id: 8 }, items: [] }]),
     (error) => error.path === "$[0].weekday.id",
   );
