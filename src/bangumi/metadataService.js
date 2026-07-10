@@ -1,0 +1,49 @@
+import { normalizeSubject } from "./normalizer.js";
+import { validateAnimeSubject } from "./validation.js";
+
+const DETAIL_REFRESH_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function iso(value) {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+export function createBangumiMetadataService({ client, repository, clock = () => new Date() }) {
+  async function searchAndPersist(keyword, options = {}) {
+    const result = await client.search(keyword, options);
+    const items = Array.isArray(result?.data) ? result.data : [];
+    const valid = [];
+    let rejected = 0;
+
+    for (const item of items) {
+      try {
+        validateAnimeSubject(item);
+        valid.push(normalizeSubject(item));
+      } catch {
+        rejected += 1;
+      }
+    }
+
+    if (valid.length > 0) repository.mergeSearchResults(valid, { now: iso(clock()) });
+    return { received: items.length, persisted: valid.length, rejected };
+  }
+
+  async function fetchAndReplaceDetail(bangumiId) {
+    const response = await client.getSubject(bangumiId);
+    validateAnimeSubject(response, { expectedId: bangumiId });
+    const nowDate = clock();
+    const now = iso(nowDate);
+    const nextRefreshAt = new Date(new Date(now).getTime() + DETAIL_REFRESH_INTERVAL_MS).toISOString();
+    return repository.replaceDetail(normalizeSubject(response), { now, nextRefreshAt });
+  }
+
+  async function getDetail(bangumiId) {
+    if (repository.hasCompletedDetail(bangumiId)) return repository.findById(bangumiId);
+    return fetchAndReplaceDetail(bangumiId);
+  }
+
+  return {
+    searchAndPersist,
+    getDetail,
+    refreshDetail: fetchAndReplaceDetail,
+  };
+}
