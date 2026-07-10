@@ -1,7 +1,6 @@
 import { normalizeSubject } from "./normalizer.js";
 import { validateAnimeSubject, validateCalendarPayload } from "./validation.js";
-
-const CALENDAR_STALE_MS = 24 * 60 * 60 * 1000;
+import { BANGUMI_CALENDAR_STALE_MS } from "./config.js";
 
 function iso(value) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
@@ -68,7 +67,7 @@ export function createBangumiCalendarService({
   function isStale(now = clock()) {
     const state = repository.findCalendarSyncState();
     if (!state?.lastSucceededAt) return true;
-    return new Date(now).getTime() - new Date(state.lastSucceededAt).getTime() >= CALENDAR_STALE_MS;
+    return new Date(now).getTime() - new Date(state.lastSucceededAt).getTime() >= BANGUMI_CALENDAR_STALE_MS;
   }
 
   return { sync, isStale };

@@ -1,7 +1,6 @@
 import { normalizeSubject } from "./normalizer.js";
 import { validateAnimeSubject } from "./validation.js";
-
-const DETAIL_REFRESH_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+import { BANGUMI_DETAIL_REFRESH_INTERVAL_MS } from "./config.js";
 
 function iso(value) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
@@ -32,7 +31,7 @@ export function createBangumiMetadataService({ client, repository, clock = () =>
     validateAnimeSubject(response, { expectedId: bangumiId });
     const nowDate = clock();
     const now = iso(nowDate);
-    const nextRefreshAt = new Date(new Date(now).getTime() + DETAIL_REFRESH_INTERVAL_MS).toISOString();
+    const nextRefreshAt = new Date(new Date(now).getTime() + BANGUMI_DETAIL_REFRESH_INTERVAL_MS).toISOString();
     return repository.replaceDetail(normalizeSubject(response), { now, nextRefreshAt });
   }
 

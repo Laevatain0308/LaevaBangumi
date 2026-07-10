@@ -1,0 +1,11 @@
+export const HOUR_MS = 60 * 60 * 1000;
+export const DAY_MS = 24 * HOUR_MS;
+export const BANGUMI_DETAIL_REFRESH_CRON = "17 * * * *";
+export const BANGUMI_DETAIL_REFRESH_INTERVAL_MS = 7 * DAY_MS;
+export const BANGUMI_DETAIL_REFRESH_BATCH_SIZE = 100;
+export const BANGUMI_DETAIL_REFRESH_CONCURRENCY = 2;
+export const BANGUMI_REQUEST_START_INTERVAL_MS = 500;
+export const BANGUMI_DETAIL_RETRY_DELAYS_MS = [6 * HOUR_MS, 24 * HOUR_MS, 72 * HOUR_MS];
+export const BANGUMI_CALENDAR_SYNC_CRON = "15 4 * * *";
+export const BANGUMI_SCHEDULER_TIMEZONE = "Asia/Shanghai";
+export const BANGUMI_CALENDAR_STALE_MS = DAY_MS;
