@@ -21,10 +21,13 @@ function normalizeImages(images) {
 
 function normalizeRating(rating) {
   if (rating === undefined || rating === null) return rating;
-  const normalized = { counts: Array.from({ length: 10 }, (_, index) => rating.count?.[String(index + 1)] ?? 0) };
+  const normalized = {};
   assignPresent(normalized, "score", rating);
   assignPresent(normalized, "rank", rating);
   assignPresent(normalized, "total", rating);
+  if (Object.hasOwn(rating, "count")) {
+    normalized.counts = Array.from({ length: 10 }, (_, index) => rating.count?.[String(index + 1)] ?? 0);
+  }
   return normalized;
 }
 

@@ -125,3 +125,13 @@ test("preserves missing fields, explicit null, and calendar weekday fallback", (
   assert.equal(explicitNull.rating, null);
   assert.equal(explicitNull.tags, null);
 });
+
+test("does not invent a missing rating distribution", () => {
+  const normalized = normalizeSubject({
+    id: 1,
+    type: 2,
+    name: "Anime",
+    rating: { score: 8.5 },
+  });
+  assert.deepEqual(normalized.rating, { score: 8.5 });
+});
