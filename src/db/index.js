@@ -1,32 +1,38 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema.js";
+import { initBangumiMetadataSchema } from "./bangumiMetadataSchema.js";
 
-const DB_PATH = new URL("../../data/anime.db", import.meta.url).pathname;
+const DEFAULT_DB_PATH = new URL("../../data/anime.db", import.meta.url).pathname;
 
-export const sqlite = new Database(DB_PATH);
-sqlite.pragma("journal_mode = WAL");
-sqlite.pragma("foreign_keys = ON");
-sqlite.pragma("busy_timeout = 5000");
-
-export const db = drizzle(sqlite, { schema });
-
-function tableHasColumn(table, column) {
-  return sqlite.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+export function openDatabase(path = process.env.LAEVA_DB_PATH || DEFAULT_DB_PATH) {
+  const connection = new Database(path);
+  connection.pragma("journal_mode = WAL");
+  connection.pragma("foreign_keys = ON");
+  connection.pragma("busy_timeout = 5000");
+  return { sqlite: connection, db: drizzle(connection, { schema }) };
 }
 
-function ensureColumn(table, column, definition) {
-  if (tableHasColumn(table, column)) return;
-  sqlite.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+const production = openDatabase();
+export const sqlite = production.sqlite;
+export const db = production.db;
+
+function tableHasColumn(connection, table, column) {
+  return connection.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
 }
 
-function ensureSchemaMigrations() {
-  ensureColumn("subjects", "media_type", "TEXT NOT NULL DEFAULT 'anime'");
-  ensureColumn("resource_items", "media_type", "TEXT NOT NULL DEFAULT 'anime'");
+function ensureColumn(connection, table, column, definition) {
+  if (tableHasColumn(connection, table, column)) return;
+  connection.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
 }
 
-function ensureRecommendedIndexes() {
-  sqlite.exec(`
+function ensureSchemaMigrations(connection) {
+  ensureColumn(connection, "subjects", "media_type", "TEXT NOT NULL DEFAULT 'anime'");
+  ensureColumn(connection, "resource_items", "media_type", "TEXT NOT NULL DEFAULT 'anime'");
+}
+
+function ensureRecommendedIndexes(connection) {
+  connection.exec(`
     CREATE INDEX IF NOT EXISTS idx_subjects_calendar_weekday
       ON subjects(calendar_weekday);
 
@@ -71,8 +77,8 @@ function ensureRecommendedIndexes() {
   `);
 }
 
-export function initDb() {
-  sqlite.exec(`
+function initLegacySchema(connection) {
+  connection.exec(`
     CREATE TABLE IF NOT EXISTS anime_other (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -349,6 +355,15 @@ export function initDb() {
       VALUES ('ffzy', '非凡资源', 1, 100);
   `);
 
-  ensureSchemaMigrations();
-  ensureRecommendedIndexes();
+  ensureSchemaMigrations(connection);
+  ensureRecommendedIndexes(connection);
+}
+
+export function initLegacyDb(connection = sqlite) {
+  initLegacySchema(connection);
+}
+
+export function initDb(connection = sqlite, { legacy = true } = {}) {
+  if (legacy) initLegacySchema(connection);
+  initBangumiMetadataSchema(connection);
 }

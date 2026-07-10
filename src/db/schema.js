@@ -1,4 +1,4 @@
-import { sqliteTable, integer, real, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sqliteTable, integer, real, text, uniqueIndex, primaryKey, index, foreignKey } from "drizzle-orm/sqlite-core";
 
 export const episodes = sqliteTable("episodes", {
   episodeId: integer("episode_id").primaryKey({ autoIncrement: true }),
@@ -283,6 +283,119 @@ export const collectionDeletedItems = sqliteTable("collection_deleted_items", {
 export const collectionClearState = sqliteTable("collection_clear_state", {
   userId: integer("user_id").primaryKey().references(() => syncUsers.userId),
   clearVersion: text("clear_version"),
+});
+
+export const bangumiSubjects = sqliteTable("bangumi_subjects", {
+  bangumiId: integer("bangumi_id").primaryKey(),
+  name: text("name").notNull(),
+  nameCn: text("name_cn"),
+  summary: text("summary"),
+  airDate: text("air_date"),
+  airWeekday: integer("air_weekday"),
+  platform: text("platform"),
+  eps: integer("eps"),
+  totalEpisodes: integer("total_episodes"),
+  volumes: integer("volumes"),
+  series: integer("series", { mode: "boolean" }),
+  locked: integer("locked", { mode: "boolean" }),
+  nsfw: integer("nsfw", { mode: "boolean" }),
+  discoveredAt: text("discovered_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const bangumiSubjectImages = sqliteTable("bangumi_subject_images", {
+  bangumiId: integer("bangumi_id").primaryKey().references(() => bangumiSubjects.bangumiId),
+  largeUrl: text("large_url"),
+  commonUrl: text("common_url"),
+  mediumUrl: text("medium_url"),
+  smallUrl: text("small_url"),
+  gridUrl: text("grid_url"),
+});
+
+export const bangumiSubjectRating = sqliteTable("bangumi_subject_rating", {
+  bangumiId: integer("bangumi_id").primaryKey().references(() => bangumiSubjects.bangumiId),
+  score: real("score"),
+  rank: integer("rank"),
+  total: integer("total"),
+  count1: integer("count_1").notNull().default(0),
+  count2: integer("count_2").notNull().default(0),
+  count3: integer("count_3").notNull().default(0),
+  count4: integer("count_4").notNull().default(0),
+  count5: integer("count_5").notNull().default(0),
+  count6: integer("count_6").notNull().default(0),
+  count7: integer("count_7").notNull().default(0),
+  count8: integer("count_8").notNull().default(0),
+  count9: integer("count_9").notNull().default(0),
+  count10: integer("count_10").notNull().default(0),
+});
+
+export const bangumiSubjectCollection = sqliteTable("bangumi_subject_collection", {
+  bangumiId: integer("bangumi_id").primaryKey().references(() => bangumiSubjects.bangumiId),
+  wish: integer("wish").notNull().default(0),
+  collect: integer("collect").notNull().default(0),
+  doing: integer("doing").notNull().default(0),
+  onHold: integer("on_hold").notNull().default(0),
+  dropped: integer("dropped").notNull().default(0),
+});
+
+export const bangumiSubjectTags = sqliteTable("bangumi_subject_tags", {
+  bangumiId: integer("bangumi_id").notNull().references(() => bangumiSubjects.bangumiId),
+  position: integer("position").notNull(),
+  name: text("name").notNull(),
+  count: integer("count").notNull(),
+  totalCount: integer("total_count").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.bangumiId, table.position] }),
+  index("idx_bangumi_subject_tags_name").on(table.name),
+]);
+
+export const bangumiSubjectMetaTags = sqliteTable("bangumi_subject_meta_tags", {
+  bangumiId: integer("bangumi_id").notNull().references(() => bangumiSubjects.bangumiId),
+  position: integer("position").notNull(),
+  name: text("name").notNull(),
+}, (table) => [primaryKey({ columns: [table.bangumiId, table.position] })]);
+
+export const bangumiSubjectInfoboxEntries = sqliteTable("bangumi_subject_infobox_entries", {
+  bangumiId: integer("bangumi_id").notNull().references(() => bangumiSubjects.bangumiId),
+  entryPosition: integer("entry_position").notNull(),
+  key: text("key").notNull(),
+  valueKind: text("value_kind").notNull(),
+}, (table) => [primaryKey({ columns: [table.bangumiId, table.entryPosition] })]);
+
+export const bangumiSubjectInfoboxValues = sqliteTable("bangumi_subject_infobox_values", {
+  bangumiId: integer("bangumi_id").notNull(),
+  entryPosition: integer("entry_position").notNull(),
+  valuePosition: integer("value_position").notNull(),
+  label: text("label"),
+  value: text("value").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.bangumiId, table.entryPosition, table.valuePosition] }),
+  foreignKey({
+    columns: [table.bangumiId, table.entryPosition],
+    foreignColumns: [bangumiSubjectInfoboxEntries.bangumiId, bangumiSubjectInfoboxEntries.entryPosition],
+  }).onDelete("cascade"),
+]);
+
+export const bangumiSubjectRefreshState = sqliteTable("bangumi_subject_refresh_state", {
+  bangumiId: integer("bangumi_id").primaryKey().references(() => bangumiSubjects.bangumiId),
+  lastSucceededAt: text("last_succeeded_at").notNull(),
+  nextRefreshAt: text("next_refresh_at").notNull(),
+  lastAttemptedAt: text("last_attempted_at").notNull(),
+  consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+  lastError: text("last_error"),
+}, (table) => [index("idx_bangumi_subject_refresh_due").on(table.nextRefreshAt)]);
+
+export const bangumiCalendarSubjects = sqliteTable("bangumi_calendar_subjects", {
+  bangumiId: integer("bangumi_id").primaryKey().references(() => bangumiSubjects.bangumiId),
+  weekday: integer("weekday").notNull(),
+}, (table) => [index("idx_bangumi_calendar_subjects_weekday").on(table.weekday)]);
+
+export const bangumiCalendarSyncState = sqliteTable("bangumi_calendar_sync_state", {
+  singletonId: integer("singleton_id").primaryKey(),
+  lastSucceededAt: text("last_succeeded_at"),
+  lastAttemptedAt: text("last_attempted_at").notNull(),
+  consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+  lastError: text("last_error"),
 });
 
 /** 允许进入 subjects 表并参与番剧同步的 platform 值 */

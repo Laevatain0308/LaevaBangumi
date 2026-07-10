@@ -5,6 +5,7 @@
   "description": "搜索番剧并返回 m3u8 视频直链",
   "main": "src/index.js",
   "scripts": {
+    "test": "node --import ./test/setup.js --test",
     "start": "node src/index.js",
     "start:sync": "node src/index.js --sync",
     "prewarm:anime": "node src/scripts/prewarm-anime.js",
