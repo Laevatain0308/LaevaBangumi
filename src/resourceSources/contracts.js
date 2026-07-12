@@ -93,7 +93,11 @@ export function validateNonNegativeCount(value, label = "count") {
   return nonNegativeInteger(value, label);
 }
 
-export function validateResourceItem(value, { sourceKey, label = "resource item" } = {}) {
+export function validateResourceItem(value, {
+  sourceKey,
+  sourceItemId,
+  label = "resource item",
+} = {}) {
   const item = objectValue(value, label);
   exactKeys(item, RESOURCE_ITEM_KEYS, label);
   const actualSourceKey = requiredString(item.sourceKey, `${label}.sourceKey`);
@@ -101,12 +105,19 @@ export function validateResourceItem(value, { sourceKey, label = "resource item"
     fail(`${label}.sourceKey`, `must equal ${sourceKey}`);
   }
   if (!Array.isArray(item.aliases)) fail(`${label}.aliases`, "must be an array");
-  const aliases = [...new Set(item.aliases.map((alias, index) => (
-    requiredString(alias, `${label}.aliases[${index}]`).trim()
-  )))];
+  const aliases = [...new Set(item.aliases
+    .map((alias, index) => {
+      if (typeof alias !== "string") fail(`${label}.aliases[${index}]`, "must be a string");
+      return alias.trim();
+    })
+    .filter(Boolean))];
+  const actualSourceItemId = validateSourceItemId(item.sourceItemId);
+  if (sourceItemId != null && actualSourceItemId !== sourceItemId) {
+    fail(`${label}.sourceItemId`, `must equal ${sourceItemId}`);
+  }
   return {
     sourceKey: actualSourceKey,
-    sourceItemId: validateSourceItemId(item.sourceItemId),
+    sourceItemId: actualSourceItemId,
     title: requiredString(item.title, `${label}.title`),
     aliases,
     year: nullableString(item.year, `${label}.year`),
@@ -122,11 +133,18 @@ export function validateResourceItems(value, options = {}) {
   }));
 }
 
-export function validateResourceEpisode(value, { label = "resource episode" } = {}) {
+export function validateResourceEpisode(value, {
+  episodeIndex,
+  label = "resource episode",
+} = {}) {
   const episode = objectValue(value, label);
   exactKeys(episode, RESOURCE_EPISODE_KEYS, label);
+  const actualEpisodeIndex = validateEpisodeIndex(episode.episodeIndex);
+  if (episodeIndex != null && actualEpisodeIndex !== episodeIndex) {
+    fail(`${label}.episodeIndex`, `must equal ${episodeIndex}`);
+  }
   return {
-    episodeIndex: validateEpisodeIndex(episode.episodeIndex),
+    episodeIndex: actualEpisodeIndex,
     title: requiredString(episode.title, `${label}.title`),
     videoUrl: requiredString(episode.videoUrl, `${label}.videoUrl`),
   };
@@ -134,31 +152,40 @@ export function validateResourceEpisode(value, { label = "resource episode" } = 
 
 export function validateResourceEpisodes(value) {
   if (!Array.isArray(value)) fail("resource episodes", "must be an array");
-  return value.map((episode, index) => validateResourceEpisode(episode, {
+  const episodes = value.map((episode, index) => validateResourceEpisode(episode, {
     label: `resource episodes[${index}]`,
   }));
-}
-
-export function validateResourceDetail(value, { sourceKey, label = "resource detail" } = {}) {
-  const detail = objectValue(value, label);
-  exactKeys(detail, RESOURCE_DETAIL_KEYS, label);
-  const normalizedItem = validateResourceItem(itemInput(detail), { sourceKey, label });
-  const episodes = validateResourceEpisodes(detail.episodes);
   const indexes = new Set();
   for (const episode of episodes) {
     if (indexes.has(episode.episodeIndex)) {
-      fail(label, `contains duplicate episodeIndex ${episode.episodeIndex}`);
+      fail("resource episodes", `contains duplicate episodeIndex ${episode.episodeIndex}`);
     }
     indexes.add(episode.episodeIndex);
   }
+  return episodes;
+}
+
+export function validateResourceDetail(value, {
+  sourceKey,
+  sourceItemId,
+  label = "resource detail",
+} = {}) {
+  const detail = objectValue(value, label);
+  exactKeys(detail, RESOURCE_DETAIL_KEYS, label);
+  const normalizedItem = validateResourceItem(itemInput(detail), { sourceKey, sourceItemId, label });
+  const episodes = validateResourceEpisodes(detail.episodes);
   return { ...normalizedItem, episodes };
 }
 
-export function validateLocalResourceItem(value, { sourceKey, label = "local resource item" } = {}) {
+export function validateLocalResourceItem(value, {
+  sourceKey,
+  sourceItemId,
+  label = "local resource item",
+} = {}) {
   const item = objectValue(value, label);
   exactKeys(item, LOCAL_RESOURCE_ITEM_KEYS, label);
   return {
-    ...validateResourceItem(itemInput(item), { sourceKey, label }),
+    ...validateResourceItem(itemInput(item), { sourceKey, sourceItemId, label }),
     firstSeenAt: requiredString(item.firstSeenAt, `${label}.firstSeenAt`),
     lastFetchedAt: requiredString(item.lastFetchedAt, `${label}.lastFetchedAt`),
   };
@@ -178,6 +205,9 @@ export function validateExecutionSummary(value, { sourceKey, operation } = {}) {
   const actualSourceKey = requiredString(summary.sourceKey, "execution summary.sourceKey");
   if (actualSourceKey !== sourceKey) fail("execution summary.sourceKey", `must equal ${sourceKey}`);
   const actualOperation = requiredString(summary.operation, "execution summary.operation");
+  if (actualOperation !== "initialize" && actualOperation !== "update") {
+    fail("execution summary.operation", "must be initialize or update");
+  }
   if (actualOperation !== operation) fail("execution summary.operation", `must equal ${operation}`);
   return {
     sourceKey: actualSourceKey,

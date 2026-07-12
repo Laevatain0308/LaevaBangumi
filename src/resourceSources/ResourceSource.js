@@ -12,7 +12,19 @@ import {
   validateSourceItemId,
 } from "./contracts.js";
 
-export const RESOURCE_SOURCE_PUBLIC_METHODS = Object.freeze([
+// Capture contract-critical intrinsics before any configured plugin module is imported.
+const bindFunction = Function.prototype.call.bind(Function.prototype.bind);
+const defineProperties = Object.defineProperties;
+const defineProperty = Object.defineProperty;
+const freeze = Object.freeze;
+const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const getPrototypeOf = Object.getPrototypeOf;
+const isPrototypeOf = Function.prototype.call.bind(Object.prototype.isPrototypeOf);
+const initializedResourceSources = new WeakSet();
+const markResourceSourceInitialized = bindFunction(WeakSet.prototype.add, initializedResourceSources);
+const isResourceSourceInitialized = bindFunction(WeakSet.prototype.has, initializedResourceSources);
+
+export const RESOURCE_SOURCE_PUBLIC_METHODS = freeze([
   "initialize",
   "update",
   "fetchDetail",
@@ -24,7 +36,7 @@ export const RESOURCE_SOURCE_PUBLIC_METHODS = Object.freeze([
   "getEpisode",
 ]);
 
-export const RESOURCE_SOURCE_HOOKS = Object.freeze([
+export const RESOURCE_SOURCE_HOOKS = freeze([
   "_initialize",
   "_update",
   "_fetchDetail",
@@ -53,10 +65,26 @@ export class ResourceSource {
     }
     if (db == null) throw new TypeError("ResourceSource requires db");
     if (logger == null) throw new TypeError("ResourceSource requires logger");
-    Object.defineProperties(this, {
+    defineProperties(this, {
       _db: { value: db, writable: false, configurable: false, enumerable: false },
       _logger: { value: logger, writable: false, configurable: false, enumerable: false },
+      sourceKey: {
+        value: this.constructor.sourceKey,
+        writable: false,
+        configurable: false,
+        enumerable: true,
+      },
     });
+    for (let index = 0; index < RESOURCE_SOURCE_PUBLIC_METHODS.length; index += 1) {
+      const method = RESOURCE_SOURCE_PUBLIC_METHODS[index];
+      defineProperty(this, method, {
+        value: bindFunction(fixedResourceSourceMethods[method], this),
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      });
+    }
+    markResourceSourceInitialized(this);
   }
 
   static get sourceKey() {
@@ -99,7 +127,10 @@ export class ResourceSource {
   async fetchDetail(sourceItemId) {
     return this.#invoke("fetchDetail", async () => {
       const id = validateSourceItemId(sourceItemId);
-      return validateResourceDetail(await this._fetchDetail(id), { sourceKey: this.sourceKey });
+      return validateResourceDetail(await this._fetchDetail(id), {
+        sourceKey: this.sourceKey,
+        sourceItemId: id,
+      });
     });
   }
 
@@ -128,7 +159,10 @@ export class ResourceSource {
     return this.#invoke("getItem", async () => {
       const id = validateSourceItemId(sourceItemId);
       const item = await this._getItem(id);
-      return item === null ? null : validateLocalResourceItem(item, { sourceKey: this.sourceKey });
+      return item === null ? null : validateLocalResourceItem(item, {
+        sourceKey: this.sourceKey,
+        sourceItemId: id,
+      });
     });
   }
 
@@ -144,7 +178,7 @@ export class ResourceSource {
       const id = validateSourceItemId(sourceItemId);
       const index = validateEpisodeIndex(episodeIndex);
       const episode = await this._getEpisode(id, index);
-      return episode === null ? null : validateResourceEpisode(episode);
+      return episode === null ? null : validateResourceEpisode(episode, { episodeIndex: index });
     });
   }
 
@@ -159,16 +193,26 @@ export class ResourceSource {
   async _getEpisode() { throw new Error("_getEpisode() must be implemented"); }
 }
 
+const fixedResourceSourceMethods = Object.create(null);
+for (let index = 0; index < RESOURCE_SOURCE_PUBLIC_METHODS.length; index += 1) {
+  const method = RESOURCE_SOURCE_PUBLIC_METHODS[index];
+  fixedResourceSourceMethods[method] = freeze(ResourceSource.prototype[method]);
+}
+freeze(fixedResourceSourceMethods);
+freeze(ResourceSource.prototype);
+freeze(ResourceSource);
+
 export function assertResourceSourceClass(SourceClass) {
   if (
     typeof SourceClass !== "function"
     || SourceClass === ResourceSource
-    || !(SourceClass.prototype instanceof ResourceSource)
+    || !isPrototypeOf(ResourceSource, SourceClass)
+    || !isPrototypeOf(ResourceSource.prototype, SourceClass.prototype)
   ) {
     throw new TypeError("resource source plugin default export must extend ResourceSource");
   }
 
-  const keyDescriptor = Object.getOwnPropertyDescriptor(SourceClass, "sourceKey");
+  const keyDescriptor = getOwnPropertyDescriptor(SourceClass, "sourceKey");
   if (!keyDescriptor || typeof keyDescriptor.get !== "function" || keyDescriptor.set != null) {
     throw new TypeError("resource source subclass must declare its own read-only static sourceKey getter");
   }
@@ -177,12 +221,14 @@ export function assertResourceSourceClass(SourceClass) {
     throw new TypeError("resource source subclass sourceKey must be a trimmed non-empty string");
   }
 
-  for (const method of RESOURCE_SOURCE_PUBLIC_METHODS) {
-    if (SourceClass.prototype[method] !== ResourceSource.prototype[method]) {
+  for (let index = 0; index < RESOURCE_SOURCE_PUBLIC_METHODS.length; index += 1) {
+    const method = RESOURCE_SOURCE_PUBLIC_METHODS[index];
+    if (SourceClass.prototype[method] !== fixedResourceSourceMethods[method]) {
       throw new TypeError(`resource source subclass cannot override public method ${method}()`);
     }
   }
-  for (const hook of RESOURCE_SOURCE_HOOKS) {
+  for (let index = 0; index < RESOURCE_SOURCE_HOOKS.length; index += 1) {
+    const hook = RESOURCE_SOURCE_HOOKS[index];
     if (
       typeof SourceClass.prototype[hook] !== "function"
       || SourceClass.prototype[hook] === ResourceSource.prototype[hook]
@@ -191,4 +237,32 @@ export function assertResourceSourceClass(SourceClass) {
     }
   }
   return sourceKey;
+}
+
+export function assertResourceSourceInstance(instance, SourceClass, { db, logger } = {}) {
+  if (!isResourceSourceInitialized(instance)) {
+    throw new TypeError("resource source instance was not initialized by ResourceSource");
+  }
+  if (getPrototypeOf(instance) !== SourceClass.prototype) {
+    throw new TypeError("resource source instance must use its declared subclass prototype");
+  }
+  if (instance.sourceKey !== SourceClass.sourceKey) {
+    throw new TypeError("resource source instance sourceKey must match its subclass sourceKey");
+  }
+  if (instance._db !== db || instance._logger !== logger) {
+    throw new TypeError("resource source instance must retain injected infrastructure");
+  }
+  for (let index = 0; index < RESOURCE_SOURCE_PUBLIC_METHODS.length; index += 1) {
+    const method = RESOURCE_SOURCE_PUBLIC_METHODS[index];
+    const descriptor = getOwnPropertyDescriptor(instance, method);
+    if (
+      !descriptor
+      || typeof descriptor.value !== "function"
+      || descriptor.writable
+      || descriptor.configurable
+    ) {
+      throw new TypeError(`resource source instance must retain fixed public method ${method}()`);
+    }
+  }
+  return instance;
 }

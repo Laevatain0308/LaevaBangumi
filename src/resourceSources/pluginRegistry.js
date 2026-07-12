@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import {
   ResourceSource,
   assertResourceSourceClass,
+  assertResourceSourceInstance,
 } from "./ResourceSource.js";
 
 function manifestUrlFor(manifestPath) {
@@ -33,6 +34,12 @@ function parseManifest(raw, manifestUrl) {
   return manifest.sources.map((modulePath, index) => {
     if (typeof modulePath !== "string" || modulePath.trim() === "") {
       throw new TypeError(`resource source manifest sources[${index}] must be a non-empty module path`);
+    }
+    if (
+      modulePath !== modulePath.trim()
+      || (!modulePath.startsWith("./") && !modulePath.startsWith("../"))
+    ) {
+      throw new TypeError(`resource source manifest sources[${index}] must be a relative module path`);
     }
     return modulePath;
   });
@@ -77,7 +84,9 @@ export async function loadResourceSourceRegistry({ manifestPath, db, logger } = 
     const loaded = await import(moduleUrl.href);
     const SourceClass = loaded.default;
     assertResourceSourceClass(SourceClass);
-    instances.push(new SourceClass({ db, logger }));
+    const instance = new SourceClass({ db, logger });
+    assertResourceSourceInstance(instance, SourceClass, { db, logger });
+    instances.push(instance);
   }
 
   return new ResourceSourceRegistry(instances);

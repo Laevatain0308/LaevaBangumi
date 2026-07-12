@@ -1,4 +1,4 @@
-import { ResourceSource } from "../../../src/resourceSources/ResourceSource.js";
+import { ResourceSource } from "../../src/resourceSources/ResourceSource.js";
 
 export default class FixtureSource extends ResourceSource {
   static get sourceKey() {

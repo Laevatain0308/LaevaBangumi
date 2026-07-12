@@ -32,6 +32,13 @@ test("resource item keeps only shared fields and normalizes aliases", () => {
   );
 });
 
+test("resource item drops blank aliases before deduplication", () => {
+  assert.deepEqual(validateResourceItem({
+    ...item,
+    aliases: ["", "   ", "Alias A", " Alias A "],
+  }, { sourceKey: "fixture" }).aliases, ["Alias A"]);
+});
+
 test("resource episode separates its positive logical index from its display title", () => {
   assert.deepEqual(validateResourceEpisode({
     episodeIndex: 1,
@@ -58,6 +65,14 @@ test("resource detail rejects duplicate logical episode indexes", () => {
       { episodeIndex: 1, title: "正片", videoUrl: "https://example.invalid/1-b.m3u8" },
     ],
   }, { sourceKey: "fixture" }), /duplicate episodeIndex 1/i);
+});
+
+test("resource episode collections reject duplicate logical indexes", async () => {
+  const { validateResourceEpisodes } = await import("../src/resourceSources/contracts.js");
+  assert.throws(() => validateResourceEpisodes([
+    { episodeIndex: 1, title: "第01集", videoUrl: "https://example.invalid/1-a.m3u8" },
+    { episodeIndex: 1, title: "正片", videoUrl: "https://example.invalid/1-b.m3u8" },
+  ]), /duplicate episodeIndex 1/i);
 });
 
 test("local resource item adds only local observation timestamps", () => {
@@ -98,4 +113,8 @@ test("execution summary matches the source and lifecycle operation", () => {
     sourceKey: "fixture",
     operation: "update",
   }), /failedItems.*non-negative integer/i);
+  assert.throws(() => validateExecutionSummary({ ...summary, operation: "bogus" }, {
+    sourceKey: "fixture",
+    operation: "bogus",
+  }), /operation.*initialize.*update/i);
 });

@@ -93,6 +93,22 @@ class FakeSource extends ResourceSource {
   }
 }
 
+class FieldOverridingSource extends FakeSource {
+  static get sourceKey() {
+    return "field-override";
+  }
+
+  update = async () => ({ bypassed: true });
+}
+
+class KeyOverridingSource extends FakeSource {
+  static get sourceKey() {
+    return "declared-key";
+  }
+
+  sourceKey = "runtime-key";
+}
+
 test("ResourceSource cannot be instantiated and keeps injected infrastructure immutable", () => {
   assert.throws(() => new ResourceSource({ db: {}, logger: {} }), /abstract/i);
   const db = { name: "test-db" };
@@ -102,6 +118,20 @@ test("ResourceSource cannot be instantiated and keeps injected infrastructure im
   assert.equal(source._db, db);
   assert.equal(source._logger, logger);
   assert.throws(() => { source._db = {}; }, TypeError);
+});
+
+test("instance fields cannot override fixed public entry points", () => {
+  assert.throws(
+    () => new FieldOverridingSource({ db: {}, logger: {} }),
+    /update/i,
+  );
+});
+
+test("instance fields cannot override the hard-coded source key", () => {
+  assert.throws(
+    () => new KeyOverridingSource({ db: {}, logger: {} }),
+    /sourceKey/i,
+  );
 });
 
 test("fixed public methods validate and delegate standard values to hooks", async () => {
@@ -146,4 +176,25 @@ test("database reads never fall back to the remote detail hook", async () => {
   const source = new FakeSource({ db: {}, logger: {} });
   assert.equal(await source.getItem("missing"), null);
   assert.deepEqual(source.calls, [["getItem", "missing"]]);
+});
+
+test("single-item results must match the requested resource and episode", async () => {
+  class MismatchedSource extends FakeSource {
+    async _fetchDetail() {
+      return { ...baseItem, sourceItemId: "other", episodes: [episode] };
+    }
+
+    async _getItem() {
+      return { ...localItem, sourceItemId: "other" };
+    }
+
+    async _getEpisode() {
+      return { ...episode, episodeIndex: 2 };
+    }
+  }
+
+  const source = new MismatchedSource({ db: {}, logger: {} });
+  await assert.rejects(() => source.fetchDetail("item-1"), /sourceItemId.*item-1/i);
+  await assert.rejects(() => source.getItem("item-1"), /sourceItemId.*item-1/i);
+  await assert.rejects(() => source.getEpisode("item-1", 1), /episodeIndex.*1/i);
 });
