@@ -1,0 +1,3 @@
+{
+  "sources": ["./validSource.js", "./duplicateSource.js"]
+}
