@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema.js";
 import { initBangumiMetadataSchema } from "./bangumiMetadataSchema.js";
+import { initResourceSourceSchema } from "./resourceSourceSchema.js";
 
 const DEFAULT_DB_PATH = new URL("../../data/anime.db", import.meta.url).pathname;
 
@@ -365,5 +366,6 @@ export function initLegacyDb(connection = sqlite) {
 
 export function initDb(connection = sqlite, { legacy = true } = {}) {
   if (legacy) initLegacySchema(connection);
+  initResourceSourceSchema(connection);
   initBangumiMetadataSchema(connection);
 }
