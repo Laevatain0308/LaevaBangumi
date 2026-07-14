@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="5.1">
+  <list page="1" pagecount="1" pagesize="20" recordcount="1">
+    <video>
+      <last>2026-07-12 01:16:35</last>
+      <id>98509</id>
+      <tid>30</tid>
+      <name><![CDATA[魔法少女奈叶EXCEEDS]]></name>
+      <subname><![CDATA[魔法少女奈叶EXCEEDS, Nanoha，奈叶 / Nanoha]]></subname>
+      <year>2026</year>
+      <dl>
+        <dd flag="other"><![CDATA[错误源$https://example.invalid/other.m3u8]]></dd>
+        <dd flag="ffm3u8"><![CDATA[第09集$https://example.invalid/first.m3u8#Special$Part$https://example.invalid/second.m3u8#无地址$]]></dd>
+      </dl>
+    </video>
+  </list>
+</rss>

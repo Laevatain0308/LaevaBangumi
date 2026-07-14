@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="5.1">
+  <list page="2" pagecount="3" pagesize="20" recordcount="42">
+    <video>
+      <last>2026-07-12 01:16:35</last>
+      <id>98509</id>
+      <tid>30</tid>
+      <name><![CDATA[ 魔法少女奈叶EXCEEDS ]]></name>
+      <type>日韩动漫</type>
+    </video>
+    <video>
+      <last>2026-07-11 20:00:00</last>
+      <id>70001</id>
+      <tid>13</tid>
+      <name><![CDATA[不应进入动画目录]]></name>
+      <type>国产剧</type>
+    </video>
+  </list>
+</rss>
