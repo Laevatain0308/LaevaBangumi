@@ -9,6 +9,7 @@ const DETAIL_CONCURRENCY = 2;
 const BATCH_START_INTERVAL_MS = 500;
 const MISSING_ITEM_RETRY_MS = 5_000;
 const REQUEST_RETRY_DELAYS_MS = Object.freeze([5_000, 30_000]);
+const INCREMENTAL_OVERLAP_MS = 5 * 60 * 1000;
 
 function maxTimestamp(current, candidate) {
   if (candidate == null) return current;
@@ -102,6 +103,45 @@ export default class FFZYSource extends ResourceSource {
       } while (page <= pageCount);
     }
     return { items: [...byId.values()], watermarkAt };
+  }
+
+  async #fetchIncrementalCatalog(watermarkAt) {
+    const cutoffMs = Date.parse(watermarkAt) - INCREMENTAL_OVERLAP_MS;
+    const byId = new Map();
+    let nextWatermarkAt = watermarkAt;
+    for (const categoryId of CATEGORY_IDS) {
+      let page = 1;
+      let pageCount = 1;
+      let crossedCutoff = false;
+      do {
+        const xml = await this.client.fetchCatalogXml({ categoryId, page });
+        const parsed = parseCatalogXml(xml, {
+          sourceKey: this.sourceKey,
+          allowedCategoryIds: CATEGORY_IDS,
+        });
+        if (parsed.page !== page) {
+          throw new TypeError(`FFZY catalog returned page ${parsed.page} while page ${page} was requested`);
+        }
+        pageCount = parsed.pageCount;
+        for (const item of parsed.items) {
+          const updatedMs = Date.parse(item.sourceUpdatedAt);
+          if (Number.isFinite(updatedMs) && updatedMs < cutoffMs) {
+            crossedCutoff = true;
+            break;
+          }
+          const existing = byId.get(item.sourceItemId);
+          if (
+            !existing
+            || Date.parse(item.sourceUpdatedAt ?? 0) > Date.parse(existing.sourceUpdatedAt ?? 0)
+          ) {
+            byId.set(item.sourceItemId, item);
+          }
+          nextWatermarkAt = maxTimestamp(nextWatermarkAt, item.sourceUpdatedAt);
+        }
+        page += 1;
+      } while (!crossedCutoff && page <= pageCount);
+    }
+    return { items: [...byId.values()], watermarkAt: nextWatermarkAt };
   }
 
   #stopForDatabaseFailure(run, error) {
@@ -246,7 +286,47 @@ export default class FFZYSource extends ResourceSource {
   }
 
   async _update() {
-    throw new Error("FFZY incremental update is not implemented");
+    const operation = "update";
+    const startedAt = this.#now();
+    const state = this.repository.getSyncState();
+    if (!state.initialized) {
+      this.repository.markSkipped(operation, "full initialization required");
+      return summary(this.sourceKey, operation, startedAt, this.#now());
+    }
+
+    try {
+      this.repository.markRunning(operation);
+      const dueIds = this.repository.listDueDetailFailures()
+        .map((failure) => failure.sourceItemId);
+      const dueHydration = await this.#hydrateDetails(dueIds);
+
+      const catalog = await this.#fetchIncrementalCatalog(state.watermarkAt);
+      const changedIds = this.repository.listChangedItemIds(catalog.items);
+      const failureIds = new Set(this.repository.listDetailFailureIds());
+      const catalogIds = new Set(catalog.items.map((item) => item.sourceItemId));
+      const hydrationIds = [...new Set([
+        ...changedIds,
+        ...[...failureIds].filter((sourceItemId) => catalogIds.has(sourceItemId)),
+      ])];
+      const savedItems = this.repository.saveCatalogItems(catalog.items);
+      const catalogHydration = await this.#hydrateDetails(hydrationIds);
+
+      this.repository.markSuccess(operation, { watermarkAt: catalog.watermarkAt });
+      return summary(this.sourceKey, operation, startedAt, this.#now(), {
+        fetchedItems: catalog.items.length,
+        savedItems,
+        fetchedEpisodes: dueHydration.fetchedEpisodes + catalogHydration.fetchedEpisodes,
+        savedEpisodes: dueHydration.savedEpisodes + catalogHydration.savedEpisodes,
+        failedItems: dueHydration.failedItems + catalogHydration.failedItems,
+      });
+    } catch (error) {
+      try {
+        this.repository.markFailed(operation, error);
+      } catch (markError) {
+        throw new AggregateError([error, markError], "FFZY update and failure state write failed");
+      }
+      throw error;
+    }
   }
 
   async _fetchDetail(sourceItemId) {
