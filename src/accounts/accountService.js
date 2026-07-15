@@ -105,11 +105,10 @@ export function createAccountService({
     platform,
     appVersion,
   }) {
-    const username = normalizeUsername(usernameValue);
-    const device = validateDevice({ deviceId, deviceName, platform, appVersion });
-
     try {
       return repository.transaction(() => {
+        const username = normalizeUsername(usernameValue);
+        const device = validateDevice({ deviceId, deviceName, platform, appVersion });
         const account = repository.findAccountByUsername(username);
         if (!account || !verifyPassword(password, account.passwordHash)) {
           throw INVALID_CREDENTIALS;

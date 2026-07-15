@@ -153,6 +153,44 @@ test("login accepts the correct password and hides missing or wrong account deta
   }), null);
 });
 
+test("login enters its transaction before normalizing or validating input", () => {
+  let inTransaction = false;
+  let transactionCount = 0;
+  const repository = {
+    transaction(callback) {
+      transactionCount += 1;
+      inTransaction = true;
+      try {
+        return callback();
+      } finally {
+        inTransaction = false;
+      }
+    },
+    findAccountByUsername() {
+      return null;
+    },
+  };
+  const service = createAccountService({ repository });
+  const observedUsername = {
+    [Symbol.toPrimitive]() {
+      assert.equal(inTransaction, true, "username normalization must run inside the transaction");
+      return "alice";
+    },
+  };
+
+  assert.equal(service.login({
+    username: observedUsername,
+    password: "password-password",
+    deviceId: "phone",
+  }), null);
+  assert.throws(() => service.login({
+    username: "alice",
+    password: "password-password",
+    deviceId: "",
+  }), /deviceId/);
+  assert.equal(transactionCount, 2, "invalid device input must be validated after transaction entry");
+});
+
 test("login propagates unexpected repository failures", () => {
   const databaseError = Object.assign(new Error("database is unavailable"), { code: "SQLITE_IOERR" });
   const service = createAccountService({
