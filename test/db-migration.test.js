@@ -213,8 +213,35 @@ test("initDb creates the normalized schema tables", () => {
     "bangumi_subject_refresh_state",
     "bangumi_calendar_subjects",
     "bangumi_calendar_sync_state",
+    "accounts",
+    "account_devices",
+    "account_tokens",
+    "sync_events",
+    "watch_records",
+    "watch_progress",
+    "watch_tombstones",
+    "watch_state",
+    "collection_records",
+    "collection_tombstones",
+    "collection_state",
   ]) {
     assert.equal(tableNames.has(table), true, `${table} table should exist`);
+  }
+
+  for (const table of [
+    "sync_users",
+    "sync_credentials",
+    "sync_invites",
+    "sync_tokens",
+    "sync_devices",
+    "watch_history_items",
+    "watch_deleted_items",
+    "watch_clear_state",
+    "collection_items",
+    "collection_deleted_items",
+    "collection_clear_state",
+  ]) {
+    assert.equal(tableNames.has(table), false, `${table} table should not exist`);
   }
 
   const sourceColumns = new Set(sqlite.prepare("PRAGMA table_info(resource_sources)").all().map((row) => row.name));

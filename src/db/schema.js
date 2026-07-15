@@ -1,4 +1,5 @@
-import { sqliteTable, integer, real, text, uniqueIndex, primaryKey, index, foreignKey } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+import { sqliteTable, integer, real, text, uniqueIndex, primaryKey, index, foreignKey, check } from "drizzle-orm/sqlite-core";
 
 export const episodes = sqliteTable("episodes", {
   episodeId: integer("episode_id").primaryKey({ autoIncrement: true }),
@@ -156,132 +157,132 @@ export const manualResourceState = sqliteTable("manual_resource_state", {
   pk: uniqueIndex("idx_manual_resource_state_unique").on(table.bangumiId, table.source),
 }));
 
-export const syncUsers = sqliteTable("sync_users", {
-  userId: integer("user_id").primaryKey({ autoIncrement: true }),
-  displayName: text("display_name").notNull(),
-  createdAt: text("created_at").default("(datetime('now'))").notNull(),
-  disabledAt: text("disabled_at"),
-});
-
-export const syncCredentials = sqliteTable("sync_credentials", {
-  userId: integer("user_id").primaryKey().references(() => syncUsers.userId),
-  loginName: text("login_name").notNull().unique(),
+export const accounts = sqliteTable("accounts", {
+  accountId: integer("account_id").primaryKey({ autoIncrement: true }),
+  username: text("username").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
-  createdAt: text("created_at").default("(datetime('now'))").notNull(),
-  passwordChangedAt: text("password_changed_at"),
+  createdAt: text("created_at").notNull(),
+  passwordChangedAt: text("password_changed_at").notNull(),
 });
 
-export const syncInvites = sqliteTable("sync_invites", {
-  inviteId: integer("invite_id").primaryKey({ autoIncrement: true }),
-  inviteHash: text("invite_hash").notNull().unique(),
-  label: text("label"),
-  maxUses: integer("max_uses").notNull().default(1),
-  usedCount: integer("used_count").notNull().default(0),
-  expiresAt: text("expires_at"),
-  createdAt: text("created_at").default("(datetime('now'))").notNull(),
-  disabledAt: text("disabled_at"),
-});
-
-export const syncTokens = sqliteTable("sync_tokens", {
-  tokenId: integer("token_id").primaryKey({ autoIncrement: true }),
-  userId: integer("user_id").notNull().references(() => syncUsers.userId),
-  tokenHash: text("token_hash").notNull().unique(),
-  label: text("label"),
-  createdAt: text("created_at").default("(datetime('now'))").notNull(),
-  lastUsedAt: text("last_used_at"),
-  revokedAt: text("revoked_at"),
-});
-
-export const syncDevices = sqliteTable("sync_devices", {
-  userId: integer("user_id").notNull().references(() => syncUsers.userId),
+export const accountDevices = sqliteTable("account_devices", {
+  accountId: integer("account_id").notNull().references(() => accounts.accountId, { onDelete: "cascade" }),
   deviceId: text("device_id").notNull(),
   deviceName: text("device_name"),
   platform: text("platform"),
   appVersion: text("app_version"),
-  firstSeenAt: text("first_seen_at").default("(datetime('now'))").notNull(),
-  lastSeenAt: text("last_seen_at").default("(datetime('now'))").notNull(),
-}, (table) => ({
-  pk: uniqueIndex("idx_sync_devices_unique").on(table.userId, table.deviceId),
-}));
+  firstSeenAt: text("first_seen_at").notNull(),
+  lastSeenAt: text("last_seen_at").notNull(),
+}, (table) => [primaryKey({ columns: [table.accountId, table.deviceId] })]);
+
+export const accountTokens = sqliteTable("account_tokens", {
+  tokenId: integer("token_id").primaryKey({ autoIncrement: true }),
+  accountId: integer("account_id").notNull(),
+  deviceId: text("device_id").notNull(),
+  tokenHash: text("token_hash").notNull().unique(),
+  createdAt: text("created_at").notNull(),
+  lastUsedAt: text("last_used_at"),
+  revokedAt: text("revoked_at"),
+}, (table) => [
+  foreignKey({
+    columns: [table.accountId, table.deviceId],
+    foreignColumns: [accountDevices.accountId, accountDevices.deviceId],
+  }).onDelete("cascade"),
+  uniqueIndex("idx_account_tokens_active_device")
+    .on(table.accountId, table.deviceId)
+    .where(sql`${table.revokedAt} IS NULL`),
+]);
 
 export const syncEvents = sqliteTable("sync_events", {
-  userId: integer("user_id").notNull().references(() => syncUsers.userId),
+  accountId: integer("account_id").notNull().references(() => accounts.accountId, { onDelete: "cascade" }),
   eventId: text("event_id").notNull(),
   deviceId: text("device_id").notNull(),
   seq: integer("seq").notNull(),
   domain: text("domain").notNull(),
-  op: text("op").notNull(),
-  entityKey: text("entity_key"),
+  operation: text("operation").notNull(),
   bangumiId: integer("bangumi_id"),
   updatedAtMs: integer("updated_at_ms").notNull(),
   version: text("version").notNull(),
   payloadJson: text("payload_json").notNull(),
-  receivedAt: text("received_at").default("(datetime('now'))").notNull(),
-}, (table) => ({
-  pk: uniqueIndex("idx_sync_events_unique").on(table.userId, table.eventId),
-}));
+  receivedAt: text("received_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.accountId, table.eventId] }),
+  check("sync_events_seq_check", sql`${table.seq} >= 0`),
+  check("sync_events_domain_check", sql`${table.domain} IN ('watch', 'collection')`),
+  check("sync_events_updated_at_ms_check", sql`${table.updatedAtMs} >= 0`),
+  index("idx_sync_events_account_domain_version").on(table.accountId, table.domain, table.version),
+  index("idx_sync_events_account_device_seq").on(table.accountId, table.deviceId, table.seq),
+]);
 
-export const watchHistoryItems = sqliteTable("watch_history_items", {
-  userId: integer("user_id").notNull().references(() => syncUsers.userId),
-  entityKey: text("entity_key").notNull(),
+export const watchRecords = sqliteTable("watch_records", {
+  accountId: integer("account_id").notNull().references(() => accounts.accountId, { onDelete: "cascade" }),
   bangumiId: integer("bangumi_id").notNull(),
-  adapterName: text("adapter_name").notNull(),
   lastWatchEpisode: integer("last_watch_episode").notNull(),
   lastWatchTimeMs: integer("last_watch_time_ms").notNull(),
-  lastSrc: text("last_src"),
-  lastWatchEpisodeName: text("last_watch_episode_name"),
-  bangumiItemJson: text("bangumi_item_json").notNull(),
-  itemVersion: text("item_version").notNull(),
-}, (table) => ({
-  pk: uniqueIndex("idx_watch_history_items_unique").on(table.userId, table.entityKey),
-}));
+  lastWatchEpisodeName: text("last_watch_episode_name").notNull(),
+  recordVersion: text("record_version").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.accountId, table.bangumiId] }),
+  check("watch_records_bangumi_id_check", sql`${table.bangumiId} > 0`),
+  check("watch_records_last_watch_episode_check", sql`${table.lastWatchEpisode} >= 1`),
+  check("watch_records_last_watch_time_ms_check", sql`${table.lastWatchTimeMs} >= 0`),
+]);
 
 export const watchProgress = sqliteTable("watch_progress", {
-  userId: integer("user_id").notNull().references(() => syncUsers.userId),
-  entityKey: text("entity_key").notNull(),
+  accountId: integer("account_id").notNull().references(() => accounts.accountId, { onDelete: "cascade" }),
+  bangumiId: integer("bangumi_id").notNull(),
   episode: integer("episode").notNull(),
   road: integer("road").notNull(),
   progressMs: integer("progress_ms").notNull(),
   progressVersion: text("progress_version").notNull(),
-}, (table) => ({
-  pk: uniqueIndex("idx_watch_progress_unique").on(table.userId, table.entityKey, table.episode),
-}));
+}, (table) => [
+  primaryKey({ columns: [table.accountId, table.bangumiId, table.episode] }),
+  check("watch_progress_bangumi_id_check", sql`${table.bangumiId} > 0`),
+  check("watch_progress_episode_check", sql`${table.episode} >= 1`),
+  check("watch_progress_road_check", sql`${table.road} >= 0`),
+  check("watch_progress_progress_ms_check", sql`${table.progressMs} >= 0`),
+]);
 
-export const watchDeletedItems = sqliteTable("watch_deleted_items", {
-  userId: integer("user_id").notNull().references(() => syncUsers.userId),
-  entityKey: text("entity_key").notNull(),
+export const watchTombstones = sqliteTable("watch_tombstones", {
+  accountId: integer("account_id").notNull().references(() => accounts.accountId, { onDelete: "cascade" }),
+  bangumiId: integer("bangumi_id").notNull(),
   deletedVersion: text("deleted_version").notNull(),
-}, (table) => ({
-  pk: uniqueIndex("idx_watch_deleted_items_unique").on(table.userId, table.entityKey),
-}));
+}, (table) => [
+  primaryKey({ columns: [table.accountId, table.bangumiId] }),
+  check("watch_tombstones_bangumi_id_check", sql`${table.bangumiId} > 0`),
+]);
 
-export const watchClearState = sqliteTable("watch_clear_state", {
-  userId: integer("user_id").primaryKey().references(() => syncUsers.userId),
+export const watchState = sqliteTable("watch_state", {
+  accountId: integer("account_id").primaryKey().references(() => accounts.accountId, { onDelete: "cascade" }),
   clearVersion: text("clear_version"),
 });
 
-export const collectionItems = sqliteTable("collection_items", {
-  userId: integer("user_id").notNull().references(() => syncUsers.userId),
+export const collectionRecords = sqliteTable("collection_records", {
+  accountId: integer("account_id").notNull().references(() => accounts.accountId, { onDelete: "cascade" }),
   bangumiId: integer("bangumi_id").notNull(),
   type: integer("type").notNull(),
-  collectedAtMs: integer("collected_at_ms"),
+  collectedAtMs: integer("collected_at_ms").notNull(),
   updatedAtMs: integer("updated_at_ms").notNull(),
-  bangumiItemJson: text("bangumi_item_json").notNull(),
-  itemVersion: text("item_version").notNull(),
-}, (table) => ({
-  pk: uniqueIndex("idx_collection_items_unique").on(table.userId, table.bangumiId),
-}));
+  recordVersion: text("record_version").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.accountId, table.bangumiId] }),
+  check("collection_records_bangumi_id_check", sql`${table.bangumiId} > 0`),
+  check("collection_records_type_check", sql`${table.type} BETWEEN 1 AND 5`),
+  check("collection_records_collected_at_ms_check", sql`${table.collectedAtMs} >= 0`),
+  check("collection_records_updated_at_ms_check", sql`${table.updatedAtMs} >= 0`),
+]);
 
-export const collectionDeletedItems = sqliteTable("collection_deleted_items", {
-  userId: integer("user_id").notNull().references(() => syncUsers.userId),
+export const collectionTombstones = sqliteTable("collection_tombstones", {
+  accountId: integer("account_id").notNull().references(() => accounts.accountId, { onDelete: "cascade" }),
   bangumiId: integer("bangumi_id").notNull(),
   deletedVersion: text("deleted_version").notNull(),
-}, (table) => ({
-  pk: uniqueIndex("idx_collection_deleted_items_unique").on(table.userId, table.bangumiId),
-}));
+}, (table) => [
+  primaryKey({ columns: [table.accountId, table.bangumiId] }),
+  check("collection_tombstones_bangumi_id_check", sql`${table.bangumiId} > 0`),
+]);
 
-export const collectionClearState = sqliteTable("collection_clear_state", {
-  userId: integer("user_id").primaryKey().references(() => syncUsers.userId),
+export const collectionState = sqliteTable("collection_state", {
+  accountId: integer("account_id").primaryKey().references(() => accounts.accountId, { onDelete: "cascade" }),
   clearVersion: text("clear_version"),
 });
 
