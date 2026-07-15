@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { initDb, sqlite } from "./db/index.js";
 import { createServer } from "./server.js";
-import { enrichFromBangumiSearch, registerAnimeJobs, registerMetadataRefreshJob } from "./services/anime.js";
+import { enrichFromBangumiSearch, registerMetadataRefreshJob } from "./services/anime.js";
 import { onSearchFlush } from "./services/queue.js";
 import { getProxyStatus } from "./lib/proxy.js";
 import { log, warn, error } from "./lib/logger.js";
@@ -32,7 +32,6 @@ bangumiScheduler.start();
 bangumiScheduler.startup().catch((err) => error("bangumi", "startup sync failed", err));
 
 // 队列回调：异步搜索由队列驱动
-registerAnimeJobs();
 registerMetadataRefreshJob();
 onSearchFlush(enrichFromBangumiSearch);
 

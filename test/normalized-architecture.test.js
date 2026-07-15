@@ -40,10 +40,13 @@ test("initDb creates only terminal normalized runtime tables", () => {
     "match_retry_state",
     "episode_fetch_retry_state",
     "manual_match_state",
-    "source_sync_state",
   ]) {
     assert.equal(tableNames.has(legacyTable), false, `${legacyTable} should not be a runtime table`);
   }
+  assert.equal(tableNames.has("source_sync_state"), true);
+  const sourceSyncColumns = sqlite.prepare("PRAGMA table_info(source_sync_state)").all();
+  assert.equal(sourceSyncColumns.some((row) => row.name === "source_key"), true);
+  assert.equal(sourceSyncColumns.some((row) => row.name === "category"), false);
 
   const episodeColumns = new Set(sqlite.prepare("PRAGMA table_info(episodes)").all().map((row) => row.name));
   assert.equal(episodeColumns.has("episode_id"), true);

@@ -201,6 +201,38 @@ test("catalog failure and database failure both preserve the old watermark", asy
   assert.equal(databaseRepository.calls.failed.length, 1);
 });
 
+test("incremental pagination drift fails without advancing the watermark", async () => {
+  const repository = createRepository();
+  const client = {
+    async fetchCatalogXml({ categoryId, page }) {
+      if (categoryId === "29" && page === 1) {
+        return catalogXml({
+          categoryId,
+          page,
+          pageCount: 3,
+          items: [{ id: "1", last: "2026-07-15 08:30:00" }],
+        });
+      }
+      if (categoryId === "29" && page === 2) {
+        return catalogXml({
+          categoryId,
+          page,
+          pageCount: 1,
+          items: [{ id: "2", last: "2026-07-15 08:20:00" }],
+        });
+      }
+      return catalogXml({ categoryId, page, items: [] });
+    },
+    async fetchDetailXml(ids) { return detailXml(ids); },
+  };
+
+  await assert.rejects(
+    () => createSource({ client, repository }).update(),
+    /pagecount.*changed|pagination/i,
+  );
+  assert.equal(repository.calls.success.length, 0);
+});
+
 test("local hooks and explicit fetch delegate without implicit persistence", async () => {
   const client = {
     async fetchCatalogXml() { return catalogXml({ categoryId: "29", items: [] }); },

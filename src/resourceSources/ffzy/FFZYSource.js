@@ -78,7 +78,7 @@ export default class FFZYSource extends ResourceSource {
     let watermarkAt = null;
     for (const categoryId of CATEGORY_IDS) {
       let page = 1;
-      let pageCount = 1;
+      let expectedPageCount = null;
       do {
         const xml = await this.client.fetchCatalogXml({ categoryId, page });
         const parsed = parseCatalogXml(xml, {
@@ -88,7 +88,13 @@ export default class FFZYSource extends ResourceSource {
         if (parsed.page !== page) {
           throw new TypeError(`FFZY catalog returned page ${parsed.page} while page ${page} was requested`);
         }
-        pageCount = parsed.pageCount;
+        if (expectedPageCount == null) {
+          expectedPageCount = parsed.pageCount;
+        } else if (parsed.pageCount !== expectedPageCount) {
+          throw new TypeError(
+            `FFZY catalog pagecount changed from ${expectedPageCount} to ${parsed.pageCount}`,
+          );
+        }
         for (const item of parsed.items) {
           const existing = byId.get(item.sourceItemId);
           if (
@@ -100,7 +106,7 @@ export default class FFZYSource extends ResourceSource {
           watermarkAt = maxTimestamp(watermarkAt, item.sourceUpdatedAt);
         }
         page += 1;
-      } while (page <= pageCount);
+      } while (page <= expectedPageCount);
     }
     return { items: [...byId.values()], watermarkAt };
   }
@@ -111,7 +117,7 @@ export default class FFZYSource extends ResourceSource {
     let nextWatermarkAt = watermarkAt;
     for (const categoryId of CATEGORY_IDS) {
       let page = 1;
-      let pageCount = 1;
+      let expectedPageCount = null;
       let crossedCutoff = false;
       do {
         const xml = await this.client.fetchCatalogXml({ categoryId, page });
@@ -122,7 +128,13 @@ export default class FFZYSource extends ResourceSource {
         if (parsed.page !== page) {
           throw new TypeError(`FFZY catalog returned page ${parsed.page} while page ${page} was requested`);
         }
-        pageCount = parsed.pageCount;
+        if (expectedPageCount == null) {
+          expectedPageCount = parsed.pageCount;
+        } else if (parsed.pageCount !== expectedPageCount) {
+          throw new TypeError(
+            `FFZY catalog pagecount changed from ${expectedPageCount} to ${parsed.pageCount}`,
+          );
+        }
         for (const item of parsed.items) {
           const updatedMs = Date.parse(item.sourceUpdatedAt);
           if (Number.isFinite(updatedMs) && updatedMs < cutoffMs) {
@@ -139,7 +151,7 @@ export default class FFZYSource extends ResourceSource {
           nextWatermarkAt = maxTimestamp(nextWatermarkAt, item.sourceUpdatedAt);
         }
         page += 1;
-      } while (!crossedCutoff && page <= pageCount);
+      } while (!crossedCutoff && page <= expectedPageCount);
     }
     return { items: [...byId.values()], watermarkAt: nextWatermarkAt };
   }
@@ -178,21 +190,23 @@ export default class FFZYSource extends ResourceSource {
     return parseDetailXml(xml, {
       sourceKey: this.sourceKey,
       allowedCategoryIds: CATEGORY_IDS,
-    }).items;
+    });
   }
 
   async #fetchSingleDetail(sourceItemId) {
-    const details = await this.#fetchParsedDetails([sourceItemId]);
-    const detail = details.find((item) => item.sourceItemId === sourceItemId);
+    const parsed = await this.#fetchParsedDetails([sourceItemId]);
+    const failure = parsed.failures.find((item) => item.sourceItemId === sourceItemId);
+    if (failure) throw failure.error;
+    const detail = parsed.items.find((item) => item.sourceItemId === sourceItemId);
     if (!detail) throw new Error(`FFZY detail response omitted ${sourceItemId}`);
     return detail;
   }
 
   async #hydrateBatch(run, sourceItemIds) {
     if (run.stopped) return;
-    let details;
+    let parsed;
     try {
-      details = await this.#fetchParsedDetails(sourceItemIds);
+      parsed = await this.#fetchParsedDetails(sourceItemIds);
     } catch (error) {
       for (const sourceItemId of sourceItemIds) {
         if (run.stopped) break;
@@ -202,11 +216,19 @@ export default class FFZYSource extends ResourceSource {
     }
     if (run.stopped) return;
 
-    const byId = new Map(details.map((detail) => [detail.sourceItemId, detail]));
+    const byId = new Map(parsed.items.map((detail) => [detail.sourceItemId, detail]));
+    const failuresById = new Map(parsed.failures
+      .filter((failure) => failure.sourceItemId != null)
+      .map((failure) => [failure.sourceItemId, failure.error]));
     for (const sourceItemId of sourceItemIds) {
       if (run.stopped) return;
       let detail = byId.get(sourceItemId);
       if (!detail) {
+        const parseError = failuresById.get(sourceItemId);
+        if (parseError) {
+          this.#recordRemoteFailure(run, sourceItemId, parseError);
+          continue;
+        }
         await this.sleep(MISSING_ITEM_RETRY_MS + this.#jitter());
         if (run.stopped) return;
         try {

@@ -115,6 +115,28 @@ test("initialize fails when any required catalog page is unavailable", async () 
   assert.equal(repository.calls.failed.length, 1);
 });
 
+test("initialize rejects pagination metadata that changes before the final page", async () => {
+  const repository = createRepository();
+  const client = {
+    async fetchCatalogXml({ categoryId, page }) {
+      if (categoryId === "29" && page === 1) {
+        return catalogXml({ categoryId, page, pageCount: 3, ids: ["1"] });
+      }
+      if (categoryId === "29" && page === 2) {
+        return catalogXml({ categoryId, page, pageCount: 1, ids: ["2"] });
+      }
+      return catalogXml({ categoryId, page, ids: [] });
+    },
+    async fetchDetailXml(ids) { return detailXml(ids); },
+  };
+
+  await assert.rejects(
+    () => createSource({ client, repository }).initialize(),
+    /pagecount.*changed|pagination/i,
+  );
+  assert.equal(repository.calls.success.length, 0);
+});
+
 test("detail batches use 20 IDs, two concurrent requests, and 500ms start spacing", async () => {
   const sleeps = [];
   let active = 0;
@@ -211,6 +233,30 @@ test("permanent remote detail failure is queued without failing initialization",
   const summary = await createSource({ client, repository }).initialize();
   assert.equal(summary.failedItems, 1);
   assert.deepEqual(repository.calls.failures.map((row) => row.id), ["1"]);
+  assert.equal(repository.calls.success.length, 1);
+});
+
+test("one invalid detail is queued without discarding valid details from the same batch", async () => {
+  const detailCalls = [];
+  const client = {
+    async fetchCatalogXml({ categoryId }) {
+      return catalogXml({ categoryId, ids: categoryId === "29" ? ["good", "bad"] : [] });
+    },
+    async fetchDetailXml(ids) {
+      detailCalls.push(ids);
+      return detailXml(ids).replace(
+        "<last>2026-07-12 01:00:00</last><id>bad</id>",
+        "<last>invalid-time</last><id>bad</id>",
+      );
+    },
+  };
+  const repository = createRepository();
+  const summary = await createSource({ client, repository }).initialize();
+
+  assert.deepEqual(detailCalls, [["good", "bad"]]);
+  assert.deepEqual(repository.calls.details.map((row) => row.sourceItemId), ["good"]);
+  assert.deepEqual(repository.calls.failures.map((row) => row.id), ["bad"]);
+  assert.equal(summary.failedItems, 1);
   assert.equal(repository.calls.success.length, 1);
 });
 

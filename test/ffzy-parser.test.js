@@ -61,5 +61,40 @@ test("parser rejects malformed list metadata", () => {
 
 test("parser rejects invalid FFZY local timestamps", () => {
   const invalid = detailXml.replace("2026-07-12 01:16:35", "not-a-time");
-  assert.throws(() => parseDetailXml(invalid, options), /timestamp/i);
+  const result = parseDetailXml(invalid, options);
+  assert.deepEqual(result.items, []);
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0].error.message, /timestamp/i);
+});
+
+test("parser preserves numeric-looking FFZY IDs as opaque text", () => {
+  const opaqueIdXml = catalogXml.replace("<id>98509</id>", "<id>00098509</id>");
+  assert.equal(parseCatalogXml(opaqueIdXml, options).items[0].sourceItemId, "00098509");
+});
+
+test("parser rejects truncated XML, trailing XML, and invalid record counts", () => {
+  assert.throws(() => parseCatalogXml(catalogXml.replace("</rss>", ""), options), /XML is invalid/i);
+  assert.throws(() => parseCatalogXml(`${catalogXml}<extra />`, options), /XML is invalid/i);
+  assert.throws(
+    () => parseCatalogXml(catalogXml.replace(' recordcount="42"', ""), options),
+    /recordcount/i,
+  );
+  assert.throws(
+    () => parseCatalogXml(catalogXml.replace('recordcount="42"', 'recordcount="-1"'), options),
+    /recordcount/i,
+  );
+});
+
+test("detail parser isolates invalid entries while preserving valid details", () => {
+  const mixed = detailXml.replace("</list>", `
+    <video>
+      <last>invalid-time</last><id>bad-id</id><tid>30</tid><name>Invalid detail</name>
+      <dl><dd flag="ffm3u8">Bad$https://example.invalid/bad.m3u8</dd></dl>
+    </video>
+  </list>`);
+  const result = parseDetailXml(mixed, options);
+  assert.deepEqual(result.items.map((item) => item.sourceItemId), ["98509"]);
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.failures[0].sourceItemId, "bad-id");
+  assert.match(result.failures[0].error.message, /timestamp/i);
 });

@@ -8,7 +8,6 @@ import { formatSubjectSearchDto } from "../dto/subjectDto.js";
 import { proxyCover } from "./animeShared.js";
 import { upsertAnime } from "./subjectSyncService.js";
 import { enqueueMetadataRefresh } from "./metadataRefreshService.js";
-import { ensureMappingForAnime, enqueueEpisodeRefresh, getEnabledSourceKeys } from "./resourceMatchService.js";
 import { log, error } from "../lib/logger.js";
 import { assertMediaType, mediaTypeForBangumiSubject } from "../lib/mediaTypes.js";
 
@@ -64,15 +63,6 @@ export async function enrichFromBangumiSearch(keyword, { mediaType = "anime" } =
 
       if (!a.detailFetchedAt && enqueueMetadataRefresh(item.id)) stats.queuedMetadata++;
 
-      for (const source of getEnabledSourceKeys()) {
-        const mapping = await ensureMappingForAnime(item.id, { source });
-        if (mapping.matched) {
-          stats.matched++;
-          if (enqueueEpisodeRefresh(item.id, { source })) {
-            stats.queuedEpisodes++;
-          }
-        }
-      }
     } catch (err) {
       error("search", `search item failed for ${item.id}`, err);
       stats.errors++;

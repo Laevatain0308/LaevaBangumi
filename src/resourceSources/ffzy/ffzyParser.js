@@ -1,8 +1,9 @@
-import { XMLParser } from "fast-xml-parser";
+import { XMLParser, XMLValidator } from "fast-xml-parser";
 
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
+  parseTagValue: false,
   isArray: (name) => name === "video" || name === "dd",
 });
 
@@ -15,6 +16,10 @@ function requirePositiveInteger(value, label) {
 }
 
 function parsePage(xml) {
+  const validation = XMLValidator.validate(xml);
+  if (validation !== true) {
+    throw new TypeError(`FFZY XML is invalid: ${validation.err.msg}`);
+  }
   let parsed;
   try {
     parsed = parser.parse(xml);
@@ -22,6 +27,10 @@ function parsePage(xml) {
     throw new TypeError("FFZY XML is invalid", { cause });
   }
   const list = parsed?.rss?.list;
+  const rootKeys = Object.keys(parsed ?? {}).filter((key) => key !== "?xml");
+  if (rootKeys.length !== 1 || rootKeys[0] !== "rss") {
+    throw new TypeError("FFZY XML is invalid: expected one rss root element");
+  }
   if (list == null || typeof list !== "object") {
     throw new TypeError("FFZY XML requires an rss list");
   }
@@ -29,9 +38,13 @@ function parsePage(xml) {
     list,
     page: requirePositiveInteger(list["@_page"], "page"),
     pageCount: requirePositiveInteger(list["@_pagecount"], "pagecount"),
-    recordCount: Number.isInteger(Number(list["@_recordcount"]))
-      ? Number(list["@_recordcount"])
-      : 0,
+    recordCount: (() => {
+      const count = Number(list["@_recordcount"]);
+      if (!Number.isInteger(count) || count < 0) {
+        throw new TypeError("FFZY recordcount must be a non-negative integer");
+      }
+      return count;
+    })(),
   };
 }
 
@@ -125,19 +138,28 @@ export function parseDetailXml(xml, options = {}) {
   const { sourceKey, allowedCategoryIds } = optionsFor(options);
   const { list, page, pageCount, recordCount } = parsePage(xml);
   const videos = Array.isArray(list.video) ? list.video : list.video == null ? [] : [list.video];
+  const items = [];
+  const failures = [];
+  for (const video of videos.filter((entry) => allowedVideo(entry, allowedCategoryIds))) {
+    try {
+      const item = commonItem(video, sourceKey);
+      items.push({
+        ...item,
+        aliases: parseAliases(video.subname, item.title),
+        episodes: parseEpisodes(video.dl),
+      });
+    } catch (error) {
+      failures.push({
+        sourceItemId: String(video?.id ?? "").trim() || null,
+        error,
+      });
+    }
+  }
   return {
     page,
     pageCount,
     recordCount,
-    items: videos
-      .filter((video) => allowedVideo(video, allowedCategoryIds))
-      .map((video) => {
-        const item = commonItem(video, sourceKey);
-        return {
-          ...item,
-          aliases: parseAliases(video.subname, item.title),
-          episodes: parseEpisodes(video.dl),
-        };
-      }),
+    items,
+    failures,
   };
 }
