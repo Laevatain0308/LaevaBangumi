@@ -185,7 +185,7 @@ account CLI
 - `clear_version TEXT`
 - 外键：`account_id -> accounts`，账号删除时级联删除
 
-`watch.clear` 删除当前观看记录、分集进度和旧墓碑，并写入清除水位。水位之前或相同版本的离线事件不得重新创建记录。
+`watch.clear` 写入清除水位，并删除版本不晚于该清除版本的观看记录、分集进度和墓碑。已经存在的更高版本状态必须保留，水位之前或相同版本的离线事件不得重新创建记录；因此清除事件无论先到还是晚到都得到相同结果。
 
 ### `collection_records`
 
@@ -214,7 +214,7 @@ account CLI
 - `clear_version TEXT`
 - 外键：`account_id -> accounts`，账号删除时级联删除
 
-收藏删除、恢复和清除的版本语义与观看记录一致。
+收藏删除、恢复和清除的版本语义与观看记录一致；清除只删除版本不晚于清除事件的收藏记录和墓碑。
 
 ## 全新数据库初始化
 
@@ -376,7 +376,7 @@ npm run account -- list
 
 ### `watch.clear`
 
-`bangumiId` 必须省略，负载为空对象。若版本晚于当前清除水位，则删除账号的全部观看记录、分集进度和旧墓碑，并更新清除水位。
+`bangumiId` 必须省略，负载为空对象。若版本晚于当前清除水位，则删除账号中版本不晚于本事件的观看记录、分集进度和墓碑，并更新清除水位。版本晚于本事件的状态保留。
 
 ### `collection.upsert`
 
@@ -540,7 +540,7 @@ npm run account -- list
 - 全新数据库的账号/同步私有域只创建本设计的 11 张新版表；Bangumi、资源源等其他独立域仍创建各自表。
 - 主键、唯一索引、CHECK、账号级联删除正确。
 - 观看和收藏的 `bangumi_id` 不对公共元数据建立外键。
-- 旧 13 张私有表不会由全新初始化创建。
+- `sync_users、sync_credentials、sync_invites、sync_tokens、sync_devices、watch_history_items、watch_deleted_items、watch_clear_state、collection_items、collection_deleted_items、collection_clear_state` 等旧专属表名不会由全新初始化创建；复用名称 `sync_events` 与 `watch_progress` 时只存在本设计的新版列和约束。
 - `bangumi_subject_refresh_state` 可以在 `bangumi_subjects` 缺少 ID 时创建待办。
 
 ### 账号与后台命令
@@ -562,6 +562,7 @@ npm run account -- list
 - 不同分集进度独立合并。
 - 删除墓碑阻止旧事件，更新事件可以恢复。
 - 清除水位阻止清空前离线事件复活。
+- 较旧的清除事件晚到时保留已经存在的较新记录，结果不依赖请求到达顺序。
 - 观看和收藏可以独立删除/清空。
 - 收藏类型只允许 1–5。
 - Token 设备与事件设备必须一致。
