@@ -378,12 +378,13 @@ export const bangumiSubjectInfoboxValues = sqliteTable("bangumi_subject_infobox_
 ]);
 
 export const bangumiSubjectRefreshState = sqliteTable("bangumi_subject_refresh_state", {
-  bangumiId: integer("bangumi_id").primaryKey().references(() => bangumiSubjects.bangumiId),
-  lastSucceededAt: text("last_succeeded_at").notNull(),
+  bangumiId: integer("bangumi_id").primaryKey(),
+  lastSucceededAt: text("last_succeeded_at"),
   nextRefreshAt: text("next_refresh_at").notNull(),
-  lastAttemptedAt: text("last_attempted_at").notNull(),
+  lastAttemptedAt: text("last_attempted_at"),
   consecutiveFailures: integer("consecutive_failures").notNull().default(0),
   lastError: text("last_error"),
+  updatedAt: text("updated_at").notNull(),
 }, (table) => [index("idx_bangumi_subject_refresh_due").on(table.nextRefreshAt)]);
 
 export const bangumiCalendarSubjects = sqliteTable("bangumi_calendar_subjects", {

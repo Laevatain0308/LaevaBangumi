@@ -93,12 +93,13 @@ export function initBangumiMetadataSchema(connection) {
     );
 
     CREATE TABLE IF NOT EXISTS bangumi_subject_refresh_state (
-      bangumi_id INTEGER PRIMARY KEY REFERENCES bangumi_subjects(bangumi_id) ON DELETE CASCADE,
-      last_succeeded_at TEXT NOT NULL,
+      bangumi_id INTEGER PRIMARY KEY CHECK (bangumi_id > 0),
+      last_succeeded_at TEXT,
       next_refresh_at TEXT NOT NULL,
-      last_attempted_at TEXT NOT NULL,
+      last_attempted_at TEXT,
       consecutive_failures INTEGER NOT NULL DEFAULT 0 CHECK (consecutive_failures >= 0),
-      last_error TEXT
+      last_error TEXT,
+      updated_at TEXT NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_bangumi_subject_refresh_due

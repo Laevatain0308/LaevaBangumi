@@ -140,6 +140,7 @@ test("detail snapshot replaces owned relations and preserves a missing weekday",
     lastAttemptedAt: LATER,
     consecutiveFailures: 0,
     lastError: null,
+    updatedAt: LATER,
   });
 });
 
@@ -228,6 +229,103 @@ test("lists due completed details in due-time order with a limit", (t) => {
     SELECT consecutive_failures, last_error FROM bangumi_subject_refresh_state WHERE bangumi_id = 2
   `).get(), { consecutive_failures: 1, last_error: "unavailable" });
   assert.equal(repository.findById(2).subject.name, "Detail");
+});
+
+test("ensures sorted pending state for unknown IDs without duplicates", (t) => {
+  const { sqlite, repository } = createRepository(t);
+
+  assert.deepEqual(repository.ensureRefreshIds([3, 3, 2], { now: NOW }), {
+    ensuredIds: [2, 3],
+    newlyDueIds: [2, 3],
+    dueIds: [2, 3],
+  });
+  assert.deepEqual(repository.listDueRefreshIds({ now: NOW, limit: 100 }), [
+    { bangumiId: 2, consecutiveFailures: 0 },
+    { bangumiId: 3, consecutiveFailures: 0 },
+  ]);
+  assert.deepEqual(repository.findRefreshState(2), {
+    bangumiId: 2,
+    lastSucceededAt: null,
+    nextRefreshAt: NOW,
+    lastAttemptedAt: null,
+    consecutiveFailures: 0,
+    lastError: null,
+    updatedAt: NOW,
+  });
+  assert.equal(repository.findById(2), null);
+  assert.equal(repository.hasCompletedDetail(2), false);
+
+  assert.deepEqual(repository.ensureRefreshIds([2, 3], { now: NOW }), {
+    ensuredIds: [2, 3],
+    newlyDueIds: [],
+    dueIds: [2, 3],
+  });
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM bangumi_subject_refresh_state").get().count, 2);
+});
+
+test("ensure leaves future success and failure backoff rows unchanged", (t) => {
+  const { sqlite, repository } = createRepository(t);
+  repository.replaceDetail(detail(1), { now: NOW, nextRefreshAt: NEXT });
+  repository.ensureRefreshIds([2], { now: NOW });
+  repository.recordDetailRefreshFailure({
+    bangumiId: 2,
+    now: LATER,
+    nextRefreshAt: NEXT,
+    error: "temporary outage",
+  });
+  const readRawState = (bangumiId) => sqlite.prepare(`
+    SELECT * FROM bangumi_subject_refresh_state WHERE bangumi_id = ?
+  `).get(bangumiId);
+  const successfulBefore = readRawState(1);
+  const failedBefore = readRawState(2);
+
+  assert.deepEqual(repository.ensureRefreshIds([2, 1], { now: LATER }), {
+    ensuredIds: [1, 2],
+    newlyDueIds: [],
+    dueIds: [],
+  });
+  assert.deepEqual(readRawState(1), successfulBefore);
+  assert.deepEqual(readRawState(2), failedBefore);
+});
+
+test("records one failure for a pending unknown ID", (t) => {
+  const { repository } = createRepository(t);
+  repository.ensureRefreshIds([8], { now: NOW });
+
+  assert.deepEqual(repository.recordDetailRefreshFailure({
+    bangumiId: 8,
+    now: LATER,
+    nextRefreshAt: NEXT,
+    error: "unavailable",
+  }), {
+    bangumiId: 8,
+    lastSucceededAt: null,
+    nextRefreshAt: NEXT,
+    lastAttemptedAt: LATER,
+    consecutiveFailures: 1,
+    lastError: "unavailable",
+    updatedAt: LATER,
+  });
+  assert.equal(repository.hasCompletedDetail(8), false);
+});
+
+test("detail success completes an existing unknown pending row", (t) => {
+  const { repository } = createRepository(t);
+  repository.ensureRefreshIds([9], { now: NOW });
+
+  repository.replaceDetail(detail(9), { now: LATER, nextRefreshAt: NEXT });
+
+  assert.equal(repository.hasCompletedDetail(9), true);
+  assert.equal(repository.findById(9).subject.name, "Detail");
+  assert.deepEqual(repository.findRefreshState(9), {
+    bangumiId: 9,
+    lastSucceededAt: LATER,
+    nextRefreshAt: NEXT,
+    lastAttemptedAt: LATER,
+    consecutiveFailures: 0,
+    lastError: null,
+    updatedAt: LATER,
+  });
 });
 
 test("atomically replaces calendar membership without creating detail state", (t) => {

@@ -214,15 +214,16 @@ function replaceDetailInternal(sqlite, metadata, { now, nextRefreshAt }) {
   sqlite.prepare(`
     INSERT INTO bangumi_subject_refresh_state (
       bangumi_id, last_succeeded_at, next_refresh_at, last_attempted_at,
-      consecutive_failures, last_error
-    ) VALUES (?, ?, ?, ?, 0, NULL)
+      consecutive_failures, last_error, updated_at
+    ) VALUES (?, ?, ?, ?, 0, NULL, ?)
     ON CONFLICT(bangumi_id) DO UPDATE SET
       last_succeeded_at = excluded.last_succeeded_at,
       next_refresh_at = excluded.next_refresh_at,
       last_attempted_at = excluded.last_attempted_at,
       consecutive_failures = 0,
-      last_error = NULL
-  `).run(bangumiId, now, nextRefreshAt, now);
+      last_error = NULL,
+      updated_at = excluded.updated_at
+  `).run(bangumiId, now, nextRefreshAt, now, now);
 }
 
 function subjectFromRow(row) {
@@ -286,7 +287,27 @@ function refreshStateFromRow(row) {
     lastAttemptedAt: row.last_attempted_at,
     consecutiveFailures: row.consecutive_failures,
     lastError: row.last_error,
+    updatedAt: row.updated_at,
   };
+}
+
+function normalizeBangumiIds(ids) {
+  return [...new Set(ids)]
+    .filter((id) => Number.isInteger(id) && id > 0)
+    .sort((a, b) => a - b);
+}
+
+function findRefreshRows(sqlite, bangumiIds) {
+  const rows = [];
+  for (let offset = 0; offset < bangumiIds.length; offset += 500) {
+    const chunk = bangumiIds.slice(offset, offset + 500);
+    const placeholders = chunk.map(() => "?").join(", ");
+    rows.push(...sqlite.prepare(`
+      SELECT * FROM bangumi_subject_refresh_state
+      WHERE bangumi_id IN (${placeholders})
+    `).all(...chunk));
+  }
+  return rows;
 }
 
 export function createBangumiRepository(sqlite) {
@@ -298,6 +319,33 @@ export function createBangumiRepository(sqlite) {
   });
   const replaceDetailTransaction = sqlite.transaction((metadata, options) => {
     replaceDetailInternal(sqlite, metadata, options);
+  });
+  const ensureRefreshIdsTransaction = sqlite.transaction((ids, { now }) => {
+    const ensuredIds = normalizeBangumiIds(ids);
+    if (ensuredIds.length === 0) {
+      return { ensuredIds: [], newlyDueIds: [], dueIds: [] };
+    }
+
+    const existingIds = new Set(
+      findRefreshRows(sqlite, ensuredIds).map((row) => row.bangumi_id),
+    );
+    const insert = sqlite.prepare(`
+      INSERT OR IGNORE INTO bangumi_subject_refresh_state (
+        bangumi_id, next_refresh_at, updated_at
+      ) VALUES (?, ?, ?)
+    `);
+    const newlyDueIds = [];
+    for (const bangumiId of ensuredIds) {
+      if (existingIds.has(bangumiId)) continue;
+      const result = insert.run(bangumiId, now, now);
+      if (result.changes === 1) newlyDueIds.push(bangumiId);
+    }
+
+    const dueIds = findRefreshRows(sqlite, ensuredIds)
+      .filter((row) => row.next_refresh_at <= now)
+      .map((row) => row.bangumi_id)
+      .sort((a, b) => a - b);
+    return { ensuredIds, newlyDueIds, dueIds };
   });
   const replaceCalendarTransaction = sqlite.transaction((entries, { now }) => {
     for (const entry of entries) mergeSummaryInternal(sqlite, entry.metadata, now);
@@ -394,9 +442,18 @@ export function createBangumiRepository(sqlite) {
       return findById(metadata.subject.bangumiId);
     },
     findById,
+    ensureRefreshIds(ids, options) {
+      return ensureRefreshIdsTransaction(ids, options);
+    },
+    findRefreshState(bangumiId) {
+      return refreshStateFromRow(sqlite.prepare(`
+        SELECT * FROM bangumi_subject_refresh_state WHERE bangumi_id = ?
+      `).get(bangumiId));
+    },
     hasCompletedDetail(bangumiId) {
       return !!sqlite.prepare(`
-        SELECT 1 FROM bangumi_subject_refresh_state WHERE bangumi_id = ?
+        SELECT 1 FROM bangumi_subject_refresh_state
+        WHERE bangumi_id = ? AND last_succeeded_at IS NOT NULL
       `).get(bangumiId);
     },
     listDueRefreshIds({ now, limit }) {
@@ -413,13 +470,17 @@ export function createBangumiRepository(sqlite) {
     },
     recordDetailRefreshFailure({ bangumiId, now, nextRefreshAt, error }) {
       sqlite.prepare(`
-        UPDATE bangumi_subject_refresh_state SET
-          last_attempted_at = ?,
-          next_refresh_at = ?,
-          consecutive_failures = consecutive_failures + 1,
-          last_error = ?
-        WHERE bangumi_id = ?
-      `).run(now, nextRefreshAt, String(error), bangumiId);
+        INSERT INTO bangumi_subject_refresh_state (
+          bangumi_id, next_refresh_at, last_attempted_at,
+          consecutive_failures, last_error, updated_at
+        ) VALUES (?, ?, ?, 1, ?, ?)
+        ON CONFLICT(bangumi_id) DO UPDATE SET
+          next_refresh_at = excluded.next_refresh_at,
+          last_attempted_at = excluded.last_attempted_at,
+          consecutive_failures = bangumi_subject_refresh_state.consecutive_failures + 1,
+          last_error = excluded.last_error,
+          updated_at = excluded.updated_at
+      `).run(bangumiId, nextRefreshAt, now, String(error), now);
       return refreshStateFromRow(sqlite.prepare(`
         SELECT * FROM bangumi_subject_refresh_state WHERE bangumi_id = ?
       `).get(bangumiId));
