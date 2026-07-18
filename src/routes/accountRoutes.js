@@ -1,6 +1,7 @@
 import express from "express";
 import { envelope } from "../dto/apiEnvelope.js";
 import { errorEnvelope } from "../dto/errorDto.js";
+import { normalizeUsername } from "../accounts/password.js";
 import { createAccountAuthMiddleware } from "./accountAuth.js";
 
 const LOGIN_KEYS = new Set([
@@ -33,9 +34,13 @@ function validOptionalDeviceField(value) {
 function validLoginBody(body) {
   if (!isPlainObject(body)) return false;
   if (Object.keys(body).some((key) => !LOGIN_KEYS.has(key))) return false;
-  return typeof body.username === "string"
-    && validString(body.username.trim(), 1, 64)
-    && validString(body.password, 8, 256)
+  if (typeof body.username !== "string") return false;
+  try {
+    normalizeUsername(body.username);
+  } catch {
+    return false;
+  }
+  return validString(body.password, 8, 256)
     && validString(body.deviceId, 1, 128)
     && validOptionalDeviceField(body.deviceName)
     && validOptionalDeviceField(body.platform)
@@ -96,9 +101,7 @@ export function createAccountRouter({
     }
   });
 
-  router.use(authenticate);
-
-  router.get("/status", (req, res) => {
+  router.get("/status", authenticate, (req, res) => {
     try {
       return res.json(envelope(accountService.status(req.accountAuth), {
         updatedAt: ts(),
@@ -112,7 +115,7 @@ export function createAccountRouter({
     }
   });
 
-  router.post("/logout", (req, res) => {
+  router.post("/logout", authenticate, (req, res) => {
     try {
       accountService.logout(req.accountAuth.tokenId);
       return res.json(envelope({ revoked: true }, {

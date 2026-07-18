@@ -1,4 +1,5 @@
-export function createMetadataRefreshWorker({ detailRefresher, batchSize = 100 }) {
+export function createMetadataRefreshWorker({ detailRefresher, batchSize = 100, logger = {} }) {
+  const writeError = logger.error ?? (() => {});
   let activePromise = null;
   let wakeRequested = false;
 
@@ -21,7 +22,13 @@ export function createMetadataRefreshWorker({ detailRefresher, batchSize = 100 }
       .finally(() => {
         if (activePromise !== flight) return;
         activePromise = null;
-        if (wakeRequested) startDrain();
+        if (wakeRequested) {
+          startDrain().catch((error) => {
+            writeError("bangumi-detail-refresh", "automatic restart failed", {
+              message: error.message ?? String(error),
+            });
+          });
+        }
       });
     activePromise = flight;
     return flight;

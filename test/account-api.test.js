@@ -99,6 +99,7 @@ test("login validates exact fields before calling the account service", async (t
 
   for (const body of [
     { username: "alice", password: "short", deviceId: "phone" },
+    { username: 123, password: "password-password", deviceId: "phone" },
     { username: "   ", password: "password-password", deviceId: "phone" },
     { username: "a".repeat(65), password: "password-password", deviceId: "phone" },
     { username: "alice", password: "password-password", deviceId: "" },
@@ -109,6 +110,22 @@ test("login validates exact fields before calling the account service", async (t
     assert.equal(response.body.meta.error, "invalid_query");
   }
   assert.equal(loginCalls, 0);
+});
+
+test("login rejects usernames that exceed the limit after normalization", async (t) => {
+  const { server } = setup(t);
+  const response = await request(server, {
+    method: "POST",
+    path: "/api/account/login",
+    body: {
+      username: "\u0130".repeat(64),
+      password: "password-password",
+      deviceId: "phone",
+    },
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.meta.error, "invalid_query");
 });
 
 test("bad username or password returns one invalid-credentials response", async (t) => {
@@ -180,6 +197,17 @@ test("legacy sync endpoints are not mounted", async (t) => {
     ["GET", "/api/sync/status"],
     ["POST", "/api/sync/register-device"],
     ["POST", "/api/sync/clear"],
+  ]) {
+    assert.equal((await request(server, { method, path, body: {} })).status, 404, path);
+  }
+});
+
+test("unknown account endpoints are not hidden behind authentication", async (t) => {
+  const { server } = setup(t);
+  for (const [method, path] of [
+    ["POST", "/api/account/register"],
+    ["POST", "/api/account/set-password"],
+    ["GET", "/api/account/devices"],
   ]) {
     assert.equal((await request(server, { method, path, body: {} })).status, 404, path);
   }

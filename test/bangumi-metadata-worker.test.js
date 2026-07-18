@@ -103,3 +103,40 @@ test("releases the single flight after a batch rejects", async () => {
   await worker.drain();
   assert.equal(calls, 2);
 });
+
+test("handles a failed automatic restart requested during a rejected batch", async () => {
+  const firstBatch = deferred();
+  const errors = [];
+  let calls = 0;
+  const worker = createMetadataRefreshWorker({
+    detailRefresher: {
+      async runDueBatch() {
+        calls += 1;
+        if (calls === 1) return firstBatch.promise;
+        throw new Error("automatic restart failed");
+      },
+    },
+    logger: {
+      error(scope, message, meta) {
+        errors.push({ scope, message, meta });
+      },
+    },
+  });
+
+  const first = worker.drain();
+  await Promise.resolve();
+  worker.wake();
+  firstBatch.reject(new Error("initial batch failed"));
+  await assert.rejects(() => first, /initial batch failed/);
+  for (let attempt = 0; attempt < 20 && errors.length === 0; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  assert.equal(calls, 2);
+  assert.deepEqual(worker.state(), { running: false, wakeRequested: false });
+  assert.deepEqual(errors, [{
+    scope: "bangumi-detail-refresh",
+    message: "automatic restart failed",
+    meta: { message: "automatic restart failed" },
+  }]);
+});

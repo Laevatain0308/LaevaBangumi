@@ -49,7 +49,7 @@ export function createBangumiRuntime({
     clock,
     logger,
   });
-  metadataWorker = createMetadataRefreshWorker({ detailRefresher });
+  metadataWorker = createMetadataRefreshWorker({ detailRefresher, logger });
   const scheduler = createBangumiScheduler({
     cron,
     metadataWorker,
