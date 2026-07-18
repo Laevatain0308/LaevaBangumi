@@ -4,17 +4,37 @@ import { enqueueSearch } from "./services/queue.js";
 import { log, error } from "./lib/logger.js";
 import { envelope } from "./dto/apiEnvelope.js";
 import { errorEnvelope, serverErrorEnvelope } from "./dto/errorDto.js";
-import { createPrivateSyncRouter } from "./routes/privateSyncRoutes.js";
+import { sqlite } from "./db/index.js";
+import { createAccountRouter } from "./routes/accountRoutes.js";
+import { createSyncRouter } from "./routes/syncRoutes.js";
+import { createAccountSyncRuntime } from "./runtime/accountSyncRuntime.js";
 import { assertMediaType } from "./lib/mediaTypes.js";
 
 function ts() {
   return new Date().toISOString();
 }
 
-export function createServer() {
+export function createServer({
+  accountSyncRuntime = createAccountSyncRuntime({
+    sqlite,
+    metadataEnsureService: { ensure() {} },
+  }),
+  ensureMetadata = () => {},
+  logger = { log, error },
+} = {}) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
-  app.use("/api/sync", createPrivateSyncRouter());
+  app.use("/api/account", createAccountRouter({
+    accountService: accountSyncRuntime.accountService,
+    authenticate: accountSyncRuntime.authenticate,
+    logger,
+  }));
+  app.use("/api/sync", createSyncRouter({
+    authenticate: accountSyncRuntime.authenticate,
+    syncMergeService: accountSyncRuntime.syncMergeService,
+    syncSnapshotService: accountSyncRuntime.syncSnapshotService,
+    logger,
+  }));
 
   // ── /api/calendar ──────────────────────────────────────
   app.get("/api/calendar", async (_req, res) => {
@@ -92,10 +112,21 @@ export function createServer() {
 
   // ── /api/detail ────────────────────────────────────────
   app.get("/api/detail", async (req, res) => {
-    const id = parseInt(req.query.id, 10);
-    if (!id) return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "缺少 id 参数", errorCode: "invalid_query" }));
+    const rawId = req.query.id;
+    const id = typeof rawId === "string" && /^[1-9]\d*$/.test(rawId) ? Number(rawId) : NaN;
+    if (!Number.isSafeInteger(id)) {
+      return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "缺少 id 参数", errorCode: "invalid_query" }));
+    }
     try {
-      log("api", "detail requested", { id });
+      ensureMetadata([id]);
+    } catch (err) {
+      logger.error?.("api", "/api/detail metadata ensure failed", {
+        id,
+        message: err.message ?? String(err),
+      });
+    }
+    try {
+      logger.log?.("api", "detail requested", { id });
       const result = await animeService.getAnimeDetail(id);
       if (!result) return res.status(404).json(errorEnvelope(null, { updatedAt: ts(), message: "番剧不存在", errorCode: "subject_not_found" }));
       res.json(envelope(result.data, {

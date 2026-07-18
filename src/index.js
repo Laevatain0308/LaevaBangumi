@@ -6,6 +6,7 @@ import { onSearchFlush } from "./services/queue.js";
 import { getProxyStatus } from "./lib/proxy.js";
 import { log, warn, error } from "./lib/logger.js";
 import { createBangumiRuntime } from "./runtime/bangumiRuntime.js";
+import { createAccountSyncRuntime } from "./runtime/accountSyncRuntime.js";
 import { loadResourceSourceRegistry } from "./resourceSources/pluginRegistry.js";
 import { createResourceSourceScheduler } from "./resourceSources/scheduler.js";
 
@@ -38,7 +39,16 @@ onSearchFlush((keyword, options) => enrichFromBangumiSearch(keyword, {
   metadataService: bangumiRuntime.metadataService,
 }));
 
-const app = createServer();
+const accountSyncRuntime = createAccountSyncRuntime({
+  sqlite,
+  metadataEnsureService: bangumiRuntime.metadataEnsureService,
+  logger: { log, error },
+});
+const app = createServer({
+  accountSyncRuntime,
+  ensureMetadata: bangumiRuntime.metadataEnsureService.ensure,
+  logger: { log, error },
+});
 app.listen(PORT, () => {
   log("boot", "server started", { url: `http://localhost:${PORT}` });
 });

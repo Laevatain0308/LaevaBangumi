@@ -583,3 +583,45 @@ test("missing detail returns the documented error envelope without inline metada
     server.close();
   }
 });
+
+test("detail registers valid positive integer IDs for metadata ensure", async () => {
+  seedContractSubject();
+  const calls = [];
+  const server = createServer({ ensureMetadata(ids) { calls.push(ids); } }).listen(0);
+  try {
+    assert.equal((await getJson(server, `/api/detail?id=${CONTRACT_SUBJECT_ID}`)).status, 200);
+    assert.deepEqual(calls, [[CONTRACT_SUBJECT_ID]]);
+  } finally {
+    server.close();
+  }
+});
+
+test("detail rejects malformed IDs without registering metadata", async () => {
+  const calls = [];
+  const server = createServer({ ensureMetadata(ids) { calls.push(ids); } }).listen(0);
+  try {
+    for (const value of ["0", "-1", "1x", "1.5", ""]) {
+      assert.equal((await getJson(server, `/api/detail?id=${encodeURIComponent(value)}`)).status, 400);
+    }
+    assert.deepEqual(calls, []);
+  } finally {
+    server.close();
+  }
+});
+
+test("detail ensure failure is logged without replacing cached data", async () => {
+  seedContractSubject();
+  const logs = [];
+  const server = createServer({
+    ensureMetadata() { throw new Error("ensure unavailable"); },
+    logger: { log() {}, error(...args) { logs.push(args); } },
+  }).listen(0);
+  try {
+    const response = await getJson(server, `/api/detail?id=${CONTRACT_SUBJECT_ID}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.data.id, CONTRACT_SUBJECT_ID);
+    assert.equal(logs.length, 1);
+  } finally {
+    server.close();
+  }
+});
