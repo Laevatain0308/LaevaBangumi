@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import Database from "better-sqlite3";
 import { initDb, sqlite } from "../src/db/index.js";
 import {
   findEpisodeRawVideoUrl,
@@ -55,6 +56,33 @@ test("initDb creates only terminal normalized runtime tables", () => {
 
   for (const legacyColumn of ["id", "anime_id", "source_name", "ep_name", "video_url"]) {
     assert.equal(episodeColumns.has(legacyColumn), false, `episodes.${legacyColumn} should not exist`);
+  }
+});
+
+test("a fresh database creates the new private domain beside independent public domains", (t) => {
+  const fresh = new Database(":memory:");
+  t.after(() => fresh.close());
+  fresh.pragma("foreign_keys = ON");
+  initDb(fresh);
+  const tableNames = new Set(fresh.prepare(`
+    SELECT name FROM sqlite_master WHERE type = 'table'
+  `).all().map(({ name }) => name));
+
+  for (const table of [
+    "accounts", "account_devices", "account_tokens", "sync_events",
+    "watch_records", "watch_progress", "watch_tombstones", "watch_state",
+    "collection_records", "collection_tombstones", "collection_state",
+    "bangumi_subjects", "bangumi_subject_refresh_state",
+    "resource_sources", "resource_items", "resource_mappings", "source_sync_state",
+  ]) {
+    assert.equal(tableNames.has(table), true, table);
+  }
+  for (const table of [
+    "sync_users", "sync_credentials", "sync_invites", "sync_tokens", "sync_devices",
+    "watch_history_items", "watch_deleted_items", "watch_clear_state",
+    "collection_items", "collection_deleted_items", "collection_clear_state",
+  ]) {
+    assert.equal(tableNames.has(table), false, table);
   }
 });
 

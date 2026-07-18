@@ -51,3 +51,9 @@ test("independent Bangumi metadata scheduler and server startup remain wired", (
   assert.match(entrypoint, /createServer/);
   assert.match(entrypoint, /app\.listen/);
 });
+
+test("entrypoint composes the new account sync runtime from the shared metadata ensure service", () => {
+  assert.match(entrypoint, /createAccountSyncRuntime/);
+  assert.match(entrypoint, /metadataEnsureService:\s*bangumiRuntime\.metadataEnsureService/);
+  assert.doesNotMatch(entrypoint, /privateSyncRoutes|syncTokenService|privateSyncMergeService/);
+});
