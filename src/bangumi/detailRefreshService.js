@@ -2,7 +2,6 @@ import pLimit from "p-limit";
 import {
   BANGUMI_DETAIL_REFRESH_BATCH_SIZE,
   BANGUMI_DETAIL_REFRESH_CONCURRENCY,
-  BANGUMI_DETAIL_RETRY_DELAYS_MS,
   BANGUMI_REQUEST_START_INTERVAL_MS,
 } from "./config.js";
 
@@ -36,31 +35,17 @@ export function createBangumiDetailRefreshService({
     return scheduled;
   }
 
-  async function refreshOne(row, attemptedAt) {
+  async function refreshOne(row) {
     await waitForStartSlot();
     try {
       await metadataService.refreshDetail(row.bangumiId);
-      return true;
+      return { succeeded: true, settled: true };
     } catch (error) {
-      const delayIndex = Math.min(row.consecutiveFailures, BANGUMI_DETAIL_RETRY_DELAYS_MS.length - 1);
-      try {
-        repository.recordDetailRefreshFailure({
-          bangumiId: row.bangumiId,
-          now: attemptedAt,
-          nextRefreshAt: new Date(Date.parse(attemptedAt) + BANGUMI_DETAIL_RETRY_DELAYS_MS[delayIndex]).toISOString(),
-          error: error.message ?? String(error),
-        });
-      } catch (stateError) {
-        writeError("bangumi-detail-refresh", "failure state write failed", {
-          bangumiId: row.bangumiId,
-          message: stateError.message ?? String(stateError),
-        });
-      }
       writeError("bangumi-detail-refresh", "subject refresh failed", {
         bangumiId: row.bangumiId,
         message: error.message ?? String(error),
       });
-      return false;
+      return { succeeded: false, settled: error.refreshStateRecorded === true };
     }
   }
 
@@ -73,9 +58,10 @@ export function createBangumiDetailRefreshService({
     nextStartAt = null;
     startGate = Promise.resolve();
     const limit = pLimit(BANGUMI_DETAIL_REFRESH_CONCURRENCY);
-    const results = await Promise.all(due.map((row) => limit(() => refreshOne(row, attemptedAt))));
-    const succeeded = results.filter(Boolean).length;
-    const result = { due: due.length, succeeded, failed: due.length - succeeded };
+    const results = await Promise.all(due.map((row) => limit(() => refreshOne(row))));
+    const succeeded = results.filter((result) => result.succeeded).length;
+    const settled = results.filter((result) => result.settled).length;
+    const result = { due: due.length, succeeded, failed: due.length - succeeded, settled };
     writeLog("bangumi-detail-refresh", "batch completed", result);
     return result;
   }

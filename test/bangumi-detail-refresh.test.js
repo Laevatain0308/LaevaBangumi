@@ -45,7 +45,7 @@ test("refreshes only due completed subjects in due-time order", async () => {
   const result = await refresher.runDueBatch();
   assert.deepEqual(listCalls, [{ now: NOW, limit: 100 }]);
   assert.deepEqual(calls, [2, 1]);
-  assert.deepEqual(result, { due: 2, succeeded: 2, failed: 0 });
+  assert.deepEqual(result, { due: 2, succeeded: 2, failed: 0, settled: 2 });
 });
 
 test("spaces request starts by 500ms while allowing at most two active requests", async () => {
@@ -85,16 +85,16 @@ test("spaces request starts by 500ms while allowing at most two active requests"
   assert.equal(peakActive, 2);
 });
 
-for (const [previousFailures, expectedDelay] of [[0, 6 * HOUR_MS], [1, 24 * HOUR_MS], [2, 72 * HOUR_MS], [9, 72 * HOUR_MS]]) {
-  test(`uses fixed backoff after ${previousFailures} previous failures`, async () => {
-    let recorded;
+for (const previousFailures of [0, 1, 2, 9]) {
+  test(`counts a failure recorded by metadata service after ${previousFailures} previous failures`, async () => {
     const refresher = createBangumiDetailRefreshService({
       repository: {
         listDueRefreshIds: () => [{ bangumiId: 1, consecutiveFailures: previousFailures }],
-        recordDetailRefreshFailure(value) { recorded = value; },
       },
       metadataService: {
-        async refreshDetail() { throw new Error("Bangumi unavailable"); },
+        async refreshDetail() {
+          throw Object.assign(new Error("Bangumi unavailable"), { refreshStateRecorded: true });
+        },
       },
       clock: () => new Date(NOW),
       sleep: async () => {},
@@ -102,29 +102,20 @@ for (const [previousFailures, expectedDelay] of [[0, 6 * HOUR_MS], [1, 24 * HOUR
     });
 
     const result = await refresher.runDueBatch();
-    assert.deepEqual(result, { due: 1, succeeded: 0, failed: 1 });
-    assert.deepEqual(recorded, {
-      bangumiId: 1,
-      now: NOW,
-      nextRefreshAt: new Date(Date.parse(NOW) + expectedDelay).toISOString(),
-      error: "Bangumi unavailable",
-    });
+    assert.deepEqual(result, { due: 1, succeeded: 0, failed: 1, settled: 1 });
   });
 }
 
-test("continues the batch when recording one failure state also fails", async () => {
+test("reports no progress when failure state writes fail", async () => {
   const attempted = [];
   const refresher = createBangumiDetailRefreshService({
     repository: {
       listDueRefreshIds: () => [1, 2].map((bangumiId) => ({ bangumiId, consecutiveFailures: 0 })),
-      recordDetailRefreshFailure({ bangumiId }) {
-        if (bangumiId === 1) throw new Error("state write failed");
-      },
     },
     metadataService: {
       async refreshDetail(id) {
         attempted.push(id);
-        throw new Error("Bangumi unavailable");
+        throw Object.assign(new Error("Bangumi unavailable"), { refreshStateRecorded: false });
       },
     },
     clock: () => new Date(NOW),
@@ -137,5 +128,5 @@ test("continues the batch when recording one failure state also fails", async ()
 
   const result = await refresher.runDueBatch();
   assert.deepEqual(attempted, [1, 2]);
-  assert.deepEqual(result, { due: 2, succeeded: 0, failed: 2 });
+  assert.deepEqual(result, { due: 2, succeeded: 0, failed: 2, settled: 0 });
 });

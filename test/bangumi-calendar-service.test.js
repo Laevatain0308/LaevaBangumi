@@ -35,7 +35,11 @@ function calendarPayload() {
   ];
 }
 
-function setup(t, { getCalendar = async () => calendarPayload(), now = NOW } = {}) {
+function setup(t, {
+  getCalendar = async () => calendarPayload(),
+  now = NOW,
+  ensureMetadata = () => {},
+} = {}) {
   const { sqlite, close } = createTestDatabase();
   t.after(close);
   const repository = createBangumiRepository(sqlite);
@@ -43,6 +47,7 @@ function setup(t, { getCalendar = async () => calendarPayload(), now = NOW } = {
   const service = createBangumiCalendarService({
     client: { getCalendar },
     repository,
+    ensureMetadata,
     clock: () => new Date(now),
     logger: {
       log(scope, message, meta) { logs.push({ level: "log", scope, message, meta }); },
@@ -53,7 +58,10 @@ function setup(t, { getCalendar = async () => calendarPayload(), now = NOW } = {
 }
 
 test("syncs valid anime summaries and atomically replaces membership", async (t) => {
-  const { repository, service } = setup(t);
+  const ensured = [];
+  const { repository, service } = setup(t, {
+    ensureMetadata(ids) { ensured.push(ids); },
+  });
   const result = await service.sync();
 
   assert.deepEqual(result, { received: 5, persisted: 2, filtered: 1, rejected: 2, members: 2 });
@@ -67,6 +75,7 @@ test("syncs valid anime summaries and atomically replaces membership", async (t)
   assert.equal(repository.findById(12), null);
   assert.equal(repository.findById(13), null);
   assert.equal(repository.hasCompletedDetail(1), false);
+  assert.deepEqual(ensured, [[1, 2]]);
 });
 
 test("a later successful sync removes stale membership but keeps metadata", async (t) => {
@@ -104,6 +113,33 @@ test("a failed calendar request preserves the previous snapshot", async (t) => {
     consecutiveFailures: 1,
     lastError: "calendar unavailable",
   });
+});
+
+test("failed calendar persistence does not ensure metadata", async (t) => {
+  const ensured = [];
+  const context = setup(t, { ensureMetadata(ids) { ensured.push(ids); } });
+  context.repository.replaceCalendarSnapshot = () => {
+    throw new Error("database unavailable");
+  };
+
+  await assert.rejects(() => context.service.sync(), /database unavailable/);
+  assert.deepEqual(ensured, []);
+});
+
+test("ensure registration failure does not turn a persisted calendar into a failed sync", async (t) => {
+  const context = setup(t, {
+    ensureMetadata() { throw new Error("ensure unavailable"); },
+  });
+
+  assert.deepEqual(await context.service.sync(), {
+    received: 5,
+    persisted: 2,
+    filtered: 1,
+    rejected: 2,
+    members: 2,
+  });
+  assert.equal(context.repository.findCalendarSyncState().consecutiveFailures, 0);
+  assert.ok(context.logs.some((entry) => entry.message === "metadata ensure failed"));
 });
 
 test("an invalid calendar container preserves the previous snapshot", async (t) => {

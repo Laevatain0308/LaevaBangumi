@@ -5,7 +5,7 @@ import { enrichFromBangumiSearch, registerMetadataRefreshJob } from "./services/
 import { onSearchFlush } from "./services/queue.js";
 import { getProxyStatus } from "./lib/proxy.js";
 import { log, warn, error } from "./lib/logger.js";
-import { createProductionBangumiScheduler } from "./bangumi/scheduler.js";
+import { createBangumiRuntime } from "./runtime/bangumiRuntime.js";
 import { loadResourceSourceRegistry } from "./resourceSources/pluginRegistry.js";
 import { createResourceSourceScheduler } from "./resourceSources/scheduler.js";
 
@@ -27,13 +27,16 @@ const resourceScheduler = createResourceSourceScheduler({
 });
 resourceScheduler.start();
 
-const bangumiScheduler = createProductionBangumiScheduler({ sqlite, cron, logger: { log, error } });
-bangumiScheduler.start();
-bangumiScheduler.startup().catch((err) => error("bangumi", "startup sync failed", err));
+const bangumiRuntime = createBangumiRuntime({ sqlite, cron, logger: { log, error } });
+bangumiRuntime.scheduler.start();
+bangumiRuntime.scheduler.startup().catch((err) => error("bangumi", "startup sync failed", err));
 
 // 队列回调：异步搜索由队列驱动
 registerMetadataRefreshJob();
-onSearchFlush(enrichFromBangumiSearch);
+onSearchFlush((keyword, options) => enrichFromBangumiSearch(keyword, {
+  ...options,
+  metadataService: bangumiRuntime.metadataService,
+}));
 
 const app = createServer();
 app.listen(PORT, () => {

@@ -5,7 +5,7 @@ import { BANGUMI_SUBJECT_TYPE_BY_MEDIA_TYPE, assertMediaType } from "../lib/medi
 const BG = "https://api.bgm.tv";
 const TIMEOUT = 30000;
 const UA = "laevatain/aslan (https://github.com/Laevatain0308/aslan)";
-const DEFAULT_RETRY_DELAYS_MS = [500, 1500];
+export const BANGUMI_TRANSPORT_RETRY_DELAYS_MS = [500, 1500];
 const DEFAULT_SEARCH_LIMIT = 50;
 const DEFAULT_SEARCH_MAX_RESULTS = 100;
 const DEFAULT_SEARCH_MAX_PAGES = 2;
@@ -48,7 +48,7 @@ function boundedInteger(value, { fallback, min, max }) {
 
 export async function fetchJson(url, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? TIMEOUT;
-  const retryDelaysMs = opts.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const retryDelaysMs = opts.retryDelaysMs ?? BANGUMI_TRANSPORT_RETRY_DELAYS_MS;
   const fetchImpl = opts.fetchImpl ?? fetch;
   const { headers: extraHeaders, timeoutMs: _timeoutMs, retryDelaysMs: _retryDelaysMs, fetchImpl: _fetchImpl, ...restOpts } = opts;
 

@@ -1,10 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import {
-  createBangumiScheduler,
-  createProductionBangumiScheduler,
-} from "../src/bangumi/scheduler.js";
+import { createBangumiScheduler } from "../src/bangumi/scheduler.js";
+import { createBangumiRuntime } from "../src/runtime/bangumiRuntime.js";
 import { createTestDatabase } from "./helpers/testDatabase.js";
 
 function deferred() {
@@ -32,7 +30,7 @@ test("registers fixed cron jobs in Asia/Shanghai", () => {
   const cron = createCron();
   const scheduler = createBangumiScheduler({
     cron,
-    detailRefresher: { runDueBatch: async () => ({ due: 0, succeeded: 0, failed: 0 }) },
+    metadataWorker: { drain: async () => ({ due: 0, succeeded: 0, failed: 0, settled: 0 }), state: () => ({ running: false }) },
     calendarService: { isStale: () => false, sync: async () => ({ members: 0 }) },
   });
 
@@ -49,7 +47,7 @@ test("startup always scans due details and syncs only a stale calendar", async (
   let calendarRuns = 0;
   const scheduler = createBangumiScheduler({
     cron: createCron(),
-    detailRefresher: { runDueBatch: async () => { detailRuns += 1; return { due: 0 }; } },
+    metadataWorker: { drain: async () => { detailRuns += 1; return { due: 0 }; }, state: () => ({ running: false }) },
     calendarService: {
       isStale: () => true,
       sync: async () => { calendarRuns += 1; return { members: 1 }; },
@@ -67,7 +65,7 @@ test("startup skips a fresh calendar", async () => {
   let calendarRuns = 0;
   const scheduler = createBangumiScheduler({
     cron: createCron(),
-    detailRefresher: { runDueBatch: async () => ({ due: 0 }) },
+    metadataWorker: { drain: async () => ({ due: 0 }), state: () => ({ running: false }) },
     calendarService: {
       isStale: () => false,
       sync: async () => { calendarRuns += 1; },
@@ -83,7 +81,7 @@ test("startup still attempts a stale calendar when detail refresh fails", async 
   let calendarRuns = 0;
   const scheduler = createBangumiScheduler({
     cron: createCron(),
-    detailRefresher: { runDueBatch: async () => { throw new Error("detail startup failed"); } },
+    metadataWorker: { drain: async () => { throw new Error("detail startup failed"); }, state: () => ({ running: false }) },
     calendarService: {
       isStale: () => true,
       sync: async () => { calendarRuns += 1; return { members: 1 }; },
@@ -95,18 +93,18 @@ test("startup still attempts a stale calendar when detail refresh fails", async 
   assert.deepEqual(scheduler.state(), { detailRunning: false, calendarRunning: false });
 });
 
-test("skips overlap independently for detail and calendar jobs", async () => {
+test("delegates overlapping detail triggers to the shared metadata worker", async () => {
   const detailGate = deferred();
-  let detailRuns = 0;
+  let drainCalls = 0;
   let calendarRuns = 0;
   const scheduler = createBangumiScheduler({
     cron: createCron(),
-    detailRefresher: {
-      async runDueBatch() {
-        detailRuns += 1;
-        await detailGate.promise;
-        return { due: 1 };
+    metadataWorker: {
+      drain() {
+        drainCalls += 1;
+        return detailGate.promise;
       },
+      state: () => ({ running: true }),
     },
     calendarService: {
       isStale: () => true,
@@ -116,18 +114,17 @@ test("skips overlap independently for detail and calendar jobs", async () => {
 
   const first = scheduler.runDetails("test");
   await Promise.resolve();
-  const second = await scheduler.runDetails("test");
+  const second = scheduler.runDetails("test");
   const calendar = await scheduler.runCalendar("test");
 
-  assert.deepEqual(second, { started: false, skipped: true, reason: "detail_refresh_running" });
   assert.equal(calendar.started, true);
-  assert.equal(detailRuns, 1);
+  assert.equal(drainCalls, 2);
   assert.equal(calendarRuns, 1);
   assert.deepEqual(scheduler.state(), { detailRunning: true, calendarRunning: false });
 
-  detailGate.resolve();
-  await first;
-  assert.deepEqual(scheduler.state(), { detailRunning: false, calendarRunning: false });
+  detailGate.resolve({ due: 1, succeeded: 1, failed: 0, settled: 1 });
+  assert.equal((await first).result.due, 1);
+  assert.equal((await second).result.due, 1);
 });
 
 test("cron callbacks catch failures and release locks", async () => {
@@ -135,7 +132,7 @@ test("cron callbacks catch failures and release locks", async () => {
   const errors = [];
   const scheduler = createBangumiScheduler({
     cron,
-    detailRefresher: { runDueBatch: async () => { throw new Error("detail failed"); } },
+    metadataWorker: { drain: async () => { throw new Error("detail failed"); }, state: () => ({ running: false }) },
     calendarService: { isStale: () => true, sync: async () => { throw new Error("calendar failed"); } },
     logger: { error(scope, message, error) { errors.push({ scope, message, error: error.message }); } },
   });
@@ -147,12 +144,35 @@ test("cron callbacks catch failures and release locks", async () => {
   assert.deepEqual(scheduler.state(), { detailRunning: false, calendarRunning: false });
 });
 
-test("production scheduler constructs against a metadata-only database", (t) => {
+test("production runtime composes one shared ensure worker and scheduler", async (t) => {
   const { sqlite, close } = createTestDatabase();
   t.after(close);
-  const scheduler = createProductionBangumiScheduler({ sqlite, cron: createCron() });
-  assert.equal(typeof scheduler.start, "function");
-  assert.equal(typeof scheduler.startup, "function");
+  const cron = createCron();
+  let detailCalls = 0;
+  const runtime = createBangumiRuntime({
+    sqlite,
+    cron,
+    clock: () => new Date("2026-07-10T00:00:00.000Z"),
+    client: {
+      async getSubject(id) {
+        detailCalls += 1;
+        return { id, type: 2, name: `Anime ${id}` };
+      },
+      async getCalendar() {
+        return [{ weekday: { id: 1 }, items: [{ id: 2, type: 2, name: "Anime 2" }] }];
+      },
+      async search() { return { data: [] }; },
+    },
+  });
+
+  assert.equal(typeof runtime.scheduler.start, "function");
+  assert.equal(typeof runtime.scheduler.startup, "function");
+  assert.equal(runtime.scheduler.state().detailRunning, false);
+  const result = runtime.metadataEnsureService.ensure([1]);
+  assert.deepEqual(result.dueIds, [1]);
+  await runtime.metadataWorker.drain();
+  assert.equal(detailCalls, 1);
+  assert.equal(runtime.repository.hasCompletedDetail(1), true);
 });
 
 test("application entrypoint imports the SQLite connection used by the scheduler", () => {

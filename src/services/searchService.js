@@ -40,12 +40,16 @@ export async function searchAnimeByTag(tag, { mediaType = "anime" } = {}) {
   };
 }
 
-export async function enrichFromBangumiSearch(keyword, { mediaType = "anime" } = {}) {
+export async function enrichFromBangumiSearch(keyword, {
+  mediaType = "anime",
+  metadataService,
+  searchSubjects = bangumi.searchSubjects,
+} = {}) {
   const normalizedMediaType = assertMediaType(mediaType);
   log("search", "bangumi search started", { keyword, mediaType: normalizedMediaType });
   let subjects;
   try {
-    const bgResult = await bangumi.searchSubjects(keyword, { mediaType: normalizedMediaType });
+    const bgResult = await searchSubjects(keyword, { mediaType: normalizedMediaType });
     subjects = (bgResult?.data || [])
       .filter((item) => mediaTypeForBangumiSubject(item) === normalizedMediaType);
   } catch (err) {
@@ -67,6 +71,12 @@ export async function enrichFromBangumiSearch(keyword, { mediaType = "anime" } =
       error("search", `search item failed for ${item.id}`, err);
       stats.errors++;
     }
+  }
+  try {
+    metadataService?.persistSearchResults(subjects);
+  } catch (err) {
+    error("search", "Bangumi metadata persistence failed", err);
+    stats.errors++;
   }
   log("search", "bangumi search processing completed", { keyword, ...stats });
   return stats;

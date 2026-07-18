@@ -1,9 +1,3 @@
-import cronModule from "node-cron";
-import { createBangumiMetadataClient } from "./client.js";
-import { createBangumiRepository } from "./repository.js";
-import { createBangumiMetadataService } from "./metadataService.js";
-import { createBangumiCalendarService } from "./calendarService.js";
-import { createBangumiDetailRefreshService } from "./detailRefreshService.js";
 import {
   BANGUMI_CALENDAR_SYNC_CRON,
   BANGUMI_DETAIL_REFRESH_CRON,
@@ -12,25 +6,18 @@ import {
 
 export function createBangumiScheduler({
   cron,
-  detailRefresher,
+  metadataWorker,
   calendarService,
   logger = {},
 }) {
   const writeLog = logger.log ?? (() => {});
   const writeError = logger.error ?? (() => {});
-  let detailRunning = false;
   let calendarRunning = false;
 
   async function runDetails(trigger = "manual") {
-    if (detailRunning) return { started: false, skipped: true, reason: "detail_refresh_running" };
-    detailRunning = true;
-    try {
-      const result = await detailRefresher.runDueBatch();
-      writeLog("bangumi-detail-refresh", "run completed", { trigger, ...result });
-      return { started: true, skipped: false, result };
-    } finally {
-      detailRunning = false;
-    }
+    const result = await metadataWorker.drain();
+    writeLog("bangumi-detail-refresh", "run completed", { trigger, ...result });
+    return { started: true, skipped: false, result };
   }
 
   async function runCalendar(trigger = "manual") {
@@ -86,15 +73,6 @@ export function createBangumiScheduler({
     startup,
     runDetails,
     runCalendar,
-    state: () => ({ detailRunning, calendarRunning }),
+    state: () => ({ detailRunning: metadataWorker.state().running, calendarRunning }),
   };
-}
-
-export function createProductionBangumiScheduler({ sqlite, cron = cronModule, logger = {} }) {
-  const repository = createBangumiRepository(sqlite);
-  const client = createBangumiMetadataClient();
-  const metadataService = createBangumiMetadataService({ client, repository, logger });
-  const calendarService = createBangumiCalendarService({ client, repository, logger });
-  const detailRefresher = createBangumiDetailRefreshService({ metadataService, repository, logger });
-  return createBangumiScheduler({ cron, detailRefresher, calendarService, logger });
 }

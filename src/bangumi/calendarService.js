@@ -9,6 +9,7 @@ function iso(value) {
 export function createBangumiCalendarService({
   client,
   repository,
+  ensureMetadata = () => {},
   clock = () => new Date(),
   logger = {},
 }) {
@@ -18,10 +19,12 @@ export function createBangumiCalendarService({
   async function sync() {
     const now = iso(clock());
     writeLog("bangumi-calendar", "sync started", { attemptedAt: now });
+    let entries;
+    let result;
     try {
       const response = await client.getCalendar();
       const days = validateCalendarPayload(response);
-      const entries = [];
+      entries = [];
       let received = 0;
       let filtered = 0;
       let rejected = 0;
@@ -51,20 +54,28 @@ export function createBangumiCalendarService({
         throw new BangumiPayloadError("calendar contains no valid anime", { code: "incomplete_calendar" });
       }
       repository.replaceCalendarSnapshot(entries, { now });
-      const result = {
+      result = {
         received,
         persisted: entries.length,
         filtered,
         rejected,
         members: entries.length,
       };
-      writeLog("bangumi-calendar", "sync completed", result);
-      return result;
     } catch (error) {
       repository.recordCalendarSyncFailure({ now, error: error.message ?? String(error) });
       writeError("bangumi-calendar", "sync failed", { message: error.message ?? String(error) });
       throw error;
     }
+
+    try {
+      ensureMetadata(entries.map(({ metadata }) => metadata.subject.bangumiId));
+    } catch (error) {
+      writeError("bangumi-calendar", "metadata ensure failed", {
+        message: error.message ?? String(error),
+      });
+    }
+    writeLog("bangumi-calendar", "sync completed", result);
+    return result;
   }
 
   function isStale(now = clock()) {

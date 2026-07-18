@@ -1,6 +1,9 @@
 import { normalizeSubject } from "./normalizer.js";
 import { validateAnimeSubject } from "./validation.js";
-import { BANGUMI_DETAIL_REFRESH_INTERVAL_MS } from "./config.js";
+import {
+  BANGUMI_DETAIL_REFRESH_INTERVAL_MS,
+  BANGUMI_DETAIL_RETRY_DELAYS_MS,
+} from "./config.js";
 
 function iso(value) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
@@ -9,15 +12,25 @@ function iso(value) {
 export function createBangumiMetadataService({
   client,
   repository,
+  ensureMetadata = () => ({ ensuredIds: [], newlyDueIds: [], dueIds: [] }),
   clock = () => new Date(),
   logger = {},
 }) {
   const writeLog = logger.log ?? (() => {});
   const writeError = logger.error ?? (() => {});
+  const activeDetails = new Map();
 
-  async function searchAndPersist(keyword, options = {}) {
-    const result = await client.search(keyword, options);
-    const items = Array.isArray(result?.data) ? result.data : [];
+  function ensurePersistedMetadata(ids, scope) {
+    try {
+      ensureMetadata(ids);
+    } catch (error) {
+      writeError("bangumi-metadata", `${scope} ensure failed`, {
+        message: error.message ?? String(error),
+      });
+    }
+  }
+
+  function persistSearchResults(items) {
     const valid = [];
     let rejected = 0;
 
@@ -35,11 +48,20 @@ export function createBangumiMetadataService({
       }
     }
 
-    if (valid.length > 0) repository.mergeSearchResults(valid, { now: iso(clock()) });
+    if (valid.length > 0) {
+      repository.mergeSearchResults(valid, { now: iso(clock()) });
+      ensurePersistedMetadata(valid.map(({ subject }) => subject.bangumiId), "search metadata");
+    }
     return { received: items.length, persisted: valid.length, rejected };
   }
 
-  async function fetchAndReplaceDetail(bangumiId) {
+  async function searchAndPersist(keyword, options = {}) {
+    const result = await client.search(keyword, options);
+    const items = Array.isArray(result?.data) ? result.data : [];
+    return persistSearchResults(items);
+  }
+
+  async function refreshDetailAttempt(bangumiId) {
     writeLog("bangumi-metadata", "detail fetch started", { bangumiId });
     try {
       const response = await client.getSubject(bangumiId);
@@ -56,18 +78,75 @@ export function createBangumiMetadataService({
         path: error.path ?? null,
         message: error.message ?? String(error),
       });
-      throw error;
+      const now = iso(clock());
+      const state = repository.findRefreshState(bangumiId);
+      const failureIndex = Math.min(
+        state?.consecutiveFailures ?? 0,
+        BANGUMI_DETAIL_RETRY_DELAYS_MS.length - 1,
+      );
+      let refreshStateRecorded = false;
+      try {
+        repository.recordDetailRefreshFailure({
+          bangumiId,
+          now,
+          nextRefreshAt: new Date(
+            Date.parse(now) + BANGUMI_DETAIL_RETRY_DELAYS_MS[failureIndex],
+          ).toISOString(),
+          error: error.message ?? String(error),
+        });
+        refreshStateRecorded = true;
+      } catch (stateError) {
+        writeError("bangumi-metadata", "detail failure state write failed", {
+          bangumiId,
+          message: stateError.message ?? String(stateError),
+        });
+      }
+      throw new DetailRefreshError(error, { refreshStateRecorded });
     }
   }
 
+  function refreshDetail(bangumiId) {
+    const active = activeDetails.get(bangumiId);
+    if (active) return active;
+    let promise;
+    promise = refreshDetailAttempt(bangumiId).finally(() => {
+      if (activeDetails.get(bangumiId) === promise) activeDetails.delete(bangumiId);
+    });
+    activeDetails.set(bangumiId, promise);
+    return promise;
+  }
+
   async function getDetail(bangumiId) {
-    if (repository.hasCompletedDetail(bangumiId)) return repository.findById(bangumiId);
-    return fetchAndReplaceDetail(bangumiId);
+    const now = iso(clock());
+    const local = repository.findById(bangumiId);
+    const state = repository.findRefreshState(bangumiId);
+    const due = !state || state.nextRefreshAt <= now;
+
+    if (state?.lastSucceededAt) {
+      if (due) ensurePersistedMetadata([bangumiId], "detail");
+      return local;
+    }
+    if (!due) return local;
+
+    const ensured = ensureMetadata([bangumiId]);
+    if (!ensured?.dueIds?.includes(bangumiId)) return local;
+    return refreshDetail(bangumiId);
   }
 
   return {
     searchAndPersist,
+    persistSearchResults,
     getDetail,
-    refreshDetail: fetchAndReplaceDetail,
+    refreshDetail,
   };
+}
+
+export class DetailRefreshError extends Error {
+  constructor(cause, { refreshStateRecorded }) {
+    super(cause.message ?? String(cause), { cause });
+    this.name = "DetailRefreshError";
+    if (cause.code !== undefined) this.code = cause.code;
+    if (cause.path !== undefined) this.path = cause.path;
+    this.refreshStateRecorded = refreshStateRecorded;
+  }
 }

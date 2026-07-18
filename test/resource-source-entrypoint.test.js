@@ -44,9 +44,10 @@ test("background Bangumi search no longer triggers legacy FFZY matching or episo
 });
 
 test("independent Bangumi metadata scheduler and server startup remain wired", () => {
-  assert.match(entrypoint, /createProductionBangumiScheduler/);
-  assert.match(entrypoint, /bangumiScheduler\.start\(\)/);
-  assert.match(entrypoint, /bangumiScheduler\.startup\(\)/);
+  assert.match(entrypoint, /createBangumiRuntime/);
+  assert.match(entrypoint, /bangumiRuntime\.scheduler\.start\(\)/);
+  assert.match(entrypoint, /bangumiRuntime\.scheduler\.startup\(\)/);
+  assert.match(entrypoint, /metadataService:\s*bangumiRuntime\.metadataService/);
   assert.match(entrypoint, /createServer/);
   assert.match(entrypoint, /app\.listen/);
 });
