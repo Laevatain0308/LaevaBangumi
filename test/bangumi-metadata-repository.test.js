@@ -144,7 +144,7 @@ test("detail snapshot replaces owned relations and preserves a missing weekday",
   });
 });
 
-test("detail snapshot clears missing detail-owned fields and child relations", (t) => {
+test("detail snapshot preserves a valid air date while clearing other missing detail fields", (t) => {
   const { repository } = createRepository(t);
   repository.mergeSummary(summary(), { now: NOW });
   repository.replaceDetail({ subject: { bangumiId: 1, name: "Sparse Detail" } }, { now: LATER, nextRefreshAt: NEXT });
@@ -152,12 +152,32 @@ test("detail snapshot clears missing detail-owned fields and child relations", (
   const result = repository.findById(1);
   assert.equal(result.subject.nameCn, null);
   assert.equal(result.subject.summary, null);
-  assert.equal(result.subject.airDate, null);
+  assert.equal(result.subject.airDate, "2026-07-01");
   assert.equal(result.subject.airWeekday, 3);
   assert.equal(result.images, null);
   assert.equal(result.rating, null);
   assert.deepEqual(result.tags, []);
   assert.deepEqual(result.infobox, []);
+});
+
+test("summary and detail writes normalize valid dates and ignore invalid replacements", (t) => {
+  const { repository } = createRepository(t);
+  repository.mergeSummary(summary(), { now: NOW });
+
+  repository.mergeSearchResults([
+    { subject: { bangumiId: 1, name: "Existing", airDate: "" } },
+  ], { now: LATER });
+  assert.equal(repository.findById(1).subject.airDate, "2026-07-01");
+
+  repository.replaceDetail({
+    subject: { bangumiId: 1, name: "Existing", airDate: "0000-00-00" },
+  }, { now: LATER, nextRefreshAt: NEXT });
+  assert.equal(repository.findById(1).subject.airDate, "2026-07-01");
+
+  repository.mergeSearchResults([
+    { subject: { bangumiId: 1, name: "Existing", airDate: " 2026-08 " } },
+  ], { now: LATER });
+  assert.equal(repository.findById(1).subject.airDate, "2026-08");
 });
 
 test("detail snapshot clears child columns omitted from present objects", (t) => {

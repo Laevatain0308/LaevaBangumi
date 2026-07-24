@@ -1,3 +1,5 @@
+import { parseAirDate } from "../lib/airDate.js";
+
 const SUBJECT_COLUMNS = {
   name: "name",
   nameCn: "name_cn",
@@ -45,6 +47,15 @@ const COLLECTION_COLUMNS = {
 function databaseValue(key, value) {
   if (["series", "locked", "nsfw"].includes(key) && value !== null) return value ? 1 : 0;
   return value;
+}
+
+function normalizedSubjectAirDate(subject) {
+  if (!Object.hasOwn(subject, "airDate")) return subject;
+  const parsed = parseAirDate(subject.airDate);
+  if (parsed) return { ...subject, airDate: parsed.value };
+  const copy = { ...subject };
+  delete copy.airDate;
+  return copy;
 }
 
 function upsertSubject(sqlite, subject, now) {
@@ -165,7 +176,7 @@ function replaceInfobox(sqlite, bangumiId, infobox) {
 
 function mergeSummaryInternal(sqlite, metadata, now) {
   const bangumiId = metadata.subject.bangumiId;
-  upsertSubject(sqlite, metadata.subject, now);
+  upsertSubject(sqlite, normalizedSubjectAirDate(metadata.subject), now);
   if (metadata.images !== undefined) writeImages(sqlite, bangumiId, metadata.images);
   if (metadata.rating !== undefined) writeRating(sqlite, bangumiId, metadata.rating);
   if (metadata.collection !== undefined) writeCollection(sqlite, bangumiId, metadata.collection);
@@ -177,6 +188,10 @@ function mergeSummaryInternal(sqlite, metadata, now) {
 function detailSubject(metadata) {
   const subject = { bangumiId: metadata.subject.bangumiId, name: metadata.subject.name };
   for (const key of DETAIL_OWNED_SUBJECT_FIELDS) {
+    if (key === "airDate") {
+      if (Object.hasOwn(metadata.subject, key)) subject[key] = metadata.subject[key];
+      continue;
+    }
     subject[key] = Object.hasOwn(metadata.subject, key) ? metadata.subject[key] : null;
   }
   if (Object.hasOwn(metadata.subject, "airWeekday")) subject.airWeekday = metadata.subject.airWeekday;
@@ -193,7 +208,7 @@ function completeObject(value, keys, defaultValue) {
 
 function replaceDetailInternal(sqlite, metadata, { now, nextRefreshAt }) {
   const bangumiId = metadata.subject.bangumiId;
-  upsertSubject(sqlite, detailSubject(metadata), now);
+  upsertSubject(sqlite, normalizedSubjectAirDate(detailSubject(metadata)), now);
   writeImages(sqlite, bangumiId, metadata.images == null
     ? null
     : completeObject(metadata.images, Object.keys(IMAGE_COLUMNS), null));
