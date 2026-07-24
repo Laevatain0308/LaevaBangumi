@@ -400,5 +400,61 @@ export const bangumiCalendarSyncState = sqliteTable("bangumi_calendar_sync_state
   lastError: text("last_error"),
 });
 
+export const normalizedSourceItems = sqliteTable("source_items", {
+  sourceKey: text("source_key").notNull(),
+  sourceItemId: text("source_item_id").notNull(),
+  title: text("title").notNull(),
+  year: text("year"),
+  sourceUpdatedAt: text("source_updated_at"),
+  firstSeenAt: text("first_seen_at").notNull(),
+  lastFetchedAt: text("last_fetched_at").notNull(),
+  detailFetchedAt: text("detail_fetched_at"),
+}, (table) => [primaryKey({ columns: [table.sourceKey, table.sourceItemId] })]);
+
+export const bangumiResourceMappings = sqliteTable("bangumi_resource_mappings", {
+  bangumiId: integer("bangumi_id").notNull().references(() => bangumiSubjects.bangumiId),
+  sourceKey: text("source_key").notNull(),
+  sourceItemId: text("source_item_id").notNull(),
+  sourceEpisodeStart: integer("source_episode_start"),
+  sourceEpisodeEnd: integer("source_episode_end"),
+}, (table) => [
+  primaryKey({ columns: [table.bangumiId, table.sourceKey] }),
+  foreignKey({
+    columns: [table.sourceKey, table.sourceItemId],
+    foreignColumns: [normalizedSourceItems.sourceKey, normalizedSourceItems.sourceItemId],
+  }),
+  check("bangumi_resource_mappings_interval_check", sql`
+    (${table.sourceEpisodeStart} IS NULL AND ${table.sourceEpisodeEnd} IS NULL)
+    OR (
+      ${table.sourceEpisodeStart} IS NOT NULL
+      AND ${table.sourceEpisodeStart} >= 1
+      AND (${table.sourceEpisodeEnd} IS NULL OR ${table.sourceEpisodeEnd} >= ${table.sourceEpisodeStart})
+    )
+  `),
+  index("idx_bangumi_resource_mappings_source_item").on(table.sourceKey, table.sourceItemId),
+]);
+
+export const autoMatchSchedule = sqliteTable("auto_match_schedule", {
+  bangumiId: integer("bangumi_id").notNull().references(() => bangumiSubjects.bangumiId),
+  sourceKey: text("source_key").notNull(),
+  eligibleOn: text("eligible_on").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.bangumiId, table.sourceKey] }),
+  index("idx_auto_match_schedule_eligible").on(table.eligibleOn, table.sourceKey, table.bangumiId),
+]);
+
+export const autoMatchExclusions = sqliteTable("auto_match_exclusions", {
+  bangumiId: integer("bangumi_id").notNull().references(() => bangumiSubjects.bangumiId),
+  sourceKey: text("source_key").notNull(),
+  sourceItemId: text("source_item_id").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.bangumiId, table.sourceKey, table.sourceItemId] }),
+  foreignKey({
+    columns: [table.sourceKey, table.sourceItemId],
+    foreignColumns: [normalizedSourceItems.sourceKey, normalizedSourceItems.sourceItemId],
+  }),
+  index("idx_auto_match_exclusions_source_item").on(table.sourceKey, table.sourceItemId),
+]);
+
 /** 允许进入 subjects 表并参与番剧同步的 platform 值 */
 export const ANIME_PLATFORMS = new Set(["TV", "WEB", "OVA", "剧场版"]);

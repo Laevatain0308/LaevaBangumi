@@ -4,6 +4,7 @@ import * as schema from "./schema.js";
 import { initAccountSyncSchema } from "./accountSyncSchema.js";
 import { initBangumiMetadataSchema } from "./bangumiMetadataSchema.js";
 import { initResourceSourceSchema } from "./resourceSourceSchema.js";
+import { initMappingSchema } from "./mappingSchema.js";
 
 const DEFAULT_DB_PATH = new URL("../../data/anime.db", import.meta.url).pathname;
 
@@ -242,5 +243,6 @@ export function initDb(connection = sqlite, { legacy = true } = {}) {
   if (legacy) initLegacySchema(connection);
   initResourceSourceSchema(connection);
   initBangumiMetadataSchema(connection);
+  initMappingSchema(connection);
   initAccountSyncSchema(connection);
 }
