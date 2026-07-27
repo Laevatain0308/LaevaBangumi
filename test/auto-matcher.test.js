@@ -36,7 +36,12 @@ function resource(overrides = {}) {
   };
 }
 
-function createFixture({ subjects = [subject()], resources = [resource()], initialized = true } = {}) {
+function createFixture({
+  subjects = [subject()],
+  resources = [resource()],
+  initialized = true,
+  matcherOptions = {},
+} = {}) {
   const mappings = new Map();
   const exclusions = new Set();
   const writes = [];
@@ -72,7 +77,12 @@ function createFixture({ subjects = [subject()], resources = [resource()], initi
       return { status: "created" };
     },
   };
-  const matcher = createAutoMatcher({ repository, mappingService, clock: () => NOW });
+  const matcher = createAutoMatcher({
+    repository,
+    mappingService,
+    clock: () => NOW,
+    ...matcherOptions,
+  });
   return { matcher, writes, mappings, exclusions };
 }
 
@@ -84,6 +94,24 @@ test("automatic matcher uses the configured conservative thresholds", () => {
     buildTitlePool({ primaryTitles: ["孤独摇滚"], aliases: [] }),
     buildTitlePool({ primaryTitles: ["孤独摇滚"], aliases: [] }),
   ), 1);
+});
+
+test("calibration may inject a name threshold without changing production defaults", () => {
+  assert.equal(createFixture({
+    resources: [resource({ title: "孤独摇滚2" })],
+  }).matcher.matchSubject({ bangumiId: 1, sourceKey: "ffzy" }).status, "unmatched");
+  assert.equal(createFixture({
+    resources: [resource({ title: "孤独摇滚2" })],
+    matcherOptions: { minNameScore: 0.75 },
+  }).matcher.matchSubject({ bangumiId: 1, sourceKey: "ffzy" }).status, "mapped");
+  assert.equal(createFixture({
+    resources: [resource({ title: "孤独摇滚2" })],
+    matcherOptions: { minNameScore: 0.79 },
+  }).matcher.matchSubject({ bangumiId: 1, sourceKey: "ffzy" }).status, "unmatched");
+  assert.throws(() => createFixture({
+    matcherOptions: { minNameScore: 2 },
+  }), /minNameScore/i);
+  assert.equal(AUTO_MATCH_MIN_NAME_SCORE, 0.80);
 });
 
 test("subject matching writes only a reciprocal unique eligible pair", () => {

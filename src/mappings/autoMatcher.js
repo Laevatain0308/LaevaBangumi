@@ -83,12 +83,24 @@ function resourcePool(resource) {
   return buildTitlePool({ primaryTitles: [resource.title], aliases: resource.aliases });
 }
 
-function gapIsClear(ranked) {
-  return ranked.length < 2 || ranked[0].score - ranked[1].score >= AUTO_MATCH_MIN_GAP;
-}
-
-export function createAutoMatcher({ repository, mappingService, clock = () => new Date() } = {}) {
+export function createAutoMatcher({
+  repository,
+  mappingService,
+  clock = () => new Date(),
+  minNameScore = AUTO_MATCH_MIN_NAME_SCORE,
+  minGap = AUTO_MATCH_MIN_GAP,
+} = {}) {
   if (!repository || !mappingService) throw new TypeError("auto matcher requires repository and mapping service");
+  if (typeof minNameScore !== "number" || minNameScore < 0 || minNameScore > 1) {
+    throw new TypeError("minNameScore must be between 0 and 1");
+  }
+  if (typeof minGap !== "number" || minGap < 0 || minGap > 1) {
+    throw new TypeError("minGap must be between 0 and 1");
+  }
+
+  function gapIsClear(ranked) {
+    return ranked.length < 2 || ranked[0].score - ranked[1].score >= minGap;
+  }
 
   function scoreNamePools(left, right) {
     let best = 0;
@@ -134,7 +146,7 @@ export function createAutoMatcher({ repository, mappingService, clock = () => ne
     ) return { ok: false, reason: "episode_overflow" };
 
     const score = scoreNamePools(left, right);
-    if (score < AUTO_MATCH_MIN_NAME_SCORE) return { ok: false, reason: "name_score_low" };
+    if (score < minNameScore) return { ok: false, reason: "name_score_low" };
     return { ok: true, score };
   }
 

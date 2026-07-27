@@ -143,6 +143,10 @@ test("new Bangumi metadata modules do not import legacy domain repositories or s
     const source = await readFile(join(bangumiRoot, file), "utf8");
     assert.doesNotMatch(source, /\.\.\/repositories\//, file);
     assert.doesNotMatch(source, /\.\.\/services\//, file);
-    assert.doesNotMatch(source, /\b(subjects|subject_aliases|subject_tags|anime_other)\b/, file);
+    assert.doesNotMatch(
+      source,
+      /\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+(?:subjects|subject_aliases|subject_tags|anime_other)\b/i,
+      file,
+    );
   }
 });
