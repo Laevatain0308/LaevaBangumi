@@ -13,7 +13,10 @@ test("production manifest loads the FFZY source without network access", async (
     logger: { log() {}, warn() {}, error() {} },
   });
 
-  assert.deepEqual(registry.list().map((source) => source.sourceKey), ["ffzy"]);
+  assert.deepEqual(registry.list().map(({ sourceKey, displayName }) => ({
+    sourceKey,
+    displayName,
+  })), [{ sourceKey: "ffzy", displayName: "非凡资源" }]);
   const source = registry.get("ffzy");
   for (const method of RESOURCE_SOURCE_PUBLIC_METHODS) {
     assert.equal(typeof source[method], "function", `${method} should be available`);

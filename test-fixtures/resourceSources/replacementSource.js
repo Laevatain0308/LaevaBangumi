@@ -5,6 +5,10 @@ export default class ReplacementSource extends FixtureSource {
     return "replacement";
   }
 
+  static get displayName() {
+    return "替换实例采集站";
+  }
+
   constructor(options) {
     super(options);
     const replacement = Object.create(new.target.prototype);

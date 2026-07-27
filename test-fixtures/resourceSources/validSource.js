@@ -5,6 +5,10 @@ export default class FixtureSource extends ResourceSource {
     return "fixture";
   }
 
+  static get displayName() {
+    return "测试采集站";
+  }
+
   async _initialize() { return this.#summary("initialize"); }
   async _update() { return this.#summary("update"); }
 
