@@ -136,6 +136,47 @@ test("detail replacement reports normalized matching-fact changes", (t) => {
   }).matchingFactsChanged, true);
 });
 
+test("detail replacement timestamps only new and changed episodes", (t) => {
+  const fixture = createFixture();
+  t.after(fixture.close);
+  fixture.repository.saveDetail(detail({ episodeCount: 3 }));
+
+  fixture.setNow("2026-07-15T03:00:00.000Z");
+  fixture.repository.saveDetail({
+    ...detail({ episodeCount: 3 }),
+    episodes: [
+      { episodeIndex: 1, title: "播放项 1", videoUrl: "https://example.invalid/1.m3u8" },
+      { episodeIndex: 2, title: "修正播放项 2", videoUrl: "https://example.invalid/2-fixed.m3u8" },
+      { episodeIndex: 4, title: "播放项 4", videoUrl: "https://example.invalid/4.m3u8" },
+    ],
+  });
+
+  assert.deepEqual(fixture.sqlite.prepare(`
+    SELECT episode_index, updated_at
+    FROM source_episodes
+    WHERE source_key = 'ffzy' AND source_item_id = '98509'
+    ORDER BY episode_index
+  `).all(), [
+    { episode_index: 1, updated_at: "2026-07-15T00:00:00.000Z" },
+    { episode_index: 2, updated_at: "2026-07-15T03:00:00.000Z" },
+    { episode_index: 4, updated_at: "2026-07-15T03:00:00.000Z" },
+  ]);
+});
+
+test("identical detail refresh preserves every episode timestamp", (t) => {
+  const fixture = createFixture();
+  t.after(fixture.close);
+  fixture.repository.saveDetail(detail({ episodeCount: 2 }));
+  fixture.setNow("2026-07-16T00:00:00.000Z");
+  fixture.repository.saveDetail(detail({ episodeCount: 2 }));
+
+  assert.deepEqual(fixture.sqlite.prepare(`
+    SELECT DISTINCT updated_at
+    FROM source_episodes
+    WHERE source_key = 'ffzy' AND source_item_id = '98509'
+  `).all(), [{ updated_at: "2026-07-15T00:00:00.000Z" }]);
+});
+
 test("detail write is atomic", (t) => {
   const fixture = createFixture();
   t.after(fixture.close);

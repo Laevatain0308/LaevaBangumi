@@ -85,9 +85,9 @@ export function createFFZYRepository({
       video_url = excluded.video_url,
       updated_at = excluded.updated_at
   `);
-  const deleteEpisodes = sqlite.prepare(`
+  const deleteEpisode = sqlite.prepare(`
     DELETE FROM source_episodes
-    WHERE source_key = ? AND source_item_id = ?
+    WHERE source_key = ? AND source_item_id = ? AND episode_index = ?
   `);
   const deleteFailure = sqlite.prepare(`
     DELETE FROM source_detail_failures
@@ -153,31 +153,44 @@ export function createFFZYRepository({
       WHERE source_key = ? AND source_item_id = ?
     `).get(sourceKey, detail.sourceItemId);
     const oldAliases = aliasesFor(sqlite, sourceKey, detail.sourceItemId).slice().sort();
-    const oldEpisodeCount = sqlite.prepare(`
-      SELECT COUNT(*) AS count FROM source_episodes
+    const oldEpisodes = sqlite.prepare(`
+      SELECT episode_index, title, video_url, updated_at FROM source_episodes
       WHERE source_key = ? AND source_item_id = ?
-    `).get(sourceKey, detail.sourceItemId).count;
+    `).all(sourceKey, detail.sourceItemId);
     const newAliases = [...new Set(detail.aliases)].sort();
     const matchingFactsChanged = oldItem?.detail_fetched_at == null
       || oldItem.title !== detail.title
       || oldItem.year !== detail.year
-      || oldEpisodeCount !== detail.episodes.length
+      || oldEpisodes.length !== detail.episodes.length
       || oldAliases.length !== newAliases.length
       || oldAliases.some((alias, index) => alias !== newAliases[index]);
 
     upsertItem.run({ ...detail, sourceKey, now, detailFetchedAt: now });
     deleteAliases.run(sourceKey, detail.sourceItemId);
     for (const alias of detail.aliases) insertAlias.run(sourceKey, detail.sourceItemId, alias);
-    deleteEpisodes.run(sourceKey, detail.sourceItemId);
+    const oldEpisodesByIndex = new Map(oldEpisodes.map((item) => [item.episode_index, item]));
+    const retainedIndexes = new Set();
     for (const item of detail.episodes) {
+      retainedIndexes.add(item.episodeIndex);
+      const oldEpisode = oldEpisodesByIndex.get(item.episodeIndex);
+      const updatedAt = oldEpisode
+        && oldEpisode.title === item.title
+        && oldEpisode.video_url === item.videoUrl
+        ? oldEpisode.updated_at
+        : now;
       upsertEpisode.run(
         sourceKey,
         detail.sourceItemId,
         item.episodeIndex,
         item.title,
         item.videoUrl,
-        now,
+        updatedAt,
       );
+    }
+    for (const oldEpisode of oldEpisodes) {
+      if (!retainedIndexes.has(oldEpisode.episode_index)) {
+        deleteEpisode.run(sourceKey, detail.sourceItemId, oldEpisode.episode_index);
+      }
     }
     deleteFailure.run(sourceKey, detail.sourceItemId);
     return { savedEpisodes: detail.episodes.length, matchingFactsChanged };
