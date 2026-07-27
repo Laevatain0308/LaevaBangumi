@@ -13,6 +13,16 @@ test("application entrypoint loads the production resource-source registry and s
   assert.match(entrypoint, /resourceScheduler\.start\(\)/);
 });
 
+test("application entrypoint wires mapping events after discovering source keys", () => {
+  assert.match(entrypoint, /createMappingRuntime/);
+  assert.match(entrypoint, /resourceSourceRegistry\.list\(\)\.map/);
+  assert.match(entrypoint, /onSynchronized:\s*mappingRuntime\.onSourceSynchronized/);
+  assert.match(entrypoint, /onSubjectsPersisted:\s*mappingRuntime\.onSubjectsPersisted/);
+  assert.match(entrypoint, /onDetailPersisted:\s*mappingRuntime\.onDetailPersisted/);
+  assert.match(entrypoint, /mappingRuntime\.start\(\)/);
+  assert.match(entrypoint, /mappingRuntime\.startup\(\)/);
+});
+
 test("manual --sync is the only resource-source initialization path", () => {
   assert.match(entrypoint, /process\.argv\.includes\("--sync"\)/);
   assert.match(entrypoint, /resourceScheduler\.runInitializations\("manual"\)/);
