@@ -25,6 +25,38 @@ function unique(values) {
   return [...new Set(values)];
 }
 
+function reviewWhere({ sourceKey, name, year, bangumiId } = {}, { mapped }) {
+  if (typeof sourceKey !== "string" || !sourceKey.trim()) {
+    throw new TypeError("review query requires sourceKey");
+  }
+  const clauses = [
+    "r.last_succeeded_at IS NOT NULL",
+    mapped
+      ? "m.source_key = @sourceKey"
+      : `NOT EXISTS (
+        SELECT 1 FROM bangumi_resource_mappings x
+        WHERE x.bangumi_id = s.bangumi_id AND x.source_key = @sourceKey
+      )`,
+  ];
+  const params = { sourceKey: sourceKey.trim() };
+  if (name) {
+    clauses.push(`(
+      instr(lower(COALESCE(s.name_cn, '')), lower(@name)) > 0
+      OR instr(lower(s.name), lower(@name)) > 0
+    )`);
+    params.name = name;
+  }
+  if (year) {
+    clauses.push("substr(s.air_date, 1, 4) = @year");
+    params.year = year;
+  }
+  if (bangumiId) {
+    clauses.push("s.bangumi_id = @bangumiId");
+    params.bangumiId = bangumiId;
+  }
+  return { sql: clauses.join(" AND "), params };
+}
+
 export function createMappingRepository({ sqlite } = {}) {
   if (!sqlite?.prepare || !sqlite?.transaction) {
     throw new TypeError("mapping repository requires a better-sqlite3 connection");
@@ -264,6 +296,50 @@ export function createMappingRepository({ sqlite } = {}) {
     `).all(bangumiId).map(scheduleFromRow);
   }
 
+  function listUnmappedReviewSubjects(filters) {
+    const where = reviewWhere(filters, { mapped: false });
+    return sqlite.prepare(`
+      SELECT s.bangumi_id, COALESCE(s.name_cn, s.name) AS title, s.air_date
+      FROM bangumi_subjects s
+      JOIN bangumi_subject_refresh_state r ON r.bangumi_id = s.bangumi_id
+      WHERE ${where.sql}
+      ORDER BY s.bangumi_id
+    `).all(where.params).map((row) => ({
+      bangumiId: row.bangumi_id,
+      title: row.title,
+      airDate: row.air_date,
+    }));
+  }
+
+  function listMappedReviewRows(filters) {
+    const where = reviewWhere(filters, { mapped: true });
+    return sqlite.prepare(`
+      SELECT
+        s.bangumi_id,
+        COALESCE(s.name_cn, s.name) AS title,
+        s.air_date,
+        m.source_item_id,
+        i.title AS source_title,
+        m.source_episode_start,
+        m.source_episode_end
+      FROM bangumi_resource_mappings m
+      JOIN bangumi_subjects s ON s.bangumi_id = m.bangumi_id
+      JOIN bangumi_subject_refresh_state r ON r.bangumi_id = s.bangumi_id
+      JOIN source_items i
+        ON i.source_key = m.source_key AND i.source_item_id = m.source_item_id
+      WHERE ${where.sql}
+      ORDER BY s.bangumi_id
+    `).all(where.params).map((row) => ({
+      bangumiId: row.bangumi_id,
+      title: row.title,
+      airDate: row.air_date,
+      sourceItemId: row.source_item_id,
+      sourceTitle: row.source_title,
+      sourceEpisodeStart: row.source_episode_start,
+      sourceEpisodeEnd: row.source_episode_end,
+    }));
+  }
+
   return Object.freeze({
     transaction,
     findMapping,
@@ -285,5 +361,7 @@ export function createMappingRepository({ sqlite } = {}) {
     deleteSchedule,
     listDueSchedules,
     listSchedulesForSubject,
+    listUnmappedReviewSubjects,
+    listMappedReviewRows,
   });
 }
