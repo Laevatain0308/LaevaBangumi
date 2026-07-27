@@ -29,8 +29,14 @@ function createRepository(overrides = {}) {
     listDueDetailFailures() { return []; },
     listDetailFailureIds() { return []; },
     listChangedItemIds(items) { return items.map((item) => item.sourceItemId); },
+    listChangedMatchFactItemIds(items) { return items.map((item) => item.sourceItemId); },
+    listMatchableItemIds(ids) { return [...new Set(ids)].sort(); },
     saveCatalogItems(items) { calls.catalog.push(items); return items.length; },
     saveDetail(detail) { calls.details.push(detail); return detail.episodes.length; },
+    saveDetailWithChanges(detail) {
+      calls.details.push(detail);
+      return { savedEpisodes: detail.episodes.length, matchingFactsChanged: true };
+    },
     recordDetailFailure(id, error) { calls.failures.push({ id, error }); },
     markSuccess(operation, state) { calls.success.push({ operation, state }); },
     markFailed(operation, error) { calls.failed.push({ operation, error }); },
@@ -66,6 +72,7 @@ test("uninitialized update skips without touching FFZY", async () => {
 
   assert.equal(summary.fetchedItems, 0);
   assert.equal(summary.savedItems, 0);
+  assert.deepEqual(summary.changedItemIds, []);
   assert.equal(repository.calls.running.length, 0);
   assert.equal(repository.calls.skipped.length, 1);
 });
@@ -84,7 +91,7 @@ test("incremental update retries due details before reading catalog", async () =
   });
 
   await createSource({ client, repository }).update();
-  assert.deepEqual(order.slice(0, 2), ["detail:due-1", "catalog:29"]);
+  assert.deepEqual(order.slice(0, 2), ["detail:due-1", "catalog:30"]);
   assert.deepEqual(repository.calls.details.map((detail) => detail.sourceItemId), ["due-1"]);
 });
 
@@ -93,7 +100,7 @@ test("incremental pages stop after crossing the five-minute overlap", async () =
   const client = {
     async fetchCatalogXml({ categoryId, page }) {
       catalogCalls.push({ categoryId, page });
-      if (categoryId !== "29") return catalogXml({ categoryId, items: [] });
+      if (categoryId !== "30") return catalogXml({ categoryId, items: [] });
       if (page === 1) return catalogXml({
         categoryId,
         page,
@@ -112,9 +119,7 @@ test("incremental pages stop after crossing the five-minute overlap", async () =
 
   await createSource({ client, repository }).update();
   assert.deepEqual(catalogCalls, [
-    { categoryId: "29", page: 1 },
     { categoryId: "30", page: 1 },
-    { categoryId: "31", page: 1 },
   ]);
   assert.deepEqual(repository.calls.catalog[0].map((item) => item.sourceItemId), ["new", "overlap"]);
 });
@@ -125,7 +130,7 @@ test("incremental update hydrates changed items and catalog failures that are st
     async fetchCatalogXml({ categoryId }) {
       return catalogXml({
         categoryId,
-        items: categoryId === "29" ? [
+        items: categoryId === "30" ? [
           { id: "unchanged", last: "2026-07-15 08:10:00" },
           { id: "changed", last: "2026-07-15 08:09:00" },
           { id: "backoff", last: "2026-07-15 08:08:00" },
@@ -136,11 +141,13 @@ test("incremental update hydrates changed items and catalog failures that are st
   };
   const repository = createRepository({
     listChangedItemIds() { return ["changed"]; },
+    listChangedMatchFactItemIds() { return ["changed"]; },
     listDetailFailureIds() { return ["backoff", "not-in-catalog"]; },
   });
 
-  await createSource({ client, repository }).update();
+  const result = await createSource({ client, repository }).update();
   assert.deepEqual(detailCalls.flat().sort(), ["backoff", "changed"]);
+  assert.deepEqual(result.changedItemIds, ["backoff", "changed"]);
 });
 
 test("remote detail failure is queued while a complete catalog advances the watermark", async () => {
@@ -148,7 +155,7 @@ test("remote detail failure is queued while a complete catalog advances the wate
     async fetchCatalogXml({ categoryId }) {
       return catalogXml({
         categoryId,
-        items: categoryId === "29" ? [{ id: "changed", last: "2026-07-15 08:30:00" }] : [],
+        items: categoryId === "30" ? [{ id: "changed", last: "2026-07-15 08:30:00" }] : [],
       });
     },
     async fetchDetailXml() {
@@ -188,7 +195,7 @@ test("catalog failure and database failure both preserve the old watermark", asy
     async fetchCatalogXml({ categoryId }) {
       return catalogXml({
         categoryId,
-        items: categoryId === "29" ? [{ id: "new", last: "2026-07-15 08:30:00" }] : [],
+        items: categoryId === "30" ? [{ id: "new", last: "2026-07-15 08:30:00" }] : [],
       });
     },
     async fetchDetailXml(ids) { return detailXml(ids); },
@@ -205,7 +212,7 @@ test("incremental pagination drift fails without advancing the watermark", async
   const repository = createRepository();
   const client = {
     async fetchCatalogXml({ categoryId, page }) {
-      if (categoryId === "29" && page === 1) {
+      if (categoryId === "30" && page === 1) {
         return catalogXml({
           categoryId,
           page,
@@ -213,7 +220,7 @@ test("incremental pagination drift fails without advancing the watermark", async
           items: [{ id: "1", last: "2026-07-15 08:30:00" }],
         });
       }
-      if (categoryId === "29" && page === 2) {
+      if (categoryId === "30" && page === 2) {
         return catalogXml({
           categoryId,
           page,
@@ -235,7 +242,7 @@ test("incremental pagination drift fails without advancing the watermark", async
 
 test("local hooks and explicit fetch delegate without implicit persistence", async () => {
   const client = {
-    async fetchCatalogXml() { return catalogXml({ categoryId: "29", items: [] }); },
+    async fetchCatalogXml() { return catalogXml({ categoryId: "30", items: [] }); },
     async fetchDetailXml(ids) { return detailXml(ids); },
   };
   const repository = createRepository({

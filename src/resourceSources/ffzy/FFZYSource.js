@@ -3,7 +3,7 @@ import { createFFZYClient } from "./ffzyClient.js";
 import { parseCatalogXml, parseDetailXml } from "./ffzyParser.js";
 import { createFFZYRepository } from "./ffzyRepository.js";
 
-const CATEGORY_IDS = Object.freeze(["29", "30", "31"]);
+const CATEGORY_IDS = Object.freeze(["30"]);
 const DETAIL_BATCH_SIZE = 20;
 const DETAIL_CONCURRENCY = 2;
 const BATCH_START_INTERVAL_MS = 500;
@@ -28,6 +28,7 @@ function summary(sourceKey, operation, startedAt, finishedAt, stats = {}) {
     fetchedEpisodes: stats.fetchedEpisodes ?? 0,
     savedEpisodes: stats.savedEpisodes ?? 0,
     failedItems: stats.failedItems ?? 0,
+    changedItemIds: stats.changedItemIds ?? [],
   };
 }
 
@@ -174,9 +175,10 @@ export default class FFZYSource extends ResourceSource {
   #saveFetchedDetail(run, detail) {
     if (run.stopped) return;
     try {
-      const savedEpisodes = this.repository.saveDetail(detail);
+      const { savedEpisodes, matchingFactsChanged } = this.repository.saveDetailWithChanges(detail);
       run.fetchedEpisodes += detail.episodes.length;
       run.savedEpisodes += savedEpisodes;
+      if (matchingFactsChanged) run.matchingFactsChangedItemIds.add(detail.sourceItemId);
     } catch (databaseError) {
       this.#stopForDatabaseFailure(run, databaseError);
       throw databaseError;
@@ -249,6 +251,7 @@ export default class FFZYSource extends ResourceSource {
       fetchedEpisodes: 0,
       savedEpisodes: 0,
       failedItems: 0,
+      matchingFactsChangedItemIds: new Set(),
     };
     const batches = [];
     for (let index = 0; index < sourceItemIds.length; index += DETAIL_BATCH_SIZE) {
@@ -324,6 +327,7 @@ export default class FFZYSource extends ResourceSource {
 
       const catalog = await this.#fetchIncrementalCatalog(state.watermarkAt);
       const changedIds = this.repository.listChangedItemIds(catalog.items);
+      const changedMatchFactIds = this.repository.listChangedMatchFactItemIds(catalog.items);
       const failureIds = new Set(this.repository.listDetailFailureIds());
       const catalogIds = new Set(catalog.items.map((item) => item.sourceItemId));
       const hydrationIds = [...new Set([
@@ -332,6 +336,11 @@ export default class FFZYSource extends ResourceSource {
       ])];
       const savedItems = this.repository.saveCatalogItems(catalog.items);
       const catalogHydration = await this.#hydrateDetails(hydrationIds);
+      const changedItemIds = this.repository.listMatchableItemIds([
+        ...changedMatchFactIds,
+        ...dueHydration.matchingFactsChangedItemIds,
+        ...catalogHydration.matchingFactsChangedItemIds,
+      ]);
 
       this.repository.markSuccess(operation, { watermarkAt: catalog.watermarkAt });
       return summary(this.sourceKey, operation, startedAt, this.#now(), {
@@ -340,6 +349,7 @@ export default class FFZYSource extends ResourceSource {
         fetchedEpisodes: dueHydration.fetchedEpisodes + catalogHydration.fetchedEpisodes,
         savedEpisodes: dueHydration.savedEpisodes + catalogHydration.savedEpisodes,
         failedItems: dueHydration.failedItems + catalogHydration.failedItems,
+        changedItemIds,
       });
     } catch (error) {
       try {

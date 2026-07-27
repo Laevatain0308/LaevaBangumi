@@ -38,6 +38,7 @@ export default class FixtureSource extends ResourceSource {
       fetchedEpisodes: 0,
       savedEpisodes: 0,
       failedItems: 0,
+      changedItemIds: [],
     };
   }
 }

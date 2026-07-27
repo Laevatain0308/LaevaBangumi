@@ -23,7 +23,7 @@ function createCron() {
   };
 }
 
-function createScheduler(sources, cron = createCron()) {
+function createScheduler(sources, cron = createCron(), onSynchronized = () => {}) {
   const logs = [];
   const errors = [];
   return {
@@ -37,6 +37,7 @@ function createScheduler(sources, cron = createCron()) {
         log(scope, message, meta) { logs.push({ scope, message, meta }); },
         error(scope, message, meta) { errors.push({ scope, message, meta }); },
       },
+      onSynchronized,
     }),
   };
 }
@@ -128,4 +129,45 @@ test("scheduled callback delegates to registry updates", async () => {
   fixture.scheduler.start();
   await fixture.cron.calls[0].handler();
   assert.equal(updates, 1);
+});
+
+test("successful source operations publish changed IDs without changing their result", async () => {
+  const notifications = [];
+  const initializeSummary = { operation: "initialize", changedItemIds: [] };
+  const updateSummary = { operation: "update", changedItemIds: ["100", "200"] };
+  const fixture = createScheduler([{
+    sourceKey: "ffzy",
+    async initialize() { return initializeSummary; },
+    async update() { return updateSummary; },
+  }], createCron(), async (event) => { notifications.push(event); });
+
+  assert.deepEqual(await fixture.scheduler.runInitializations("startup"), [{
+    sourceKey: "ffzy",
+    status: "fulfilled",
+    value: initializeSummary,
+  }]);
+  assert.deepEqual(await fixture.scheduler.runUpdates("test"), [{
+    sourceKey: "ffzy",
+    status: "fulfilled",
+    value: updateSummary,
+  }]);
+  assert.deepEqual(notifications, [
+    { sourceKey: "ffzy", operation: "initialize", changedItemIds: [] },
+    { sourceKey: "ffzy", operation: "update", changedItemIds: ["100", "200"] },
+  ]);
+});
+
+test("mapping notification failure is logged without rejecting source synchronization", async () => {
+  const summary = { operation: "update", changedItemIds: ["100"] };
+  const fixture = createScheduler([{
+    sourceKey: "ffzy",
+    async initialize() {},
+    async update() { return summary; },
+  }], createCron(), async () => { throw new Error("mapping unavailable"); });
+
+  assert.equal((await fixture.scheduler.runUpdates("test"))[0].status, "fulfilled");
+  assert.ok(fixture.errors.some(({ message, meta }) => (
+    message === "synchronization callback failed"
+    && meta.message === "mapping unavailable"
+  )));
 });

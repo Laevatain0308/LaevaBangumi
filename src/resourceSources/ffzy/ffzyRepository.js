@@ -72,6 +72,10 @@ export function createFFZYRepository({
     VALUES (?, ?, ?)
     ON CONFLICT(source_key, source_item_id, alias) DO NOTHING
   `);
+  const deleteAliases = sqlite.prepare(`
+    DELETE FROM source_item_aliases
+    WHERE source_key = ? AND source_item_id = ?
+  `);
   const upsertEpisode = sqlite.prepare(`
     INSERT INTO source_episodes (
       source_key, source_item_id, episode_index, title, video_url, updated_at
@@ -80,6 +84,10 @@ export function createFFZYRepository({
       title = excluded.title,
       video_url = excluded.video_url,
       updated_at = excluded.updated_at
+  `);
+  const deleteEpisodes = sqlite.prepare(`
+    DELETE FROM source_episodes
+    WHERE source_key = ? AND source_item_id = ?
   `);
   const deleteFailure = sqlite.prepare(`
     DELETE FROM source_detail_failures
@@ -112,9 +120,55 @@ export function createFFZYRepository({
     }).map((item) => item.sourceItemId);
   }
 
+  function listChangedMatchFactItemIds(items) {
+    const getExisting = sqlite.prepare(`
+      SELECT title, year FROM source_items
+      WHERE source_key = ? AND source_item_id = ?
+    `);
+    return items.filter((item) => {
+      const row = getExisting.get(sourceKey, item.sourceItemId);
+      return !row || row.title !== item.title || row.year !== item.year;
+    }).map((item) => item.sourceItemId);
+  }
+
+  function listMatchableItemIds(ids) {
+    const isMatchable = sqlite.prepare(`
+      SELECT 1 FROM source_items i
+      WHERE i.source_key = ? AND i.source_item_id = ?
+        AND i.detail_fetched_at IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM source_episodes e
+          WHERE e.source_key = i.source_key
+            AND e.source_item_id = i.source_item_id
+        )
+    `);
+    return [...new Set(ids)]
+      .filter((sourceItemId) => isMatchable.get(sourceKey, sourceItemId))
+      .sort();
+  }
+
   const saveDetailTransaction = sqlite.transaction((detail, now) => {
+    const oldItem = sqlite.prepare(`
+      SELECT title, year, detail_fetched_at FROM source_items
+      WHERE source_key = ? AND source_item_id = ?
+    `).get(sourceKey, detail.sourceItemId);
+    const oldAliases = aliasesFor(sqlite, sourceKey, detail.sourceItemId).slice().sort();
+    const oldEpisodeCount = sqlite.prepare(`
+      SELECT COUNT(*) AS count FROM source_episodes
+      WHERE source_key = ? AND source_item_id = ?
+    `).get(sourceKey, detail.sourceItemId).count;
+    const newAliases = [...new Set(detail.aliases)].sort();
+    const matchingFactsChanged = oldItem?.detail_fetched_at == null
+      || oldItem.title !== detail.title
+      || oldItem.year !== detail.year
+      || oldEpisodeCount !== detail.episodes.length
+      || oldAliases.length !== newAliases.length
+      || oldAliases.some((alias, index) => alias !== newAliases[index]);
+
     upsertItem.run({ ...detail, sourceKey, now, detailFetchedAt: now });
+    deleteAliases.run(sourceKey, detail.sourceItemId);
     for (const alias of detail.aliases) insertAlias.run(sourceKey, detail.sourceItemId, alias);
+    deleteEpisodes.run(sourceKey, detail.sourceItemId);
     for (const item of detail.episodes) {
       upsertEpisode.run(
         sourceKey,
@@ -126,11 +180,15 @@ export function createFFZYRepository({
       );
     }
     deleteFailure.run(sourceKey, detail.sourceItemId);
+    return { savedEpisodes: detail.episodes.length, matchingFactsChanged };
   });
 
+  function saveDetailWithChanges(detail) {
+    return saveDetailTransaction(detail, nowIso(clock));
+  }
+
   function saveDetail(detail) {
-    saveDetailTransaction(detail, nowIso(clock));
-    return detail.episodes.length;
+    return saveDetailWithChanges(detail).savedEpisodes;
   }
 
   function getItem(sourceItemId) {
@@ -301,6 +359,9 @@ export function createFFZYRepository({
   return Object.freeze({
     saveCatalogItems,
     listChangedItemIds,
+    listChangedMatchFactItemIds,
+    listMatchableItemIds,
+    saveDetailWithChanges,
     saveDetail,
     searchItems,
     getItem,

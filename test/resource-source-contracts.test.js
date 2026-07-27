@@ -100,11 +100,14 @@ test("execution summary matches the source and lifecycle operation", () => {
     fetchedEpisodes: 4,
     savedEpisodes: 4,
     failedItems: 0,
+    changedItemIds: ["200", "100", "200"],
   };
-  assert.deepEqual(validateExecutionSummary(summary, {
+  const normalized = validateExecutionSummary(summary, {
     sourceKey: "fixture",
     operation: "update",
-  }), summary);
+  });
+  assert.deepEqual(normalized, { ...summary, changedItemIds: ["100", "200"] });
+  assert.equal(Object.isFrozen(normalized.changedItemIds), true);
   assert.throws(() => validateExecutionSummary({ ...summary, operation: "initialize" }, {
     sourceKey: "fixture",
     operation: "update",
@@ -117,4 +120,8 @@ test("execution summary matches the source and lifecycle operation", () => {
     sourceKey: "fixture",
     operation: "bogus",
   }), /operation.*initialize.*update/i);
+  assert.throws(() => validateExecutionSummary({ ...summary, changedItemIds: ["100", " "] }, {
+    sourceKey: "fixture",
+    operation: "update",
+  }), /changedItemIds\[1\].*non-empty string/i);
 });

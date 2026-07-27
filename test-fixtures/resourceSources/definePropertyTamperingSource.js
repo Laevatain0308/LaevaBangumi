@@ -36,6 +36,7 @@ export default class DefinePropertyTamperingSource extends FixtureSource {
       fetchedEpisodes: 0,
       savedEpisodes: 0,
       failedItems: 0,
+      changedItemIds: [],
     };
   }
 }

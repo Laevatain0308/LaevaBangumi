@@ -19,6 +19,7 @@ const EXECUTION_SUMMARY_KEYS = [
   "fetchedEpisodes",
   "savedEpisodes",
   "failedItems",
+  "changedItemIds",
 ];
 
 function fail(label, message) {
@@ -209,6 +210,12 @@ export function validateExecutionSummary(value, { sourceKey, operation } = {}) {
     fail("execution summary.operation", "must be initialize or update");
   }
   if (actualOperation !== operation) fail("execution summary.operation", `must equal ${operation}`);
+  if (!Array.isArray(summary.changedItemIds)) {
+    fail("execution summary.changedItemIds", "must be an array");
+  }
+  const changedItemIds = Object.freeze([...new Set(summary.changedItemIds.map((id, index) => (
+    requiredString(id, `execution summary.changedItemIds[${index}]`).trim()
+  )))].sort());
   return {
     sourceKey: actualSourceKey,
     operation: actualOperation,
@@ -219,5 +226,6 @@ export function validateExecutionSummary(value, { sourceKey, operation } = {}) {
     fetchedEpisodes: nonNegativeInteger(summary.fetchedEpisodes, "execution summary.fetchedEpisodes"),
     savedEpisodes: nonNegativeInteger(summary.savedEpisodes, "execution summary.savedEpisodes"),
     failedItems: nonNegativeInteger(summary.failedItems, "execution summary.failedItems"),
+    changedItemIds,
   };
 }

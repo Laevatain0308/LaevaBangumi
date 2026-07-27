@@ -1,6 +1,11 @@
 export const RESOURCE_SOURCE_SYNC_CRON_EXPRESSION = "0 */6 * * *";
 
-export function createResourceSourceScheduler({ registry, cron, logger } = {}) {
+export function createResourceSourceScheduler({
+  registry,
+  cron,
+  logger,
+  onSynchronized = () => {},
+} = {}) {
   if (!registry || typeof registry.list !== "function") {
     throw new TypeError("resource source scheduler requires a registry");
   }
@@ -30,6 +35,19 @@ export function createResourceSourceScheduler({ registry, cron, logger } = {}) {
         const value = await source[operation]();
         results.push({ sourceKey, status: "fulfilled", value });
         writeLog("resource-source", `${operation} completed`, { sourceKey, trigger, value });
+        try {
+          await onSynchronized({
+            sourceKey,
+            operation,
+            changedItemIds: value?.changedItemIds ?? [],
+          });
+        } catch (error) {
+          writeError("resource-source", "synchronization callback failed", {
+            sourceKey,
+            operation,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
       } catch (error) {
         results.push({ sourceKey, status: "rejected", reason: error });
         writeError("resource-source", `${operation} failed`, {

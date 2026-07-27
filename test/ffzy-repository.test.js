@@ -57,6 +57,26 @@ test("catalog upsert preserves first observation and reports changed IDs", (t) =
   });
 });
 
+test("catalog hydration changes are separate from automatic-match fact changes", (t) => {
+  const fixture = createFixture();
+  t.after(fixture.close);
+  fixture.repository.saveCatalogItems([
+    item,
+    { ...item, sourceItemId: "no-episodes" },
+  ]);
+  fixture.repository.saveDetail(detail());
+
+  assert.deepEqual(fixture.repository.listMatchableItemIds([
+    "missing", "98509", "no-episodes", "98509",
+  ]), ["98509"]);
+  const timestampOnly = { ...item, sourceUpdatedAt: "2026-07-25T00:00:00.000Z" };
+  assert.deepEqual(fixture.repository.listChangedItemIds([timestampOnly]), ["98509"]);
+  assert.deepEqual(fixture.repository.listChangedMatchFactItemIds([timestampOnly]), []);
+  assert.deepEqual(fixture.repository.listChangedMatchFactItemIds([
+    { ...timestampOnly, title: "更新标题" },
+  ]), ["98509"]);
+});
+
 test("catalog updates do not clear detail timestamps aliases or episodes", (t) => {
   const fixture = createFixture();
   t.after(fixture.close);
@@ -72,26 +92,48 @@ test("catalog updates do not clear detail timestamps aliases or episodes", (t) =
   `).get().detail_fetched_at, "2026-07-15T00:00:00.000Z");
 });
 
-test("detail upsert merges aliases and overwrites without deleting absent episode indexes", (t) => {
+test("detail replacement reports normalized matching-fact changes", (t) => {
   const fixture = createFixture();
   t.after(fixture.close);
-  fixture.repository.saveDetail(detail({ aliases: ["Nanoha", "奈叶"], episodeCount: 3 }));
+  assert.deepEqual(
+    fixture.repository.saveDetailWithChanges(detail({ aliases: ["Nanoha", "奈叶"], episodeCount: 3 })),
+    { savedEpisodes: 3, matchingFactsChanged: true },
+  );
   fixture.setNow("2026-07-15T03:00:00.000Z");
-  fixture.repository.saveDetail({
+  assert.deepEqual(fixture.repository.saveDetailWithChanges({
+    ...detail({ aliases: ["奈叶", "Nanoha"], episodeCount: 3 }),
+    episodes: detail({ episodeCount: 3 }).episodes.map((episode) => ({
+      ...episode,
+      title: `新${episode.title}`,
+      videoUrl: `${episode.videoUrl}?updated=1`,
+    })),
+  }), { savedEpisodes: 3, matchingFactsChanged: false });
+
+  assert.deepEqual(fixture.repository.saveDetailWithChanges({
     ...detail({ aliases: ["魔法少女"], episodeCount: 2 }),
     episodes: [
       { episodeIndex: 1, title: "新顺序 1", videoUrl: "https://example.invalid/new-1.m3u8" },
       { episodeIndex: 2, title: "新顺序 2", videoUrl: "https://example.invalid/new-2.m3u8" },
     ],
-  });
+  }), { savedEpisodes: 2, matchingFactsChanged: true });
 
-  assert.deepEqual(fixture.repository.getItem("98509").aliases, ["Nanoha", "奈叶", "魔法少女"]);
-  assert.deepEqual(fixture.repository.getEpisodes("98509").map((episode) => episode.episodeIndex), [1, 2, 3]);
+  assert.deepEqual(fixture.repository.getItem("98509").aliases, ["魔法少女"]);
+  assert.deepEqual(fixture.repository.getEpisodes("98509").map((episode) => episode.episodeIndex), [1, 2]);
   assert.deepEqual(fixture.repository.getEpisode("98509", 1), {
     episodeIndex: 1,
     title: "新顺序 1",
     videoUrl: "https://example.invalid/new-1.m3u8",
   });
+
+  assert.equal(fixture.repository.saveDetailWithChanges({
+    ...detail({ aliases: ["魔法少女"], episodeCount: 2 }),
+    title: "更新标题",
+  }).matchingFactsChanged, true);
+  assert.equal(fixture.repository.saveDetailWithChanges({
+    ...detail({ aliases: ["魔法少女"], episodeCount: 2 }),
+    title: "更新标题",
+    year: "2027",
+  }).matchingFactsChanged, true);
 });
 
 test("detail write is atomic", (t) => {

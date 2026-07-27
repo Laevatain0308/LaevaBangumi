@@ -89,6 +89,7 @@ class FakeSource extends ResourceSource {
       fetchedEpisodes: 1,
       savedEpisodes: 1,
       failedItems: 0,
+      changedItemIds: [],
     };
   }
 }

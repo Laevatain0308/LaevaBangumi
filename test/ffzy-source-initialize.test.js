@@ -24,11 +24,17 @@ function createRepository(overrides = {}) {
     markRunning(operation) { calls.running.push(operation); },
     saveCatalogItems(items) { calls.catalog.push(items); return items.length; },
     saveDetail(detail) { calls.details.push(detail); return detail.episodes.length; },
+    saveDetailWithChanges(detail) {
+      calls.details.push(detail);
+      return { savedEpisodes: detail.episodes.length, matchingFactsChanged: true };
+    },
     recordDetailFailure(id, error) { calls.failures.push({ id, error }); },
     markSuccess(operation, state) { calls.success.push({ operation, state }); },
     markFailed(operation, error) { calls.failed.push({ operation, error }); },
     getSyncState() { return { initialized: false, watermarkAt: null }; },
     listChangedItemIds(items) { return items.map((item) => item.sourceItemId); },
+    listChangedMatchFactItemIds(items) { return items.map((item) => item.sourceItemId); },
+    listMatchableItemIds(ids) { return [...new Set(ids)].sort(); },
     listDueDetailFailures() { return []; },
     listDetailFailureIds() { return []; },
     markSkipped() {},
@@ -52,16 +58,16 @@ function createSource({ client, repository, sleep = async () => {}, random = () 
   });
 }
 
-test("initialize reads every page of anime categories and persists deduplicated details", async () => {
+test("initialize reads every tid=30 page without requesting tid=29 or tid=31", async () => {
   const catalogCalls = [];
   const detailCalls = [];
   const client = {
     async fetchCatalogXml({ categoryId, page }) {
       catalogCalls.push({ categoryId, page });
-      if (categoryId === "29") {
-        return catalogXml({ categoryId, page, pageCount: 2, ids: page === 1 ? ["shared", "29-a"] : ["29-b"] });
+      if (categoryId === "30") {
+        return catalogXml({ categoryId, page, pageCount: 2, ids: page === 1 ? ["shared", "30-a"] : ["30-b"] });
       }
-      return catalogXml({ categoryId, page, ids: categoryId === "30" ? ["shared", "30-a"] : ["31-a"] });
+      return catalogXml({ categoryId, page, ids: [] });
     },
     async fetchDetailXml(ids) {
       detailCalls.push(ids);
@@ -72,16 +78,14 @@ test("initialize reads every page of anime categories and persists deduplicated 
   const summary = await createSource({ client, repository }).initialize();
 
   assert.deepEqual(catalogCalls, [
-    { categoryId: "29", page: 1 },
-    { categoryId: "29", page: 2 },
     { categoryId: "30", page: 1 },
-    { categoryId: "31", page: 1 },
+    { categoryId: "30", page: 2 },
   ]);
   assert.deepEqual(repository.calls.catalog[0].map((row) => row.sourceItemId).sort(), [
-    "29-a", "29-b", "30-a", "31-a", "shared",
+    "30-a", "30-b", "shared",
   ]);
-  assert.equal(detailCalls.flat().length, 5);
-  assert.equal(repository.calls.details.length, 5);
+  assert.equal(detailCalls.flat().length, 3);
+  assert.equal(repository.calls.details.length, 3);
   assert.deepEqual(repository.calls.success, [{
     operation: "initialize",
     state: { initialized: true, watermarkAt: "2026-07-11T17:00:00.000Z" },
@@ -91,11 +95,12 @@ test("initialize reads every page of anime categories and persists deduplicated 
     operation: "initialize",
     startedAt: "2026-07-15T00:00:00.000Z",
     finishedAt: "2026-07-15T00:00:00.000Z",
-    fetchedItems: 5,
-    savedItems: 5,
-    fetchedEpisodes: 5,
-    savedEpisodes: 5,
+    fetchedItems: 3,
+    savedItems: 3,
+    fetchedEpisodes: 3,
+    savedEpisodes: 3,
     failedItems: 0,
+    changedItemIds: [],
   });
 });
 
@@ -103,8 +108,8 @@ test("initialize fails when any required catalog page is unavailable", async () 
   const repository = createRepository();
   const client = {
     async fetchCatalogXml({ categoryId, page }) {
-      if (categoryId === "29" && page === 2) throw new Error("catalog page unavailable");
-      return catalogXml({ categoryId, page, pageCount: categoryId === "29" ? 2 : 1, ids: [categoryId] });
+      if (categoryId === "30" && page === 2) throw new Error("catalog page unavailable");
+      return catalogXml({ categoryId, page, pageCount: categoryId === "30" ? 2 : 1, ids: [categoryId] });
     },
     async fetchDetailXml(ids) { return detailXml(ids); },
   };
@@ -119,10 +124,10 @@ test("initialize rejects pagination metadata that changes before the final page"
   const repository = createRepository();
   const client = {
     async fetchCatalogXml({ categoryId, page }) {
-      if (categoryId === "29" && page === 1) {
+      if (categoryId === "30" && page === 1) {
         return catalogXml({ categoryId, page, pageCount: 3, ids: ["1"] });
       }
-      if (categoryId === "29" && page === 2) {
+      if (categoryId === "30" && page === 2) {
         return catalogXml({ categoryId, page, pageCount: 1, ids: ["2"] });
       }
       return catalogXml({ categoryId, page, ids: [] });
@@ -145,7 +150,7 @@ test("detail batches use 20 IDs, two concurrent requests, and 500ms start spacin
   const ids = Array.from({ length: 41 }, (_, index) => String(index + 1));
   const client = {
     async fetchCatalogXml({ categoryId }) {
-      return catalogXml({ categoryId, ids: categoryId === "29" ? ids : [] });
+      return catalogXml({ categoryId, ids: categoryId === "30" ? ids : [] });
     },
     async fetchDetailXml(batch) {
       detailCalls.push(batch);
@@ -173,7 +178,7 @@ test("retryable detail failures wait 5s and 30s before succeeding", async () => 
   let attempts = 0;
   const client = {
     async fetchCatalogXml({ categoryId }) {
-      return catalogXml({ categoryId, ids: categoryId === "29" ? ["1"] : [] });
+      return catalogXml({ categoryId, ids: categoryId === "30" ? ["1"] : [] });
     },
     async fetchDetailXml(ids) {
       attempts += 1;
@@ -201,7 +206,7 @@ test("a missing batch item waits briefly and falls back to a single-ID request",
   const detailCalls = [];
   const client = {
     async fetchCatalogXml({ categoryId }) {
-      return catalogXml({ categoryId, ids: categoryId === "29" ? ["1", "2"] : [] });
+      return catalogXml({ categoryId, ids: categoryId === "30" ? ["1", "2"] : [] });
     },
     async fetchDetailXml(ids) {
       detailCalls.push(ids);
@@ -223,7 +228,7 @@ test("a missing batch item waits briefly and falls back to a single-ID request",
 test("permanent remote detail failure is queued without failing initialization", async () => {
   const client = {
     async fetchCatalogXml({ categoryId }) {
-      return catalogXml({ categoryId, ids: categoryId === "29" ? ["1"] : [] });
+      return catalogXml({ categoryId, ids: categoryId === "30" ? ["1"] : [] });
     },
     async fetchDetailXml() {
       throw new FFZYRequestError("not found", { status: 404, retryable: false });
@@ -240,7 +245,7 @@ test("one invalid detail is queued without discarding valid details from the sam
   const detailCalls = [];
   const client = {
     async fetchCatalogXml({ categoryId }) {
-      return catalogXml({ categoryId, ids: categoryId === "29" ? ["good", "bad"] : [] });
+      return catalogXml({ categoryId, ids: categoryId === "30" ? ["good", "bad"] : [] });
     },
     async fetchDetailXml(ids) {
       detailCalls.push(ids);
@@ -265,7 +270,7 @@ test("database failure stops new detail batches and fails the complete initializ
   const detailCalls = [];
   const client = {
     async fetchCatalogXml({ categoryId }) {
-      return catalogXml({ categoryId, ids: categoryId === "29" ? ids : [] });
+      return catalogXml({ categoryId, ids: categoryId === "30" ? ids : [] });
     },
     async fetchDetailXml(batch) {
       detailCalls.push(batch);
@@ -273,7 +278,7 @@ test("database failure stops new detail batches and fails the complete initializ
     },
   };
   const repository = createRepository({
-    saveDetail() { throw new Error("disk full"); },
+    saveDetailWithChanges() { throw new Error("disk full"); },
   });
 
   await assert.rejects(() => createSource({ client, repository }).initialize(), /disk full/);
