@@ -14,6 +14,8 @@ export function createBangumiRuntime({
   logger = {},
   clock = () => new Date(),
   client = createBangumiMetadataClient(),
+  onSubjectsPersisted = () => {},
+  onDetailPersisted = () => {},
 }) {
   const writeError = logger.error ?? (() => {});
   const repository = createBangumiRepository(sqlite);
@@ -33,6 +35,8 @@ export function createBangumiRuntime({
     client,
     repository,
     ensureMetadata: metadataEnsureService.ensure,
+    onSubjectsPersisted,
+    onDetailPersisted,
     clock,
     logger,
   });
@@ -40,6 +44,7 @@ export function createBangumiRuntime({
     client,
     repository,
     ensureMetadata: metadataEnsureService.ensure,
+    onSubjectsPersisted,
     clock,
     logger,
   });

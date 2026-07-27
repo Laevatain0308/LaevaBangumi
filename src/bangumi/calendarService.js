@@ -10,6 +10,7 @@ export function createBangumiCalendarService({
   client,
   repository,
   ensureMetadata = () => {},
+  onSubjectsPersisted = () => {},
   clock = () => new Date(),
   logger = {},
 }) {
@@ -67,8 +68,23 @@ export function createBangumiCalendarService({
       throw error;
     }
 
+    const ids = entries.map(({ metadata }) => metadata.subject.bangumiId);
     try {
-      ensureMetadata(entries.map(({ metadata }) => metadata.subject.bangumiId));
+      const notification = onSubjectsPersisted(ids);
+      if (notification && typeof notification.then === "function") {
+        notification.catch((error) => {
+          writeError("bangumi-mapping-notify", "subjects persisted callback failed", {
+            message: error.message ?? String(error),
+          });
+        });
+      }
+    } catch (error) {
+      writeError("bangumi-mapping-notify", "subjects persisted callback failed", {
+        message: error.message ?? String(error),
+      });
+    }
+    try {
+      ensureMetadata(ids);
     } catch (error) {
       writeError("bangumi-calendar", "metadata ensure failed", {
         message: error.message ?? String(error),

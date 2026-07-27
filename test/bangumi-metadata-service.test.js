@@ -25,7 +25,7 @@ function anime(id, extra = {}) {
   };
 }
 
-function setup(t, overrides = {}) {
+function setup(t, overrides = {}, serviceOverrides = {}) {
   const { sqlite, close } = createTestDatabase();
   t.after(close);
   const calls = [];
@@ -67,6 +67,7 @@ function setup(t, overrides = {}) {
       log(scope, message, meta) { logs.push({ scope, message, meta }); },
       error(scope, message, meta) { logs.push({ scope, message, meta }); },
     },
+    ...serviceOverrides,
   });
   return {
     calls,
@@ -110,6 +111,40 @@ test("search persists valid anime summaries and rejects all other types", async 
   assert.ok(context.logs.every((entry) => entry.meta.path === "$.type"));
 });
 
+test("search publishes committed summary IDs before starting detail discovery", async (t) => {
+  const events = [];
+  const context = setup(t, {
+    async searchSubjects() {
+      return { data: [anime(1, { air_date: "2027-01-01" }), anime(4)] };
+    },
+  }, {
+    onSubjectsPersisted(ids) {
+      events.push(`notified:${ids.join(",")}`);
+      throw new Error("mapping unavailable");
+    },
+    ensureMetadata(ids) {
+      events.push(`ensured:${ids.join(",")}`);
+      return { ensuredIds: ids, newlyDueIds: ids, dueIds: ids };
+    },
+  });
+  const merge = context.repository.mergeSearchResults.bind(context.repository);
+  context.repository.mergeSearchResults = (...args) => {
+    events.push("persisted");
+    return merge(...args);
+  };
+
+  assert.deepEqual(await context.service.searchAndPersist("future"), {
+    received: 2,
+    persisted: 2,
+    rejected: 0,
+  });
+  assert.deepEqual(events, ["persisted", "notified:1,4", "ensured:1,4"]);
+  assert.ok(context.logs.some((entry) => (
+    entry.scope === "bangumi-mapping-notify"
+    && entry.message === "subjects persisted callback failed"
+  )));
+});
+
 test("first detail read fetches full metadata and later reads the cache", async (t) => {
   const context = setup(t);
   context.repository.mergeSummary({ subject: { bangumiId: 1, name: "Summary" } }, { now: NOW });
@@ -125,6 +160,30 @@ test("first detail read fetches full metadata and later reads the cache", async 
   const second = await context.service.getDetail(1);
   assert.equal(context.detailCalls, 1);
   assert.deepEqual(second, first);
+});
+
+test("detail publishes only persisted facts and isolates mapping callback failure", async (t) => {
+  const events = [];
+  const context = setup(t, {}, {
+    onDetailPersisted(bangumiId) {
+      events.push(`notified:${bangumiId}`);
+      throw new Error("mapping unavailable");
+    },
+  });
+  const replace = context.repository.replaceDetail.bind(context.repository);
+  context.repository.replaceDetail = (...args) => {
+    events.push("persisted");
+    return replace(...args);
+  };
+
+  const result = await context.service.refreshDetail(1);
+  assert.equal(result.subject.summary, "full detail");
+  assert.deepEqual(events, ["persisted", "notified:1"]);
+  assert.equal(context.repository.findRefreshState(1).consecutiveFailures, 0);
+  assert.ok(context.logs.some((entry) => (
+    entry.scope === "bangumi-mapping-notify"
+    && entry.message === "detail persisted callback failed"
+  )));
 });
 
 test("detail fetch validates the requested ID before writing", async (t) => {

@@ -13,12 +13,31 @@ export function createBangumiMetadataService({
   client,
   repository,
   ensureMetadata = () => ({ ensuredIds: [], newlyDueIds: [], dueIds: [] }),
+  onSubjectsPersisted = () => {},
+  onDetailPersisted = () => {},
   clock = () => new Date(),
   logger = {},
 }) {
   const writeLog = logger.log ?? (() => {});
   const writeError = logger.error ?? (() => {});
   const activeDetails = new Map();
+
+  function notifyMapping(callback, value, message) {
+    try {
+      const result = callback(value);
+      if (result && typeof result.then === "function") {
+        result.catch((error) => {
+          writeError("bangumi-mapping-notify", message, {
+            message: error.message ?? String(error),
+          });
+        });
+      }
+    } catch (error) {
+      writeError("bangumi-mapping-notify", message, {
+        message: error.message ?? String(error),
+      });
+    }
+  }
 
   function ensurePersistedMetadata(ids, scope) {
     try {
@@ -50,7 +69,9 @@ export function createBangumiMetadataService({
 
     if (valid.length > 0) {
       repository.mergeSearchResults(valid, { now: iso(clock()) });
-      ensurePersistedMetadata(valid.map(({ subject }) => subject.bangumiId), "search metadata");
+      const ids = valid.map(({ subject }) => subject.bangumiId);
+      notifyMapping(onSubjectsPersisted, ids, "subjects persisted callback failed");
+      ensurePersistedMetadata(ids, "search metadata");
     }
     return { received: items.length, persisted: valid.length, rejected };
   }
@@ -70,6 +91,7 @@ export function createBangumiMetadataService({
       const now = iso(nowDate);
       const nextRefreshAt = new Date(new Date(now).getTime() + BANGUMI_DETAIL_REFRESH_INTERVAL_MS).toISOString();
       const result = repository.replaceDetail(normalizeSubject(response), { now, nextRefreshAt });
+      notifyMapping(onDetailPersisted, bangumiId, "detail persisted callback failed");
       writeLog("bangumi-metadata", "detail fetch completed", { bangumiId, nextRefreshAt });
       return result;
     } catch (error) {
