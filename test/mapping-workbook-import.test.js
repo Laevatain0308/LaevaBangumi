@@ -163,3 +163,58 @@ test("damaged workbook metadata aborts before any mapping call", async (t) => {
   );
   assert.equal(fixture.repository.findMapping({ bangumiId: 1, sourceKey: "ffzy" }), null);
 });
+
+test("binary round trip preserves text IDs and imports edited closed and open segments", async (t) => {
+  const longId = "9007199254740993";
+  const leadingZeroId = "00123";
+  const fixture = await createFixture(t, {
+    subjects: [20, 21, 22],
+    sources: [longId, leadingZeroId],
+    mappings: [
+      mapping(20, leadingZeroId),
+      mapping(21, longId, 1, 12),
+      mapping(22, longId, 14, null),
+    ],
+  });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(fixture.inputPath);
+  const mapped = workbook.getWorksheet(MAPPED_SHEET);
+  assert.deepEqual(mapped.getColumn(4).values.slice(2), [leadingZeroId, longId, longId]);
+  assert.equal(mapped.getCell("D2").numFmt, "@");
+  assert.equal(mapped.getCell("D3").numFmt, "@");
+  mapped.getCell("G3").value = 13;
+  mapped.getCell("F4").value = 15;
+  await workbook.xlsx.writeFile(fixture.inputPath);
+
+  const reopened = new ExcelJS.Workbook();
+  await reopened.xlsx.readFile(fixture.inputPath);
+  assert.equal(reopened.getWorksheet(METADATA_SHEET).state, "veryHidden");
+  assert.deepEqual(
+    reopened.worksheets.filter(({ state }) => state === "visible").map(({ name }) => name),
+    [PENDING_SHEET, MAPPED_SHEET],
+  );
+  for (const sheetName of [PENDING_SHEET, MAPPED_SHEET]) {
+    const sheet = reopened.getWorksheet(sheetName);
+    for (let row = 1; row <= sheet.rowCount; row += 1) {
+      for (let column = 1; column <= 7; column += 1) {
+        assert.equal(typeof sheet.getCell(row, column).value === "object"
+          && sheet.getCell(row, column).value?.formula != null, false);
+      }
+    }
+  }
+  assert.deepEqual(reopened.getWorksheet(MAPPED_SHEET).getColumn(4).values.slice(2), [
+    leadingZeroId, longId, longId,
+  ]);
+
+  const report = await fixture.service.importWorkbook({ inputPath: fixture.inputPath });
+  assert.equal(report.replaced, 2);
+  assert.equal(report.failed, 0);
+  assert.deepEqual(fixture.repository.listMappingsForSourceItem({
+    sourceKey: "ffzy",
+    sourceItemId: longId,
+  }), [mapping(21, longId, 1, 13), mapping(22, longId, 15, null)]);
+  assert.equal(
+    fixture.repository.findMapping({ bangumiId: 20, sourceKey: "ffzy" }).sourceItemId,
+    leadingZeroId,
+  );
+});
