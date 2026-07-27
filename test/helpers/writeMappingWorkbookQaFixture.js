@@ -1,4 +1,3 @@
-import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
 import { createMappingWorkbookService } from "../../src/mappings/mappingWorkbookService.js";
@@ -70,18 +69,4 @@ export async function writeMappingWorkbookQaFixture({ outputDir, activeSheet }) 
   workbook.views = [{ activeTab: activeSheet === PENDING_SHEET ? 0 : 1 }];
   await workbook.xlsx.writeFile(outputPath);
   return outputPath;
-}
-
-async function main() {
-  const outputDir = process.argv[2];
-  if (!outputDir) throw new Error("output directory is required");
-  console.log(await writeMappingWorkbookQaFixture({ outputDir, activeSheet: PENDING_SHEET }));
-  console.log(await writeMappingWorkbookQaFixture({ outputDir, activeSheet: MAPPED_SHEET }));
-}
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    console.error(error.message ?? String(error));
-    process.exitCode = 1;
-  });
 }
