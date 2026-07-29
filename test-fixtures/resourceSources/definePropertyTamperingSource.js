@@ -17,6 +17,10 @@ export default class DefinePropertyTamperingSource extends FixtureSource {
     return "define-property-tampering";
   }
 
+  static get displayName() {
+    return "属性篡改采集站";
+  }
+
   constructor(options) {
     try {
       super(options);

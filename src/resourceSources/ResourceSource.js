@@ -74,6 +74,12 @@ export class ResourceSource {
         configurable: false,
         enumerable: true,
       },
+      displayName: {
+        value: this.constructor.displayName,
+        writable: false,
+        configurable: false,
+        enumerable: true,
+      },
     });
     for (let index = 0; index < RESOURCE_SOURCE_PUBLIC_METHODS.length; index += 1) {
       const method = RESOURCE_SOURCE_PUBLIC_METHODS[index];
@@ -91,8 +97,16 @@ export class ResourceSource {
     return null;
   }
 
+  static get displayName() {
+    return null;
+  }
+
   get sourceKey() {
     return this.constructor.sourceKey;
+  }
+
+  get displayName() {
+    return this.constructor.displayName;
   }
 
   async #invoke(operation, callback) {
@@ -220,6 +234,22 @@ export function assertResourceSourceClass(SourceClass) {
   if (typeof sourceKey !== "string" || sourceKey.trim() === "" || sourceKey !== sourceKey.trim()) {
     throw new TypeError("resource source subclass sourceKey must be a trimmed non-empty string");
   }
+  const displayNameDescriptor = getOwnPropertyDescriptor(SourceClass, "displayName");
+  if (
+    !displayNameDescriptor
+    || typeof displayNameDescriptor.get !== "function"
+    || displayNameDescriptor.set != null
+  ) {
+    throw new TypeError("resource source subclass must declare its own read-only static displayName getter");
+  }
+  const displayName = SourceClass.displayName;
+  if (
+    typeof displayName !== "string"
+    || displayName.trim() === ""
+    || displayName !== displayName.trim()
+  ) {
+    throw new TypeError("resource source subclass displayName must be a trimmed non-empty string");
+  }
 
   for (let index = 0; index < RESOURCE_SOURCE_PUBLIC_METHODS.length; index += 1) {
     const method = RESOURCE_SOURCE_PUBLIC_METHODS[index];
@@ -248,6 +278,9 @@ export function assertResourceSourceInstance(instance, SourceClass, { db, logger
   }
   if (instance.sourceKey !== SourceClass.sourceKey) {
     throw new TypeError("resource source instance sourceKey must match its subclass sourceKey");
+  }
+  if (instance.displayName !== SourceClass.displayName) {
+    throw new TypeError("resource source instance displayName must match its subclass displayName");
   }
   if (instance._db !== db || instance._logger !== logger) {
     throw new TypeError("resource source instance must retain injected infrastructure");

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const entrypoint = readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
-const searchService = readFileSync(new URL("../src/services/searchService.js", import.meta.url), "utf8");
 
 test("application entrypoint loads the production resource-source registry and scheduler", () => {
   assert.match(entrypoint, /loadResourceSourceRegistry/);
@@ -47,17 +46,17 @@ test("production entrypoint no longer wires the legacy FFZY resource pipeline", 
 });
 
 test("background Bangumi search no longer triggers legacy FFZY matching or episode refresh", () => {
-  assert.doesNotMatch(searchService, /resourceMatchService/);
-  assert.doesNotMatch(searchService, /ensureMappingForAnime/);
-  assert.doesNotMatch(searchService, /enqueueEpisodeRefresh/);
-  assert.doesNotMatch(searchService, /getEnabledSourceKeys/);
+  assert.match(entrypoint, /bangumiRuntime\.metadataService\.searchAndPersist/);
+  assert.match(entrypoint, /bangumi\/searchQueue\.js/);
+  assert.doesNotMatch(entrypoint, /services\/(anime|searchService|queue)\.js/);
 });
 
 test("independent Bangumi metadata scheduler and server startup remain wired", () => {
   assert.match(entrypoint, /createBangumiRuntime/);
   assert.match(entrypoint, /bangumiRuntime\.scheduler\.start\(\)/);
   assert.match(entrypoint, /bangumiRuntime\.scheduler\.startup\(\)/);
-  assert.match(entrypoint, /metadataService:\s*bangumiRuntime\.metadataService/);
+  assert.match(entrypoint, /createPublicApiRuntime/);
+  assert.match(entrypoint, /publicApiRuntime/);
   assert.match(entrypoint, /createServer/);
   assert.match(entrypoint, /app\.listen/);
 });

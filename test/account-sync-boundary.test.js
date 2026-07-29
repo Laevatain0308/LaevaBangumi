@@ -52,7 +52,7 @@ test("entrypoint shares one Bangumi runtime with account sync and detail ensure"
   const entrypoint = readFileSync(new URL("src/index.js", root), "utf8");
   assert.equal((entrypoint.match(/createBangumiRuntime\(/g) ?? []).length, 1);
   assert.match(entrypoint, /metadataEnsureService:\s*bangumiRuntime\.metadataEnsureService/);
-  assert.match(entrypoint, /ensureMetadata:\s*bangumiRuntime\.metadataEnsureService\.ensure/);
+  assert.match(entrypoint, /publicApiRuntime/);
 });
 
 test("legacy private sync implementation files are deleted", () => {

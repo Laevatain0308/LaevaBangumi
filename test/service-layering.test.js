@@ -6,147 +6,89 @@ import { join } from "node:path";
 
 const projectRoot = new URL("..", import.meta.url).pathname;
 
-test("anime service responsibilities are available from focused service modules", async () => {
-  const detailService = await import("../src/services/detailService.js");
-  const playService = await import("../src/services/playService.js");
-  const searchService = await import("../src/services/searchService.js");
-  const calendarService = await import("../src/services/calendarService.js");
-  const updateService = await import("../src/services/updateService.js");
-  const episodeRefreshService = await import("../src/services/episodeRefreshService.js");
-  const metadataRefreshService = await import("../src/services/metadataRefreshService.js");
-  const retryService = await import("../src/services/retryService.js");
-  const errorDto = await import("../src/dto/errorDto.js");
-  const calendarNormalizer = await import("../src/normalizers/bangumiCalendarNormalizer.js");
+const FORBIDDEN_PATHS = [
+  "config/cstations.json",
+  "src/clients/resourceClient.js",
+  "src/clients/resourceSources/ffzyClient.js",
+  "src/lib/cstationConfig.js",
+  "src/normalizers/bangumiCalendarNormalizer.js",
+  "src/normalizers/bangumiSubjectNormalizer.js",
+  "src/normalizers/resourceItemNormalizer.js",
+  "src/repositories/episodeRepository.js",
+  "src/repositories/resourceRepository.js",
+  "src/repositories/subjectRepository.js",
+  "src/repositories/syncRepository.js",
+  "src/repositories/tagRepository.js",
+  "src/services/anime.js",
+  "src/services/queue.js",
+];
 
-  assert.equal(typeof detailService.getAnimeDetail, "function");
-  assert.equal(typeof playService.getPlayUrl, "function");
-  assert.equal(typeof searchService.searchAnime, "function");
-  assert.equal(typeof searchService.searchAnimeByTag, "function");
-  assert.equal(typeof searchService.enrichFromBangumiSearch, "function");
-  assert.equal(typeof calendarService.getCalendarView, "function");
-  assert.equal(typeof updateService.getUpdates, "function");
-  assert.equal(typeof episodeRefreshService.refreshEpisodesForAnime, "function");
-  assert.equal(typeof metadataRefreshService.refreshSubjectMetadata, "function");
-  assert.equal(typeof retryService.retryPending, "function");
-  assert.equal(typeof errorDto.errorEnvelope, "function");
-  assert.equal(typeof calendarNormalizer.normalizeBangumiCalendar, "function");
+const FORBIDDEN_SCRIPTS = [
+  "prewarm:anime",
+  "export:manual-review",
+  "import:manual-review",
+  "export:mapped-review",
+  "import:mapped-review",
+  "export:ai-match-pack",
+  "validate:ai-match-suggestions",
+];
+
+async function listJavaScriptFiles(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(entries.map(async (entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return listJavaScriptFiles(path);
+    return entry.isFile() && entry.name.endsWith(".js") ? [path] : [];
+  }));
+  return nested.flat();
+}
+
+test("production composition is provided by the normalized domain modules", async () => {
+  const publicApi = await import("../src/runtime/publicApiRuntime.js");
+  const bangumi = await import("../src/runtime/bangumiRuntime.js");
+  const mapping = await import("../src/mappings/mappingRuntime.js");
+  const accountSync = await import("../src/runtime/accountSyncRuntime.js");
+  const ffzy = await import("../src/resourceSources/ffzy/FFZYSource.js");
+
+  assert.equal(typeof publicApi.createPublicApiRuntime, "function");
+  assert.equal(typeof bangumi.createBangumiRuntime, "function");
+  assert.equal(typeof mapping.createMappingRuntime, "function");
+  assert.equal(typeof accountSync.createAccountSyncRuntime, "function");
+  assert.equal(typeof ffzy.default, "function");
 });
 
-test("external source clients live outside service modules", async () => {
-  const bangumiClient = await import("../src/clients/bangumiClient.js");
-  const resourceClient = await import("../src/clients/resourceClient.js");
-  const ffzyClient = await import("../src/clients/resourceSources/ffzyClient.js");
-
-  assert.equal(typeof bangumiClient.getCalendar, "function");
-  assert.equal(typeof bangumiClient.searchSubjects, "function");
-  assert.equal(typeof bangumiClient.getSubject, "function");
-  assert.equal(typeof resourceClient.fetchById, "function");
-  assert.equal(typeof resourceClient.fetchCatalog, "function");
-  assert.equal(typeof ffzyClient.parseEpisodes, "function");
-});
-
-test("documented fixture files exist for external payload contracts", () => {
-  for (const file of [
-    "test/fixtures/bangumi-subject-detail.json",
-    "test/fixtures/bangumi-calendar.json",
-    "test/fixtures/resource-detail-ffzy.json",
-  ]) {
-    assert.equal(existsSync(join(projectRoot, file)), true, `${file} should exist`);
+test("obsolete runtime modules and configuration are absent", () => {
+  for (const path of FORBIDDEN_PATHS) {
+    assert.equal(existsSync(join(projectRoot, path)), false, path);
   }
 });
 
-test("repository responsibilities are split into documented modules", async () => {
-  const tagRepository = await import("../src/repositories/tagRepository.js");
-  const episodeRepository = await import("../src/repositories/episodeRepository.js");
-  const syncRepository = await import("../src/repositories/syncRepository.js");
-
-  assert.equal(typeof tagRepository.listSubjectTags, "function");
-  assert.equal(typeof episodeRepository.findEpisodeRawVideoUrl, "function");
-  assert.equal(typeof syncRepository.markResourceSyncStarted, "function");
-  assert.equal(typeof syncRepository.markResourceSyncFailed, "function");
-});
-
-test("legacy source service facade modules are removed", () => {
-  assert.equal(existsSync(join(projectRoot, "src/services/bangumi.js")), false);
-  assert.equal(existsSync(join(projectRoot, "src/services/cstation.js")), false);
-});
-
-test("service modules do not perform direct database access", async () => {
-  const serviceFiles = [
-    "animeShared.js",
-    "calendarService.js",
-    "catalog.js",
-    "detailService.js",
-    "episodeRefreshService.js",
-    "manualMatches.js",
-    "metadataRefreshService.js",
-    "playService.js",
-    "prewarmService.js",
-    "resourceMatchService.js",
-    "resourceStateService.js",
-    "retryService.js",
-    "searchService.js",
-    "subjectSyncService.js",
-    "updateService.js",
-  ];
-
-  for (const file of serviceFiles) {
-    const source = await readFile(join(projectRoot, "src/services", file), "utf8");
-    assert.equal(source.includes("sqlite.prepare"), false, `${file} should use repositories instead of sqlite.prepare`);
-    assert.equal(/\bdb\.(all|select|insert|update|delete)\b/.test(source), false, `${file} should use repositories instead of db.*`);
+test("package commands expose only supported server management workflows", async () => {
+  const packageJson = JSON.parse(await readFile(join(projectRoot, "package.json"), "utf8"));
+  for (const script of FORBIDDEN_SCRIPTS) {
+    assert.equal(Object.hasOwn(packageJson.scripts, script), false, script);
+  }
+  for (const script of ["start", "start:sync", "account", "mapping:analyze", "mapping", "test"]) {
+    assert.equal(typeof packageJson.scripts[script], "string", script);
   }
 });
 
-test("background discovery queues metadata refresh instead of fetching subject detail inline", async () => {
-  for (const file of ["searchService.js", "resourceMatchService.js"]) {
-    const source = await readFile(join(projectRoot, "src/services", file), "utf8");
-    assert.match(source, /enqueueMetadataRefresh/, `${file} should enqueue metadata refreshes`);
-    assert.doesNotMatch(source, /enrichFromSubject/, `${file} should not synchronously fetch Bangumi subject detail`);
-  }
-});
+test("production source contains no legacy imports or SQL table references", async () => {
+  const files = await listJavaScriptFiles(join(projectRoot, "src"));
+  const forbiddenImport = /(?:services\/(?:anime|queue)|repositories\/(?:episodeRepository|resourceRepository|subjectRepository|syncRepository|tagRepository)|normalizers\/(?:bangumiCalendarNormalizer|bangumiSubjectNormalizer|resourceItemNormalizer)|clients\/(?:resourceClient|resourceSources\/ffzyClient))\.js/;
+  const forbiddenSqlTable = /\b(?:FROM|JOIN|INTO|UPDATE|TABLE(?:\s+IF\s+NOT\s+EXISTS)?|REFERENCES|DELETE\s+FROM)\s+(?:anime_other|subjects|subject_aliases|tags|subject_tags|resource_sources|resource_items|resource_mappings|episodes|sync_state|retry_state|manual_resource_state)\b/i;
 
-test("resource service runtime naming uses sourceAid instead of cstationId", async () => {
-  for (const file of [
-    "episodeRefreshService.js",
-    "manualMatches.js",
-    "prewarmService.js",
-    "resourceMatchService.js",
-    "../scripts/prewarm-anime.js",
-  ]) {
-    const source = await readFile(join(projectRoot, "src/services", file), "utf8");
-    assert.doesNotMatch(source, /cstationId|matchedCsName/, `${file} should use sourceAid/resource names`);
-  }
-});
-
-test("legacy domains do not link to the new Bangumi metadata domain", async () => {
-  for (const file of [
-    "src/repositories/subjectRepository.js",
-    "src/repositories/tagRepository.js",
-    "src/repositories/resourceRepository.js",
-    "src/services/subjectSyncService.js",
-    "src/services/resourceMatchService.js",
-    "src/services/episodeRefreshService.js",
-    "src/services/searchService.js",
-    "src/services/detailService.js",
-    "src/services/calendarService.js",
-  ]) {
-    const source = await readFile(join(projectRoot, file), "utf8");
-    assert.doesNotMatch(source, /from ["'][^"']*\/bangumi\//, file);
-    assert.equal(source.includes("bangumi_subjects"), false, file);
-  }
-});
-
-test("new Bangumi metadata modules do not import legacy domain repositories or services", async () => {
-  const bangumiRoot = join(projectRoot, "src/bangumi");
-  const files = (await readdir(bangumiRoot)).filter((file) => file.endsWith(".js"));
   for (const file of files) {
-    const source = await readFile(join(bangumiRoot, file), "utf8");
-    assert.doesNotMatch(source, /\.\.\/repositories\//, file);
-    assert.doesNotMatch(source, /\.\.\/services\//, file);
-    assert.doesNotMatch(
-      source,
-      /\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+(?:subjects|subject_aliases|subject_tags|anime_other)\b/i,
-      file,
-    );
+    const source = await readFile(file, "utf8");
+    assert.doesNotMatch(source, forbiddenImport, file);
+    assert.doesNotMatch(source, forbiddenSqlTable, file);
+  }
+});
+
+test("normalized Bangumi domain does not depend on resource or account runtimes", async () => {
+  const bangumiRoot = join(projectRoot, "src/bangumi");
+  for (const file of await listJavaScriptFiles(bangumiRoot)) {
+    const source = await readFile(file, "utf8");
+    assert.doesNotMatch(source, /\.\.\/(?:mappings|resourceSources|sync|account|publicApi)\//, file);
   }
 });

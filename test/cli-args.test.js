@@ -34,10 +34,10 @@ test("parseCliArgs supports explicit boolean and numeric values", () => {
   assert.equal(getIntArg(args, "anime-id"), 400602);
 });
 
-test("package scripts expose prewarm and remove analyze unmatched", async () => {
+test("package scripts omit the retired prewarm command", async () => {
   const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
-  assert.equal(pkg.scripts["prewarm:anime"], "node src/scripts/prewarm-anime.js");
+  assert.equal("prewarm:anime" in pkg.scripts, false);
   assert.equal("analyze:unmatched" in pkg.scripts, false);
 });
 

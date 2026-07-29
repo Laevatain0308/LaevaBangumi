@@ -31,6 +31,10 @@ class FakeSource extends ResourceSource {
     return "fixture";
   }
 
+  static get displayName() {
+    return "测试采集站";
+  }
+
   calls = [];
   failOperation = null;
 
@@ -116,9 +120,11 @@ test("ResourceSource cannot be instantiated and keeps injected infrastructure im
   const logger = { name: "test-logger" };
   const source = new FakeSource({ db, logger });
   assert.equal(source.sourceKey, "fixture");
+  assert.equal(source.displayName, "测试采集站");
   assert.equal(source._db, db);
   assert.equal(source._logger, logger);
   assert.throws(() => { source._db = {}; }, TypeError);
+  assert.throws(() => { source.displayName = "已修改"; }, TypeError);
 });
 
 test("instance fields cannot override fixed public entry points", () => {

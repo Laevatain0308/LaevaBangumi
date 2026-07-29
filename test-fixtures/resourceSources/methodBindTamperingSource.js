@@ -7,4 +7,8 @@ export default class MethodBindTamperingSource extends FixtureSource {
   static get sourceKey() {
     return "method-bind-tampering";
   }
+
+  static get displayName() {
+    return "绑定篡改采集站";
+  }
 }

@@ -1,49 +1,65 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { findSubjectById, deleteSubjectById } from "../src/repositories/subjectRepository.js";
-import { enrichFromBangumiSearch } from "../src/services/searchService.js";
+import { createTestDatabase } from "./helpers/testDatabase.js";
+import { createBangumiRepository } from "../src/bangumi/repository.js";
+import { createBangumiMetadataService } from "../src/bangumi/metadataService.js";
 
-test("search persists the exact fetched subjects in both metadata domains without refetching", async (t) => {
-  const ids = [990571001, 990571002];
-  t.after(() => ids.forEach((id) => deleteSubjectById(id)));
-  const items = ids.map((id) => ({
+function anime(id) {
+  return {
     id,
     type: 2,
     name: `Search ${id}`,
     name_cn: `搜索 ${id}`,
     platform: "TV",
-  }));
-  let searchCalls = 0;
-  const persisted = [];
+  };
+}
 
-  const result = await enrichFromBangumiSearch("搜索", {
-    mediaType: "anime",
-    searchSubjects: async () => {
-      searchCalls += 1;
-      return { data: items };
-    },
-    metadataService: {
-      persistSearchResults(received) {
-        persisted.push(received);
-        return { received: received.length, persisted: received.length, rejected: 0 };
+test("remote search persists exact results only in the normalized Bangumi domain", async (t) => {
+  const { sqlite, close } = createTestDatabase();
+  t.after(close);
+  const repository = createBangumiRepository(sqlite);
+  const ensured = [];
+  const persisted = [];
+  let calls = 0;
+  const service = createBangumiMetadataService({
+    repository,
+    client: {
+      async search(keyword, options) {
+        calls += 1;
+        assert.equal(keyword, "搜索");
+        assert.deepEqual(options, { mediaType: "anime" });
+        return { data: [anime(990571001), anime(990571002)] };
       },
     },
+    ensureMetadata(ids) { ensured.push(ids); },
+    onSubjectsPersisted(ids) { persisted.push(ids); },
+    clock: () => new Date("2026-07-28T00:00:00.000Z"),
   });
 
-  assert.equal(searchCalls, 1);
-  assert.deepEqual(persisted, [items]);
-  assert.equal(result.upserted, 2);
-  assert.equal(findSubjectById(ids[0]).name_cn, `搜索 ${ids[0]}`);
-  assert.equal(findSubjectById(ids[1]).name_cn, `搜索 ${ids[1]}`);
+  const result = await service.searchAndPersist("搜索", { mediaType: "anime" });
+  assert.equal(calls, 1);
+  assert.deepEqual(result, { received: 2, persisted: 2, rejected: 0 });
+  assert.equal(repository.findById(990571001).subject.nameCn, "搜索 990571001");
+  assert.equal(repository.findById(990571002).subject.nameCn, "搜索 990571002");
+  assert.deepEqual(ensured, [[990571001, 990571002]]);
+  assert.deepEqual(persisted, [[990571001, 990571002]]);
 });
 
-test("metadata persistence runs once after search even when the result is empty", async () => {
-  const persisted = [];
-  await enrichFromBangumiSearch("empty", {
-    searchSubjects: async () => ({ data: [] }),
-    metadataService: {
-      persistSearchResults(items) { persisted.push(items); },
-    },
+test("valid non-anime search never calls Bangumi or writes metadata", async (t) => {
+  const { sqlite, close } = createTestDatabase();
+  t.after(close);
+  const repository = createBangumiRepository(sqlite);
+  let calls = 0;
+  const service = createBangumiMetadataService({
+    repository,
+    client: { async search() { calls += 1; return { data: [anime(1)] }; } },
   });
-  assert.deepEqual(persisted, [[]]);
+
+  assert.deepEqual(await service.searchAndPersist("搜索", { mediaType: "tv" }), {
+    received: 0,
+    persisted: 0,
+    rejected: 0,
+  });
+  assert.equal(calls, 0);
+  assert.equal(repository.findById(1), null);
 });

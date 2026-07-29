@@ -37,6 +37,10 @@ export default class FFZYSource extends ResourceSource {
     return "ffzy";
   }
 
+  static get displayName() {
+    return "非凡资源";
+  }
+
   constructor({
     db,
     logger,

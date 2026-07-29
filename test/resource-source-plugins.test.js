@@ -14,12 +14,20 @@ class IncompleteSource extends ResourceSource {
     return "incomplete";
   }
 
+  static get displayName() {
+    return "不完整采集站";
+  }
+
   async _initialize() {}
 }
 
 class OverridingSource extends FixtureSource {
   static get sourceKey() {
     return "override";
+  }
+
+  static get displayName() {
+    return "覆盖采集站";
   }
 
   async update() {
@@ -45,9 +53,16 @@ class ForgedSource {
 
 Object.setPrototypeOf(ForgedSource.prototype, ResourceSource.prototype);
 
+class MissingDisplayNameSource extends FixtureSource {
+  static get sourceKey() {
+    return "missing-display-name";
+  }
+}
+
 test("subclass validation rejects missing hooks and public method overrides", () => {
   assert.throws(() => assertResourceSourceClass(IncompleteSource), /must implement _update/i);
   assert.throws(() => assertResourceSourceClass(OverridingSource), /cannot override public method update/i);
+  assert.throws(() => assertResourceSourceClass(MissingDisplayNameSource), /displayName/i);
   assert.throws(() => assertResourceSourceClass(class PlainSource {}), /must extend ResourceSource/i);
   assert.throws(() => assertResourceSourceClass(ForgedSource), /must extend ResourceSource/i);
 });
@@ -62,6 +77,8 @@ test("loader resolves paths relative to JSON and injects shared infrastructure",
   });
   const source = registry.get("fixture");
   assert.equal(source instanceof ResourceSource, true);
+  assert.equal(source.sourceKey, "fixture");
+  assert.equal(source.displayName, "测试采集站");
   assert.equal(source._db, db);
   assert.equal(source._logger, logger);
   assert.deepEqual(registry.list(), [source]);
