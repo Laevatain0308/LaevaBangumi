@@ -71,6 +71,7 @@ export function createPublicApiService({
   sourceDescriptors,
   ensureMetadata = () => {},
   clock = () => new Date(),
+  logger = {},
 } = {}) {
   if (!repository) throw new TypeError("public API service requires a repository");
   if (!Array.isArray(sourceDescriptors)) throw new TypeError("public API service requires source descriptors");
@@ -115,7 +116,14 @@ export function createPublicApiService({
   }
 
   async function detail(bangumiId) {
-    ensureMetadata([bangumiId]);
+    try {
+      ensureMetadata([bangumiId]);
+    } catch (error) {
+      logger.error?.("public-api", "detail metadata ensure failed", {
+        bangumiId,
+        message: error.message ?? String(error),
+      });
+    }
     const subject = repository.findSubject(bangumiId);
     if (!subject) return null;
     const mappings = repository.listMappingsWithEpisodes(bangumiId);

@@ -141,6 +141,22 @@ test("detail ensures metadata and returns sparse normalized subjects without a 4
   assert.deepEqual(ensured, [[101], [999]]);
 });
 
+test("detail ensure failure does not replace readable local data", async () => {
+  const errors = [];
+  const service = createPublicApiService({
+    repository: createRepository(),
+    sourceDescriptors,
+    ensureMetadata() { throw new Error("queue unavailable"); },
+    clock: () => new Date("2026-07-28T04:00:00.000Z"),
+    logger: { error(...args) { errors.push(args); } },
+  });
+
+  const result = await service.detail(101);
+  assert.equal(result.data.id, 101);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0][2].message, /queue unavailable/);
+});
+
 test("detail and play share filtered channel order and segment indexes", async () => {
   const service = createService({
     repository: createRepository({

@@ -77,6 +77,9 @@ export function createBangumiMetadataService({
   }
 
   async function searchAndPersist(keyword, options = {}) {
+    if ((options.mediaType ?? "anime") !== "anime") {
+      return { received: 0, persisted: 0, rejected: 0 };
+    }
     const result = await client.search(keyword, options);
     const items = Array.isArray(result?.data) ? result.data : [];
     return persistSearchResults(items);

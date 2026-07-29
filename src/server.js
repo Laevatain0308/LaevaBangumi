@@ -1,49 +1,59 @@
 import express from "express";
-import * as animeService from "./services/anime.js";
-import { enqueueSearch } from "./services/queue.js";
 import { log, error } from "./lib/logger.js";
 import { envelope } from "./dto/apiEnvelope.js";
 import { errorEnvelope, serverErrorEnvelope } from "./dto/errorDto.js";
-import { sqlite } from "./db/index.js";
 import { createAccountRouter } from "./routes/accountRoutes.js";
 import { createSyncRouter } from "./routes/syncRoutes.js";
-import { createAccountSyncRuntime } from "./runtime/accountSyncRuntime.js";
 import { assertMediaType } from "./lib/mediaTypes.js";
 
 function ts() {
   return new Date().toISOString();
 }
 
+const emptyPublicApiRuntime = Object.freeze({
+  async search() { return { data: [], freshness: "empty" }; },
+  async calendar() { return { data: [], freshness: "empty" }; },
+  async detail() { return null; },
+  async play() { return null; },
+  async updates() { return { data: [], freshness: "empty" }; },
+});
+
+function positiveInteger(value) {
+  return typeof value === "string" && /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value))
+    ? Number(value)
+    : null;
+}
+
 export function createServer({
-  accountSyncRuntime = createAccountSyncRuntime({
-    sqlite,
-    metadataEnsureService: { ensure() {} },
-  }),
-  ensureMetadata = () => {},
+  publicApiRuntime = emptyPublicApiRuntime,
+  accountSyncRuntime,
+  enqueueRemoteSearch = () => {},
   logger = { log, error },
 } = {}) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
-  app.use("/api/account", createAccountRouter({
-    accountService: accountSyncRuntime.accountService,
-    authenticate: accountSyncRuntime.authenticate,
-    logger,
-  }));
-  app.use("/api/sync", createSyncRouter({
-    authenticate: accountSyncRuntime.authenticate,
-    syncMergeService: accountSyncRuntime.syncMergeService,
-    syncSnapshotService: accountSyncRuntime.syncSnapshotService,
-    logger,
-  }));
+  if (accountSyncRuntime) {
+    app.use("/api/account", createAccountRouter({
+      accountService: accountSyncRuntime.accountService,
+      authenticate: accountSyncRuntime.authenticate,
+      logger,
+    }));
+    app.use("/api/sync", createSyncRouter({
+      authenticate: accountSyncRuntime.authenticate,
+      syncMergeService: accountSyncRuntime.syncMergeService,
+      syncSnapshotService: accountSyncRuntime.syncSnapshotService,
+      logger,
+    }));
+  }
 
   // ── /api/calendar ──────────────────────────────────────
   app.get("/api/calendar", async (_req, res) => {
     try {
-      log("api", "calendar requested");
-      const result = await animeService.getCalendarView();
+      logger.log?.("api", "calendar requested");
+      const result = await publicApiRuntime.calendar();
       res.json(envelope(result.data, { updatedAt: ts(), meta: { freshness: result.freshness } }));
     } catch (err) {
-      error("api", "/api/calendar error", err);
+      logger.error?.("api", "/api/calendar error", err);
       res.status(500).json(serverErrorEnvelope(null, err, { updatedAt: ts() }));
     }
   });
@@ -60,14 +70,14 @@ export function createServer({
       return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: err.message, errorCode: "invalid_query", meta: { total: 0 } }));
     }
     try {
-      log("api", "updates requested", { days, limit, today, type: mediaType });
-      const result = await animeService.getUpdates({ days, limit, today, mediaType });
+      logger.log?.("api", "updates requested", { days, limit, today, type: mediaType });
+      const result = await publicApiRuntime.updates({ days, limit, today, mediaType });
       res.json(envelope(result.data, {
         updatedAt: ts(),
         meta: { freshness: result.freshness, total: result.data.length, days, type: mediaType },
       }));
     } catch (err) {
-      error("api", "/api/updates error", err);
+      logger.error?.("api", "/api/updates error", err);
       res.status(500).json(serverErrorEnvelope(null, err, { updatedAt: ts() }));
     }
   });
@@ -89,11 +99,9 @@ export function createServer({
       return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "关键词至少需要 2 个字符", errorCode: "invalid_query", meta: { total: 0 } }));
     }
     try {
-      log("api", "search requested", tag ? { tag, type: mediaType } : { q, type: mediaType });
-      const result = tag
-        ? await animeService.searchAnimeByTag(tag, { mediaType })
-        : await animeService.searchAnime(q, { mediaType });
-      if (q) enqueueSearch(q, { mediaType });
+      logger.log?.("api", "search requested", tag ? { tag, type: mediaType } : { q, type: mediaType });
+      const result = await publicApiRuntime.search({ query: q || null, tag: tag || null, mediaType });
+      if (q && mediaType === "anime") enqueueRemoteSearch(q, { mediaType });
       res.json(envelope(result.data, {
         updatedAt: ts(),
         meta: {
@@ -105,29 +113,20 @@ export function createServer({
         },
       }));
     } catch (err) {
-      error("api", "/api/search error", err);
+      logger.error?.("api", "/api/search error", err);
       res.status(500).json(serverErrorEnvelope(null, err, { updatedAt: ts() }));
     }
   });
 
   // ── /api/detail ────────────────────────────────────────
   app.get("/api/detail", async (req, res) => {
-    const rawId = req.query.id;
-    const id = typeof rawId === "string" && /^[1-9]\d*$/.test(rawId) ? Number(rawId) : NaN;
-    if (!Number.isSafeInteger(id)) {
+    const id = positiveInteger(req.query.id);
+    if (id == null) {
       return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "缺少 id 参数", errorCode: "invalid_query" }));
     }
     try {
-      ensureMetadata([id]);
-    } catch (err) {
-      logger.error?.("api", "/api/detail metadata ensure failed", {
-        id,
-        message: err.message ?? String(err),
-      });
-    }
-    try {
       logger.log?.("api", "detail requested", { id });
-      const result = await animeService.getAnimeDetail(id);
+      const result = await publicApiRuntime.detail(id);
       if (!result) return res.status(404).json(errorEnvelope(null, { updatedAt: ts(), message: "番剧不存在", errorCode: "subject_not_found" }));
       res.json(envelope(result.data, {
         updatedAt: ts(),
@@ -138,26 +137,30 @@ export function createServer({
         },
       }));
     } catch (err) {
-      error("api", "/api/detail error", err);
+      logger.error?.("api", "/api/detail error", err);
       res.status(500).json(serverErrorEnvelope(null, err, { updatedAt: ts() }));
     }
   });
 
   // ── /api/play ──────────────────────────────────────────
   app.get("/api/play", async (req, res) => {
-    const id = parseInt(req.query.id, 10);
-    const ch = parseInt(req.query.ch, 10);
-    const ep = parseInt(req.query.ep, 10);
-    if (!id || !ch || !ep || ep < 1 || ch < 1) {
+    const id = positiveInteger(req.query.id);
+    const ch = positiveInteger(req.query.ch);
+    const ep = positiveInteger(req.query.ep);
+    if (id == null || ch == null || ep == null) {
       return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: "缺少 id / ch / ep 参数", errorCode: "invalid_query" }));
     }
     try {
-      log("api", "play requested", { id, ch, ep });
-      const result = await animeService.getPlayUrl(id, ch, ep);
+      logger.log?.("api", "play requested", { id, ch, ep });
+      const result = await publicApiRuntime.play({
+        bangumiId: id,
+        channelIndex: ch,
+        episodeIndex: ep,
+      });
       if (!result) return res.status(404).json(errorEnvelope(null, { updatedAt: ts(), message: "剧集不存在或无播放地址", errorCode: "episode_not_found" }));
       res.json(envelope(result, { updatedAt: ts(), meta: { freshness: "cache" } }));
     } catch (err) {
-      error("api", "/api/play error", err);
+      logger.error?.("api", "/api/play error", err);
       res.status(500).json(serverErrorEnvelope(null, err, { updatedAt: ts() }));
     }
   });

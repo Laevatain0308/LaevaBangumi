@@ -7,6 +7,7 @@ export function createPublicApiRuntime({
   metadataEnsureService,
   repository: repositoryOverride,
   clock = () => new Date(),
+  logger = {},
 } = {}) {
   if (!resourceSourceRegistry?.list) {
     throw new TypeError("public API runtime requires a resource source registry");
@@ -24,6 +25,7 @@ export function createPublicApiRuntime({
     sourceDescriptors,
     ensureMetadata: metadataEnsureService.ensure,
     clock,
+    logger,
   });
   return Object.freeze({ repository, ...service });
 }
