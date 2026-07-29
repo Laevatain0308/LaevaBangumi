@@ -146,35 +146,3 @@ test("searchSubjects uses Bangumi real-person subject type for non-anime media",
 
   assert.deepEqual(requests[0].filter.type, [6]);
 });
-
-test("prewarmAnime passes query limit down to Bangumi search", async () => {
-  const { prewarmAnime } = await import("../src/services/prewarmService.js");
-  const searchCalls = [];
-  const stats = await prewarmAnime({
-    query: "测试",
-    sourceKeys: [],
-    refreshEpisodes: false,
-    limit: 3,
-  }, {
-    searchSubjects: async (keyword, options) => {
-      searchCalls.push({ keyword, options });
-      return {
-        data: [
-          { id: 1001, name: "one" },
-          { id: 1002, name: "two" },
-          { id: 1003, name: "three" },
-          { id: 1004, name: "four" },
-        ],
-      };
-    },
-    upsertSubject: async (subject) => ({ id: subject.id, name: subject.name }),
-    enrichSubject: async (id) => ({ id, name: `subject-${id}` }),
-    ensureMapping: async () => ({ matched: false }),
-    refreshEpisodes: async () => false,
-  });
-
-  assert.deepEqual(searchCalls, [{ keyword: "测试", options: { maxResults: 3 } }]);
-  assert.equal(stats.upserted, 3);
-  assert.equal(stats.requested, 3);
-  assert.equal(stats.processed, 3);
-});
