@@ -21,8 +21,12 @@ const WEEKDAYS = Object.freeze([
 ]);
 
 function proxiedCover(subject) {
-  return buildCoverProxyUrl({ id: subject.bangumiId, sourceUrl: subject.coverUrl })
-    ?? subject.coverUrl;
+  const sourceUrl = subject.coverUrl
+    ? String(subject.coverUrl)
+      .replace(/^http:\/\//, "https://")
+      .replace("/r/400/pic/cover/", "/pic/cover/")
+    : null;
+  return buildCoverProxyUrl({ id: subject.bangumiId, sourceUrl }) ?? sourceUrl;
 }
 
 function subjectSummary(subject) {

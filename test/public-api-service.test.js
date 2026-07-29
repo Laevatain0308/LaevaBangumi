@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createPublicApiService } from "../src/publicApi/publicApiService.js";
 import { createPublicApiRuntime } from "../src/runtime/publicApiRuntime.js";
+import { decodeCoverSource } from "../src/lib/coverProxyUrl.js";
 
 const sourceDescriptors = [
   { sourceKey: "first", displayName: "第一线路" },
@@ -100,6 +101,36 @@ test("search serves only normalized anime summaries", async () => {
     freshness: "empty",
   });
   assert.equal(calls.length, 1);
+});
+
+test("public subject covers normalize the Bangumi URL with and without the signed proxy", async () => {
+  const originalBase = process.env.COVER_PROXY_BASE;
+  const originalSecret = process.env.COVER_PROXY_SECRET;
+  const coverUrl = "http://lain.bgm.tv/r/400/pic/cover/l/13/c5/400602_ZI8Y9.jpg";
+  const normalizedUrl = "https://lain.bgm.tv/pic/cover/l/13/c5/400602_ZI8Y9.jpg";
+  const service = createService({
+    repository: createRepository({
+      searchSubjects() { return [subject({ coverUrl })]; },
+    }),
+  });
+
+  try {
+    process.env.COVER_PROXY_BASE = "https://img.example.test";
+    process.env.COVER_PROXY_SECRET = "cover-secret";
+    const proxied = await service.search({ query: "中文" });
+    const encodedSource = new URL(proxied.data[0].coverUrl).searchParams.get("u");
+    assert.equal(decodeCoverSource(encodedSource), normalizedUrl);
+
+    delete process.env.COVER_PROXY_BASE;
+    delete process.env.COVER_PROXY_SECRET;
+    const direct = await service.search({ query: "中文" });
+    assert.equal(direct.data[0].coverUrl, normalizedUrl);
+  } finally {
+    if (originalBase === undefined) delete process.env.COVER_PROXY_BASE;
+    else process.env.COVER_PROXY_BASE = originalBase;
+    if (originalSecret === undefined) delete process.env.COVER_PROXY_SECRET;
+    else process.env.COVER_PROXY_SECRET = originalSecret;
+  }
 });
 
 test("detail ensures metadata and returns sparse normalized subjects without a 404", async () => {
