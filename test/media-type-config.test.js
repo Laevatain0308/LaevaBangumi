@@ -1,29 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  assertMediaType,
-  mediaTypeForBangumiPlatform,
-  mediaTypeForBangumiSubject,
-} from "../src/lib/mediaTypes.js";
+import * as mediaTypes from "../src/lib/mediaTypes.js";
 
-test("media type helpers reject unsupported public media types", () => {
-  assert.equal(assertMediaType(undefined), "anime");
-  assert.equal(assertMediaType("tv"), "tv");
-  assert.throws(() => assertMediaType("book"), /unsupported media type/);
+test("media type helpers accept only anime", () => {
+  assert.equal(mediaTypes.DEFAULT_MEDIA_TYPE, "anime");
+  assert.deepEqual(mediaTypes.MEDIA_TYPES, ["anime"]);
+  assert.equal(mediaTypes.assertMediaType(undefined), "anime");
+  assert.equal(mediaTypes.assertMediaType(""), "anime");
+  assert.equal(mediaTypes.assertMediaType("anime"), "anime");
+  assert.equal(mediaTypes.assertMediaType(" anime "), "anime");
+  assert.throws(() => mediaTypes.assertMediaType("tv"), /unsupported media type: tv/);
+  assert.throws(() => mediaTypes.assertMediaType("movie"), /unsupported media type: movie/);
+  assert.throws(() => mediaTypes.assertMediaType("variety"), /unsupported media type: variety/);
+  assert.throws(() => mediaTypes.assertMediaType("book"), /unsupported media type: book/);
 });
 
-test("Bangumi media type mapping uses sampled platform values without changing platform", () => {
-  assert.equal(mediaTypeForBangumiPlatform("华语剧"), "tv");
-  assert.equal(mediaTypeForBangumiPlatform("欧美剧"), "tv");
-  assert.equal(mediaTypeForBangumiPlatform("日剧"), "tv");
-  assert.equal(mediaTypeForBangumiPlatform("电视剧"), "tv");
-  assert.equal(mediaTypeForBangumiPlatform("电影"), "movie");
-  assert.equal(mediaTypeForBangumiPlatform("综艺"), "variety");
-  assert.equal(mediaTypeForBangumiSubject({ type: 2, platform: "TV" }), "anime");
-  assert.equal(mediaTypeForBangumiSubject({ type: 6, platform: "欧美剧" }), "tv");
-  assert.equal(mediaTypeForBangumiSubject({ type: 6, platform: "电影" }), "movie");
-  assert.equal(mediaTypeForBangumiSubject({ type: 6, platform: "综艺" }), "variety");
-  assert.equal(mediaTypeForBangumiSubject({ type: 6, platform: "其他" }), null);
-  assert.equal(mediaTypeForBangumiSubject({ type: 6, platform: "演出" }), null);
-  assert.equal(mediaTypeForBangumiSubject({ type: 6, platform: "未采样平台" }), null);
+test("non-anime Bangumi media mappings are retired", () => {
+  assert.equal(mediaTypes.mediaTypeForBangumiPlatform, undefined);
+  assert.equal(mediaTypes.mediaTypeForBangumiSubject, undefined);
+  assert.equal(mediaTypes.BANGUMI_PLATFORM_MEDIA_TYPES, undefined);
+  assert.equal(mediaTypes.BANGUMI_SUBJECT_TYPE_BY_MEDIA_TYPE, undefined);
 });

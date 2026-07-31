@@ -11,6 +11,8 @@ const FORBIDDEN_PATHS = [
   "src/clients/resourceClient.js",
   "src/clients/resourceSources/ffzyClient.js",
   "src/lib/cstationConfig.js",
+  "src/lib/matcher.js",
+  "src/lib/resourceCandidateRecall.js",
   "src/normalizers/bangumiCalendarNormalizer.js",
   "src/normalizers/bangumiSubjectNormalizer.js",
   "src/normalizers/resourceItemNormalizer.js",
@@ -19,6 +21,7 @@ const FORBIDDEN_PATHS = [
   "src/repositories/subjectRepository.js",
   "src/repositories/syncRepository.js",
   "src/repositories/tagRepository.js",
+  "src/scripts/discover-bangumi-platforms.js",
   "src/services/anime.js",
   "src/services/queue.js",
 ];

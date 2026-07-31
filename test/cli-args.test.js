@@ -40,17 +40,3 @@ test("package scripts omit the retired prewarm command", async () => {
   assert.equal("prewarm:anime" in pkg.scripts, false);
   assert.equal("analyze:unmatched" in pkg.scripts, false);
 });
-
-test("Bangumi platform discovery script accepts a media type option", async () => {
-  const { parseDiscoveryArgs } = await import("../src/scripts/discover-bangumi-platforms.js");
-
-  const args = parseDiscoveryArgs([
-    "--keywords=星际穿越,甄嬛传",
-    "--max-results=3",
-    "--media-type=movie",
-  ]);
-
-  assert.deepEqual(args.keywords, ["星际穿越", "甄嬛传"]);
-  assert.equal(args.maxResults, 3);
-  assert.equal(args.mediaType, "movie");
-});
