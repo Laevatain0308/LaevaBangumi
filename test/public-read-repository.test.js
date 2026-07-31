@@ -210,6 +210,42 @@ test("calendar mappings and latest source episode use only normalized tables", (
   }), []);
 });
 
+test("updates candidates include only subjects from the Bangumi calendar", (t) => {
+  const { sqlite } = createFixture(t);
+  seedSubject(sqlite, {
+    id: 103,
+    name: "Old Anime",
+    nameCn: "老番",
+    score: 7.0,
+    votes: 10,
+  });
+  sqlite.prepare(`
+    INSERT INTO source_items (
+      source_key, source_item_id, title, year, source_updated_at,
+      first_seen_at, last_fetched_at, detail_fetched_at
+    ) VALUES ('ffzy', '501', '老番资源', '2022', '2026-07-28T02:00:00.000Z',
+      '2026-07-01T00:00:00.000Z', '2026-07-28T02:00:00.000Z', '2026-07-28T02:00:00.000Z')
+  `).run();
+  sqlite.prepare(`
+    INSERT INTO source_episodes (
+      source_key, source_item_id, episode_index, title, video_url, updated_at
+    ) VALUES ('ffzy', '501', 12, '第12集', 'https://video/501.m3u8', '2026-07-28T02:00:00.000Z')
+  `).run();
+  sqlite.prepare(`
+    INSERT INTO bangumi_resource_mappings (
+      bangumi_id, source_key, source_item_id, source_episode_start, source_episode_end
+    ) VALUES (103, 'ffzy', '501', 1, 12)
+  `).run();
+
+  const repository = createPublicReadRepository(sqlite);
+  const candidates = repository.listUpdateCandidates({
+    cutoffAt: "2026-07-27T00:00:00.000Z",
+    nowAt: "2026-07-28T23:59:59.999Z",
+  });
+
+  assert.deepEqual(candidates.map((row) => row.bangumiId), [101]);
+});
+
 test("public read repository prepares only read statements", (t) => {
   const { sqlite } = createFixture(t);
   const statements = [];

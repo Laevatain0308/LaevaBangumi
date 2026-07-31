@@ -153,6 +153,8 @@ export function createPublicReadRepository(sqlite) {
       ON i.source_key = e.source_key AND i.source_item_id = e.source_item_id
     JOIN bangumi_resource_mappings m
       ON m.source_key = e.source_key AND m.source_item_id = e.source_item_id
+    JOIN bangumi_calendar_subjects c
+      ON c.bangumi_id = m.bangumi_id
     ORDER BY e.updated_at DESC, m.bangumi_id, m.source_key
   `);
 
