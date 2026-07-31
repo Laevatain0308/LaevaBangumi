@@ -132,7 +132,7 @@ test("searchSubjects shrinks page size when caller asks for fewer results", asyn
   assert.deepEqual(requestedLimits, ["3"]);
 });
 
-test("searchSubjects uses Bangumi real-person subject type for non-anime media", async () => {
+test("searchSubjects ignores media-type selection and always searches anime type", async () => {
   const requests = [];
   await searchSubjects("星际之门", {
     mediaType: "tv",
@@ -144,5 +144,5 @@ test("searchSubjects uses Bangumi real-person subject type for non-anime media",
     },
   });
 
-  assert.deepEqual(requests[0].filter.type, [6]);
+  assert.deepEqual(requests[0].filter.type, [2]);
 });
