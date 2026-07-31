@@ -73,3 +73,29 @@ test("refresh state supports pending unknown Bangumi IDs", (t) => {
   `).run());
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM bangumi_subjects").get().count, 0);
 });
+
+test("obsolete bangumi_subject_refresh_state is replaced without importing its rows", (t) => {
+  const sqlite = new Database(":memory:");
+  t.after(() => sqlite.close());
+  sqlite.pragma("foreign_keys = ON");
+  sqlite.exec(`
+    CREATE TABLE bangumi_subject_refresh_state (
+      bangumi_id INTEGER PRIMARY KEY,
+      last_succeeded_at TEXT NOT NULL,
+      next_refresh_at TEXT NOT NULL,
+      last_attempted_at TEXT NOT NULL,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT
+    );
+    INSERT INTO bangumi_subject_refresh_state (
+      bangumi_id, last_succeeded_at, next_refresh_at, last_attempted_at, consecutive_failures
+    ) VALUES (99, '2026-07-10T00:00:00.000Z', '2026-07-11T00:00:00.000Z', '2026-07-10T00:00:00.000Z', 1);
+  `);
+
+  initBangumiMetadataSchema(sqlite);
+
+  const columns = sqlite.prepare("PRAGMA table_info(bangumi_subject_refresh_state)").all().map((row) => row.name);
+  assert.equal(columns.includes("updated_at"), true);
+  assert.equal(columns.includes("last_error"), true);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM bangumi_subject_refresh_state").get().count, 0);
+});

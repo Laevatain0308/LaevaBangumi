@@ -1,4 +1,13 @@
+function tableColumns(connection, tableName) {
+  return connection.prepare(`PRAGMA table_info(${tableName})`).all();
+}
+
 export function initBangumiMetadataSchema(connection) {
+  const refreshStateColumns = tableColumns(connection, "bangumi_subject_refresh_state");
+  if (refreshStateColumns.length > 0 && !refreshStateColumns.some((row) => row.name === "updated_at")) {
+    connection.exec("DROP TABLE bangumi_subject_refresh_state");
+  }
+
   connection.exec(`
     CREATE TABLE IF NOT EXISTS bangumi_subjects (
       bangumi_id INTEGER PRIMARY KEY CHECK (bangumi_id > 0),
