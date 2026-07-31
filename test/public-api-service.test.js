@@ -88,18 +88,13 @@ test("search serves only normalized anime summaries", async () => {
     }),
   });
 
-  const result = await service.search({ query: "中文", tag: null, mediaType: "anime" });
+  const result = await service.search({ query: "中文", tag: null });
   assert.deepEqual(calls, [{ query: "中文", tag: null }]);
   assert.equal(result.freshness, "cache");
   assert.equal(result.data[0].id, 101);
   assert.equal(result.data[0].mediaType, "anime");
   assert.equal(result.data[0].ratingScore, 8.1);
   assert.deepEqual(result.data[0].tags, [{ name: "原创", count: 10, totalCount: 20 }]);
-
-  assert.deepEqual(await service.search({ query: "中文", mediaType: "tv" }), {
-    data: [],
-    freshness: "empty",
-  });
   assert.equal(calls.length, 1);
 });
 
@@ -333,7 +328,6 @@ test("updates assign the latest source episode only to its containing segment", 
     days: 1,
     limit: 10,
     today: "2026-07-28",
-    mediaType: "anime",
   });
   assert.equal(result.freshness, "cache");
   assert.deepEqual(result.data.map((row) => row.id), [102]);
@@ -344,11 +338,6 @@ test("updates assign the latest source episode only to its containing segment", 
     cutoffAt: "2026-07-27T15:59:59.999Z",
     nowAt: "2026-07-28T15:59:59.999Z",
   }]);
-
-  assert.deepEqual(await service.updates({ mediaType: "tv" }), {
-    data: [],
-    freshness: "empty",
-  });
 });
 
 test("runtime captures registry order and delegates metadata ensure", async () => {

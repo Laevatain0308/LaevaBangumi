@@ -81,7 +81,7 @@ function setup(t, overrides = {}, serviceOverrides = {}) {
   };
 }
 
-test("anime-only client forces the search media type", async () => {
+test("anime-only client passes no media type or options to the transport", async () => {
   const calls = [];
   const client = createBangumiMetadataClient({
     async searchSubjects(keyword, options) {
@@ -89,15 +89,15 @@ test("anime-only client forces the search media type", async () => {
       return { data: [] };
     },
   });
-  await client.search("frieren", { mediaType: "tv", limit: 10 });
-  assert.deepEqual(calls, [{ keyword: "frieren", options: { mediaType: "anime", limit: 10 } }]);
+  await client.search("frieren", { limit: 10 });
+  assert.deepEqual(calls, [{ keyword: "frieren", options: undefined }]);
 });
 
 test("search persists valid anime summaries and rejects all other types", async (t) => {
   const context = setup(t);
   const result = await context.service.searchAndPersist("frieren");
 
-  assert.deepEqual(context.calls, [{ keyword: "frieren", mediaType: "anime" }]);
+  assert.deepEqual(context.calls, [{ keyword: "frieren" }]);
   assert.deepEqual(result, { received: 3, persisted: 1, rejected: 2 });
   assert.equal(context.repository.findById(1).subject.nameCn, "动画 1");
   assert.equal(context.repository.findById(2), null);

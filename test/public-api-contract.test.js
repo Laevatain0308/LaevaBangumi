@@ -99,7 +99,7 @@ function setup(t) {
   const server = createServer({
     publicApiRuntime,
     accountSyncRuntime,
-    enqueueRemoteSearch(keyword, options) { queued.push({ keyword, ...options }); },
+    enqueueRemoteSearch(keyword) { queued.push({ keyword }); },
     logger: { log() {}, error() {} },
   }).listen(0);
   t.after(() => server.close());
@@ -114,7 +114,7 @@ test("public HTTP endpoints read only normalized facts", async (t) => {
   assert.equal(search.body.data[0].id, SUBJECT_ID);
   assert.equal(search.body.data[0].nameCn, "中文标题");
   assert.equal(search.body.meta.type, "anime");
-  assert.deepEqual(queued, [{ keyword: "中文", mediaType: "anime" }]);
+  assert.deepEqual(queued, [{ keyword: "中文" }]);
 
   const tag = await getJson(server, "/api/search?tag=%E5%8E%9F%E5%88%9B");
   assert.equal(tag.status, 200);
@@ -156,6 +156,10 @@ test("HTTP validation and misses retain stable error envelopes", async (t) => {
     "/api/search?q=a",
     "/api/search?q=aa&tag=tag",
     "/api/search?q=aa&type=unknown",
+    "/api/search?q=aa&type=tv",
+    "/api/search?q=aa&type=movie",
+    "/api/search?q=aa&type=variety",
+    "/api/updates?type=movie",
     "/api/detail?id=1.5",
     "/api/play?id=501&ch=0&ep=1",
   ]) {
@@ -163,11 +167,6 @@ test("HTTP validation and misses retain stable error envelopes", async (t) => {
     assert.equal(response.status, 400, path);
     assert.equal(response.body.meta.error, "invalid_query", path);
   }
-
-  const nonAnime = await getJson(server, "/api/search?q=%E4%B8%AD%E6%96%87&type=tv");
-  assert.equal(nonAnime.status, 200);
-  assert.deepEqual(nonAnime.body.data, []);
-  assert.deepEqual(queued, []);
 
   const missing = await getJson(server, "/api/detail?id=999");
   assert.equal(missing.status, 404);
@@ -177,6 +176,26 @@ test("HTTP validation and misses retain stable error envelopes", async (t) => {
   const missingEpisode = await getJson(server, `/api/play?id=${SUBJECT_ID}&ch=1&ep=13`);
   assert.equal(missingEpisode.status, 404);
   assert.equal(missingEpisode.body.meta.error, "episode_not_found");
+});
+
+test("heartbeat is removed while health stays available", async (t) => {
+  const { server } = setup(t);
+
+  const heartbeatStatus = await new Promise((resolve, reject) => {
+    http.get({
+      hostname: "127.0.0.1",
+      port: server.address().port,
+      path: "/api/heartbeat",
+    }, (response) => {
+      response.resume();
+      response.on("end", () => resolve(response.statusCode));
+    }).on("error", reject);
+  });
+  assert.equal(heartbeatStatus, 404);
+
+  const health = await getJson(server, "/api/health");
+  assert.equal(health.status, 200);
+  assert.equal(health.body.status, "ok");
 });
 
 test("server source no longer imports legacy anime services or database singletons", async () => {

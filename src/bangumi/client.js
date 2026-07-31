@@ -2,8 +2,8 @@ import * as existingBangumiClient from "../clients/bangumiClient.js";
 
 export function createBangumiMetadataClient(httpClient = existingBangumiClient) {
   return {
-    search(keyword, options = {}) {
-      return httpClient.searchSubjects(keyword, { ...options, mediaType: "anime" });
+    search(keyword) {
+      return httpClient.searchSubjects(keyword);
     },
     getCalendar(...args) {
       return httpClient.getCalendar(...args);

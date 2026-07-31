@@ -90,8 +90,7 @@ export function createPublicApiService({
     });
   }
 
-  async function search({ query = null, tag = null, mediaType = "anime" } = {}) {
-    if (mediaType !== "anime") return { data: [], freshness: "empty" };
+  async function search({ query = null, tag = null } = {}) {
     const data = repository.searchSubjects({ query, tag }).map(subjectSummary);
     return { data, freshness: data.length > 0 ? "cache" : "empty" };
   }
@@ -183,8 +182,7 @@ export function createPublicApiService({
     return episode ? formatPlayDto(episode.videoUrl) : null;
   }
 
-  async function updates({ days = 7, limit = 60, today = null, mediaType = "anime" } = {}) {
-    if (mediaType !== "anime") return { data: [], freshness: "empty" };
+  async function updates({ days = 7, limit = 60, today = null } = {}) {
     const now = todayEnd(today, clock());
     const cutoff = new Date(now.getTime() - Math.max(1, days) * DAY_MS);
     const candidates = repository.listUpdateCandidates({

@@ -51,9 +51,7 @@ const bangumiRuntime = createBangumiRuntime({
 bangumiRuntime.scheduler.start();
 bangumiRuntime.scheduler.startup().catch((err) => error("bangumi", "startup sync failed", err));
 
-onSearchFlush((keyword, options) => (
-  bangumiRuntime.metadataService.searchAndPersist(keyword, options)
-));
+onSearchFlush((keyword) => bangumiRuntime.metadataService.searchAndPersist(keyword));
 
 const publicApiRuntime = createPublicApiRuntime({
   sqlite,

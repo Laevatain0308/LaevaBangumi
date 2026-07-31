@@ -4,10 +4,17 @@ import { envelope } from "./dto/apiEnvelope.js";
 import { errorEnvelope, serverErrorEnvelope } from "./dto/errorDto.js";
 import { createAccountRouter } from "./routes/accountRoutes.js";
 import { createSyncRouter } from "./routes/syncRoutes.js";
-import { assertMediaType } from "./lib/mediaTypes.js";
 
 function ts() {
   return new Date().toISOString();
+}
+
+function assertAnimeType(value) {
+  const mediaType = value == null || value === "" ? "anime" : String(value).trim();
+  if (mediaType !== "anime") {
+    throw new Error(`unsupported media type: ${value}`);
+  }
+  return mediaType;
 }
 
 const emptyPublicApiRuntime = Object.freeze({
@@ -65,13 +72,13 @@ export function createServer({
     const today = typeof req.query.today === "string" ? req.query.today : null;
     let mediaType;
     try {
-      mediaType = assertMediaType(req.query.type);
+      mediaType = assertAnimeType(req.query.type);
     } catch (err) {
       return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: err.message, errorCode: "invalid_query", meta: { total: 0 } }));
     }
     try {
       logger.log?.("api", "updates requested", { days, limit, today, type: mediaType });
-      const result = await publicApiRuntime.updates({ days, limit, today, mediaType });
+      const result = await publicApiRuntime.updates({ days, limit, today });
       res.json(envelope(result.data, {
         updatedAt: ts(),
         meta: { freshness: result.freshness, total: result.data.length, days, type: mediaType },
@@ -88,7 +95,7 @@ export function createServer({
     const tag = typeof req.query.tag === "string" ? req.query.tag.trim() : "";
     let mediaType;
     try {
-      mediaType = assertMediaType(req.query.type);
+      mediaType = assertAnimeType(req.query.type);
     } catch (err) {
       return res.status(400).json(errorEnvelope(null, { updatedAt: ts(), message: err.message, errorCode: "invalid_query", meta: { total: 0 } }));
     }
@@ -100,8 +107,8 @@ export function createServer({
     }
     try {
       logger.log?.("api", "search requested", tag ? { tag, type: mediaType } : { q, type: mediaType });
-      const result = await publicApiRuntime.search({ query: q || null, tag: tag || null, mediaType });
-      if (q && mediaType === "anime") enqueueRemoteSearch(q, { mediaType });
+      const result = await publicApiRuntime.search({ query: q || null, tag: tag || null });
+      if (q) enqueueRemoteSearch(q);
       res.json(envelope(result.data, {
         updatedAt: ts(),
         meta: {
@@ -163,25 +170,6 @@ export function createServer({
       logger.error?.("api", "/api/play error", err);
       res.status(500).json(serverErrorEnvelope(null, err, { updatedAt: ts() }));
     }
-  });
-
-  // ── /api/heartbeat ─────────────────────────────────────
-  const visitors = new Map();
-  const HEARTBEAT_TTL = 5 * 60 * 1000;
-  const heartbeatCleanup = setInterval(() => {
-    const cutoff = Date.now() - HEARTBEAT_TTL;
-    for (const [k, v] of visitors) {
-      if (v.lastSeen < cutoff) visitors.delete(k);
-    }
-  }, 60_000);
-  heartbeatCleanup.unref?.();
-
-  app.get("/api/heartbeat", (req, res) => {
-    const { visitorId, page } = req.query;
-    if (visitorId) {
-      visitors.set(visitorId, { page: page || '/', lastSeen: Date.now() });
-    }
-    res.json({ online: visitors.size });
   });
 
   // ── /api/health ────────────────────────────────────────

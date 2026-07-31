@@ -39,7 +39,7 @@ async function runNext() {
         continue;
       }
       try {
-        await handler(job.keyword, { mediaType: "anime" });
+        await handler(job.keyword);
         queuedKeys.delete(job.key);
         log("bangumi-search", "search completed", { keyword: job.keyword });
       } catch (cause) {
@@ -67,8 +67,7 @@ async function runNext() {
   }
 }
 
-export function enqueueSearch(keyword, { mediaType = "anime" } = {}) {
-  if (mediaType !== "anime") return false;
+export function enqueueSearch(keyword) {
   const normalized = String(keyword || "").trim();
   if (!normalized) return false;
   const key = `bangumi-search:${normalized}`;

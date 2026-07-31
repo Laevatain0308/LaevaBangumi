@@ -12,6 +12,7 @@ const FORBIDDEN_PATHS = [
   "src/clients/resourceSources/ffzyClient.js",
   "src/lib/cstationConfig.js",
   "src/lib/matcher.js",
+  "src/lib/mediaTypes.js",
   "src/lib/resourceCandidateRecall.js",
   "src/normalizers/bangumiCalendarNormalizer.js",
   "src/normalizers/bangumiSubjectNormalizer.js",
