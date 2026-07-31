@@ -167,3 +167,85 @@ sqlite3 data/anime.db ".backup '/backup/anime-$(date +%F).db'"
 - **映射异常**：工作簿导入前确认 `sourceKey` 已注册；分析阈值用
   `npm run mapping:analyze`。
 - **端口被占用**：修改 `PORT` 或 `ecosystem.config.cjs` 中的端口后重启。
+
+## 14. 封面代理部署（LaevaCoverProxy）
+
+封面代理是独立服务（`cover-proxy-service/`），部署在高带宽机器上，校验主站
+签名的封面 URL 后从 Bangumi 图片源拉取并缓存。
+
+### 14.1 两个 PM2 应用
+
+主站与封面代理是两套 PM2 应用，需要分别启动：
+
+```bash
+# 主站（仓库根目录）
+pm2 start ecosystem.config.cjs
+
+# 封面代理（cover-proxy-service 目录）
+cd cover-proxy-service
+npm ci
+COVER_PROXY_SECRET='同一段随机密钥' \
+COVER_UPSTREAM_PROXY_URL='http://127.0.0.1:7890' \
+pm2 start ecosystem.config.cjs
+pm2 save
+```
+
+两者必须使用**同一段 `COVER_PROXY_SECRET`**。
+
+### 14.2 封面代理环境变量
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `COVER_PROXY_SECRET` | 空（必填） | 与主站一致的签名密钥 |
+| `COVER_UPSTREAM_PROXY_URL` | 空 | 访问 Bangumi 图片源的上游代理 |
+| `COVER_CACHE_DIR` | `/var/cache/laeva-covers` | 本地图片缓存目录（需提前创建并授权） |
+| `COVER_ALLOWED_HOSTS` | `lain.bgm.tv,bgm.tv,bangumi.tv,chii.in` | 允许的图片源域名白名单 |
+| `COVER_FETCH_TIMEOUT_MS` | `15000` | 上游拉取超时；代理较慢时建议调大（如 `30000`） |
+| `PORT` | `3010` | 只监听 `127.0.0.1`，公网由 Nginx 反代 |
+
+### 14.3 主站配置
+
+```bash
+COVER_PROXY_BASE='https://img.laevatain.top' \
+COVER_PROXY_SECRET='同一段随机密钥' \
+pm2 restart LaevaBangumi --update-env
+```
+
+配置后公开 API 的 `coverUrl` 会指向 `COVER_PROXY_BASE` 下的签名地址；未配置
+`COVER_PROXY_BASE`/`COVER_PROXY_SECRET` 时回退为 Bangumi 原始封面地址。
+
+### 14.4 Nginx 反代
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name img.laevatain.top;
+
+    ssl_certificate     /etc/nginx/ssl/img.laevatain.top.pem;
+    ssl_certificate_key /etc/nginx/ssl/img.laevatain.top.key;
+
+    location /cover/ {
+        proxy_pass http://127.0.0.1:3010;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering on;
+    }
+
+    location /health {
+        proxy_pass http://127.0.0.1:3010;
+        access_log off;
+    }
+}
+```
+
+### 14.5 验证
+
+```bash
+curl https://img.laevatain.top/health
+curl "https://img.laevatain.top$(curl -s http://localhost:3002/api/detail?id=<番剧ID> | jq -r .data.coverUrl)"
+```
+
+首次请求响应头 `X-Cover-Cache: miss`，第二次同 URL 为 `hit`。
