@@ -46,3 +46,16 @@ export function buildCoverProxyUrl({
   const signature = signCoverProxyUrl({ id, encodedUrl, secret });
   return `${trimSlash(baseUrl)}/cover/${id}-${coverUrlHash(sourceUrl)}.jpg?u=${encodedUrl}&sig=${signature}`;
 }
+
+export function projectCoverUrl({
+  id,
+  sourceUrl,
+  baseUrl = process.env.COVER_PROXY_BASE,
+  secret = process.env.COVER_PROXY_SECRET,
+} = {}) {
+  if (!sourceUrl) return null;
+  const normalized = String(sourceUrl)
+    .replace(/^http:\/\//, "https://")
+    .replace("/r/400/pic/cover/", "/pic/cover/");
+  return buildCoverProxyUrl({ id, sourceUrl: normalized, baseUrl, secret }) ?? normalized;
+}

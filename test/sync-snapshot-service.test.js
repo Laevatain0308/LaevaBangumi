@@ -180,6 +180,36 @@ test("snapshot metadata registration failure is logged after local reads and nev
   assert.match(logs[0].meta.message, /ensure failed/);
 });
 
+test("snapshot subjects use the public cover projection when the cover proxy is configured", (t) => {
+  const originalBase = process.env.COVER_PROXY_BASE;
+  const originalSecret = process.env.COVER_PROXY_SECRET;
+  process.env.COVER_PROXY_BASE = "https://img.example.test";
+  process.env.COVER_PROXY_SECRET = "cover-secret";
+  try {
+    const context = createContext(t);
+    seedPrivateState(context.sqlite, context.accountId);
+    seedSubject(context.sqlite);
+
+    const snapshot = context.service.build(context.accountId);
+    const coverUrl = snapshot.watch.records[0].subject.coverUrl;
+
+    assert.match(coverUrl, /^https:\/\/img\.example\.test\/cover\/123-/);
+    assert.ok(coverUrl.includes("u="));
+    assert.ok(coverUrl.includes("sig="));
+  } finally {
+    if (originalBase == null) {
+      delete process.env.COVER_PROXY_BASE;
+    } else {
+      process.env.COVER_PROXY_BASE = originalBase;
+    }
+    if (originalSecret == null) {
+      delete process.env.COVER_PROXY_SECRET;
+    } else {
+      process.env.COVER_PROXY_SECRET = originalSecret;
+    }
+  }
+});
+
 test("summary repository filters IDs, chunks at 500, and reads only the new metadata tables", (t) => {
   const { sqlite, close } = createTestDatabase();
   t.after(close);

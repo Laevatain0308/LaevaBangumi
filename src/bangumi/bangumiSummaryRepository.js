@@ -1,3 +1,5 @@
+import { projectCoverUrl } from "../lib/coverProxyUrl.js";
+
 const CHUNK_SIZE = 500;
 
 function chunks(values, size) {
@@ -53,6 +55,12 @@ export function createBangumiSummaryRepository(sqlite) {
     for (const [bangumiId, subject] of subjectRows) {
       const image = images.get(bangumiId);
       const rating = ratings.get(bangumiId);
+      const rawCoverUrl = image?.large_url
+        ?? image?.common_url
+        ?? image?.medium_url
+        ?? image?.small_url
+        ?? image?.grid_url
+        ?? null;
       result.set(bangumiId, {
         id: bangumiId,
         title: subject.name_cn || subject.name,
@@ -64,12 +72,7 @@ export function createBangumiSummaryRepository(sqlite) {
         platform: subject.platform,
         eps: subject.eps,
         totalEpisodes: subject.total_episodes,
-        coverUrl: image?.large_url
-          ?? image?.common_url
-          ?? image?.medium_url
-          ?? image?.small_url
-          ?? image?.grid_url
-          ?? null,
+        coverUrl: projectCoverUrl({ id: bangumiId, sourceUrl: rawCoverUrl }),
         ratingScore: rating?.score ?? null,
         rank: rating?.rank ?? null,
         votes: rating?.total ?? null,

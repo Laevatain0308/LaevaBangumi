@@ -1,6 +1,6 @@
 import { formatSubjectDetailDto, formatSubjectSearchDto } from "../dto/subjectDto.js";
 import { formatPlayDto } from "../dto/resourceDto.js";
-import { buildCoverProxyUrl } from "../lib/coverProxyUrl.js";
+import { projectCoverUrl } from "../lib/coverProxyUrl.js";
 import { parseAirDate } from "../lib/airDate.js";
 import {
   containsSourceEpisode,
@@ -21,12 +21,7 @@ const WEEKDAYS = Object.freeze([
 ]);
 
 function proxiedCover(subject) {
-  const sourceUrl = subject.coverUrl
-    ? String(subject.coverUrl)
-      .replace(/^http:\/\//, "https://")
-      .replace("/r/400/pic/cover/", "/pic/cover/")
-    : null;
-  return buildCoverProxyUrl({ id: subject.bangumiId, sourceUrl }) ?? sourceUrl;
+  return projectCoverUrl({ id: subject.bangumiId, sourceUrl: subject.coverUrl });
 }
 
 function subjectSummary(subject) {
