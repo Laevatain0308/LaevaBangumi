@@ -170,7 +170,7 @@ sqlite3 data/anime.db ".backup '/backup/anime-$(date +%F).db'"
 
 ## 14. 封面代理部署（LaevaCoverProxy）
 
-封面代理是独立服务（`cover-proxy-service/`），部署在高带宽机器上，校验主站
+封面代理是独立项目（与 `LaevaBangumi` 同级的 `LaevaCoverProxy` 仓库），部署在高带宽机器上，校验主站
 签名的封面 URL 后从 Bangumi 图片源拉取并缓存。
 
 ### 14.1 两个 PM2 应用
@@ -181,11 +181,12 @@ sqlite3 data/anime.db ".backup '/backup/anime-$(date +%F).db'"
 # 主站（仓库根目录）
 pm2 start ecosystem.config.cjs
 
-# 封面代理（cover-proxy-service 目录）
-cd cover-proxy-service
+# 封面代理（独立 LaevaCoverProxy 仓库）
+git clone git@github.com:Laevatain0308/LaevaCoverProxy.git
+cd LaevaCoverProxy
 npm ci
 COVER_PROXY_SECRET='同一段随机密钥' \
-COVER_UPSTREAM_PROXY_URL='http://127.0.0.1:7890' \
+COVER_UPSTREAM_PROXY_URL='http://127.0.0.1:7897' \
 pm2 start ecosystem.config.cjs
 pm2 save
 ```
@@ -198,9 +199,13 @@ pm2 save
 | --- | --- | --- |
 | `COVER_PROXY_SECRET` | 空（必填） | 与主站一致的签名密钥 |
 | `COVER_UPSTREAM_PROXY_URL` | 空 | 访问 Bangumi 图片源的上游代理 |
+| `COVER_UPSTREAM_USER_AGENT` | 内置 LaevaCoverProxy UA | 上游请求 User-Agent |
+| `COVER_UPSTREAM_REFERER` | `https://bgm.tv/` | 上游请求 Referer |
+| `COVER_RETRY_DELAYS_MS` | `250,1000` | 网络错误和临时 HTTP 状态的重试间隔（毫秒） |
 | `COVER_CACHE_DIR` | `/var/cache/laeva-covers` | 本地图片缓存目录（需提前创建并授权） |
 | `COVER_ALLOWED_HOSTS` | `lain.bgm.tv,bgm.tv,bangumi.tv,chii.in` | 允许的图片源域名白名单 |
 | `COVER_FETCH_TIMEOUT_MS` | `15000` | 上游拉取超时；代理较慢时建议调大（如 `30000`） |
+| `COVER_FALLBACK_TO_SOURCE` | `true` | 代理失败时返回原始 CDN 的 307；设为 `false` 返回错误 JSON |
 | `PORT` | `3010` | 只监听 `127.0.0.1`，公网由 Nginx 反代 |
 
 ### 14.3 主站配置
